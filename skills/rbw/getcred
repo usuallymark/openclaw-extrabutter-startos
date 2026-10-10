@@ -1,0 +1,100 @@
+#!/bin/sh
+# getcred VAR — print a credential configured in Configure External Services.
+#
+# If VAR is set in the environment ("Enter manually"), print it.
+# Otherwise, if VAR_FROM_VAULT is set ("Fetch from Vaultwarden", value
+# "<entry>:<field>"), fetch that field from Vaultwarden with rbw and print it.
+# The value is printed without a trailing newline. Exits non-zero, with a
+# message on stderr only, if the credential is not configured or the lookup
+# fails. When this shell has neither variable (e.g. a root attach shell),
+# both are read from the running gateway process. A failed or empty lookup
+# is retried once after `rbw sync`, so vault edits are picked up without a
+# manual sync. Secrets never appear in error messages.
+set -u
+
+usage() {
+  echo "usage: getcred VAR   (e.g. getcred NAS_PASS)" >&2
+  exit 2
+}
+
+[ $# -eq 1 ] || usage
+var=$1
+case $var in
+  '' | *[!A-Za-z0-9_]* | [0-9]*) usage ;;
+esac
+
+# Service settings live in the environment of the OpenClaw gateway and of
+# everything it starts. A shell started another way (a root attach shell, a
+# git hook) lacks them; then read them from the running gateway process (the
+# one started with OPENCLAW_HEALTH_TARGETS).
+gateway_environ_file() {
+  for f in /proc/[0-9]*/environ; do
+    [ "$f" = "/proc/$$/environ" ] && continue
+    if tr '\000' '\n' 2>/dev/null < "$f" | grep -q '^OPENCLAW_HEALTH_TARGETS='; then
+      echo "$f"
+      return 0
+    fi
+  done
+  return 1
+}
+gateway_value() {
+  tr '\000' '\n' 2>/dev/null < "$gw" | sed -n "s/^$1=//p" | head -n 1
+}
+
+eval "plain=\${$var-}"
+eval "pointer=\${${var}_FROM_VAULT-}"
+gw=
+if [ -z "$plain" ] && [ -z "$pointer" ]; then
+  if gw=$(gateway_environ_file); then
+    plain=$(gateway_value "$var")
+    [ -n "$plain" ] || pointer=$(gateway_value "${var}_FROM_VAULT")
+  else
+    echo "getcred: $var is not set here, and no running OpenClaw gateway this user can read was found (is OpenClaw running? try as root or node)" >&2
+    exit 1
+  fi
+fi
+if [ -n "$plain" ]; then
+  printf '%s' "$plain"
+  exit 0
+fi
+if [ -z "$pointer" ]; then
+  echo "getcred: $var is not configured: neither $var nor ${var}_FROM_VAULT is set here or in the gateway process (enable the service in Configure External Services)" >&2
+  exit 1
+fi
+
+entry=${pointer%%:*}
+field=${pointer#*:}
+if [ -z "$entry" ] || [ "$field" = "$pointer" ] || [ -z "$field" ]; then
+  echo "getcred: ${var}_FROM_VAULT must look like <entry>:<field>" >&2
+  exit 1
+fi
+
+# rbw locations used by the package (also set in the gateway environment).
+: "${XDG_CONFIG_HOME:=/data/.openclaw/rbw/config}"
+: "${XDG_CACHE_HOME:=/data/.openclaw/rbw/cache}"
+: "${XDG_RUNTIME_DIR:=/data/.openclaw/rbw/runtime}"
+export XDG_CONFIG_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR
+
+lookup() {
+  value=$(rbw get --field "$field" "$entry" 2>/dev/null) && [ -n "$value" ]
+}
+
+# rbw answers from its local copy of the vault, which it refreshes only
+# now and then, so an entry added or fixed in Vaultwarden may not be seen
+# yet. On a miss, sync once (quietly, with a time limit) and look again.
+if ! lookup; then
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 30 rbw sync >/dev/null 2>&1
+  else
+    rbw sync >/dev/null 2>&1
+  fi
+  if ! value=$(rbw get --field "$field" "$entry" 2>/dev/null); then
+    echo "getcred: Vaultwarden lookup failed for entry \"$entry\", field \"$field\" ($var), also after rbw sync. Check that Vaultwarden is enabled and the entry and field exist." >&2
+    exit 1
+  fi
+  if [ -z "$value" ]; then
+    echo "getcred: Vaultwarden entry \"$entry\", field \"$field\" is empty ($var), also after rbw sync" >&2
+    exit 1
+  fi
+fi
+printf '%s' "$value"

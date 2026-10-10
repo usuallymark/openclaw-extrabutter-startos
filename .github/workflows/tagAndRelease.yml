@@ -1,0 +1,70 @@
+name: Tag and Release
+
+on:
+  push:
+    branches: ['master']
+    paths-ignore: ['*.md']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(grep -oP "version:\s*['\"\`]\K[^'\"\`]*" startos/versions/current.ts | head -1)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION//:/.}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools
+          which tar2sqfs || (echo "tar2sqfs not in squashfs-tools, trying squashfs-tools-ng" && sudo apt-get install -y squashfs-tools-ng)
+          which mksquashfs tar2sqfs 2>/dev/null || true
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install start-cli
+        run: |
+          curl -fsSL "https://github.com/Start9Labs/start-technologies/releases/download/start-cli%2Fv2.2.0/start-cli_x86_64-linux" \
+            -o /usr/local/bin/start-cli
+          chmod +x /usr/local/bin/start-cli
+          start-cli --version
+
+      - name: Initialize packaging workspace
+        run: |
+          cd ..
+          start-cli s9pk init-workspace
+          mkdir -p .startos
+          echo "host: https://localhost" > .startos/config.yaml
+
+      - name: Build s9pk
+        env:
+          DEV_KEY: ${{ secrets.DEV_KEY }}
+        run: make
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.version }}
+          files: '*.s9pk'
+          generate_release_notes: false

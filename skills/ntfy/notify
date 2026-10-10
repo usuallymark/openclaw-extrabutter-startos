@@ -1,0 +1,3 @@
+#!/bin/sh
+# notify MESSAGE... : send a push notification via ntfy (see /opt/skills/ntfy/SKILL.md).
+exec python3 /opt/skills/ntfy/ntfy.py "$@"

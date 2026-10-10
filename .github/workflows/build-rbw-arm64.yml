@@ -1,0 +1,62 @@
+name: Build rbw arm64 binary
+
+# One-time (and on-demand) build of the rbw arm64 binaries.
+# rbw's author does not publish an arm64 .deb, so the main package Dockerfile
+# would otherwise compile rbw from source under QEMU on every build (~40+ min).
+# This workflow compiles it once and attaches the binaries to a GitHub Release,
+# so the Dockerfile can just curl them like it does the amd64 .deb.
+#
+# Run manually: Actions tab -> "Build rbw arm64 binary" -> Run workflow.
+# Bump RBW_VERSION below if you ever change the pinned rbw version.
+
+on:
+  workflow_dispatch:
+
+env:
+  RBW_VERSION: '1.15.0'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build rbw for arm64 in an aarch64 container
+        run: |
+          mkdir -p out
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/out:/out" \
+            debian:bookworm-slim bash -c '
+              set -e
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                curl ca-certificates libssl-dev pkg-config gcc libc6-dev
+              rm -rf /var/lib/apt/lists/*
+              export CARGO_HOME=/tmp/cargo RUSTUP_HOME=/tmp/rustup
+              export PATH="/tmp/cargo/bin:$PATH"
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --profile minimal --no-modify-path
+              /tmp/cargo/bin/cargo install rbw --version '"$RBW_VERSION"' --root /tmp/rbw-install
+              cp /tmp/rbw-install/bin/rbw /out/rbw
+              cp /tmp/rbw-install/bin/rbw-agent /out/rbw-agent
+              chmod +x /out/rbw /out/rbw-agent
+            '
+          echo "Built binaries:"
+          ls -la out/
+          file out/rbw out/rbw-agent || true
+
+      - name: Create / update release with binaries
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: rbw-arm64-${{ env.RBW_VERSION }}
+          name: rbw arm64 ${{ env.RBW_VERSION }}
+          body: |
+            Pre-built rbw ${{ env.RBW_VERSION }} binaries for linux/arm64.
+            Compiled from source so the main package Dockerfile can download
+            them instead of compiling rbw on every build.
+          files: |
+            out/rbw
+            out/rbw-agent

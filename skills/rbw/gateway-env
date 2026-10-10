@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""gateway-env [--keep-user] COMMAND [ARGS...]
+
+Run COMMAND with the environment of the running OpenClaw gateway: service
+URLs, credential pointers, rbw paths, QDRANT_URL, provider keys. Use it in a
+debug shell (`start-cli package attach`) to reproduce exactly what the agent's
+commands see, e.g.
+
+    gateway-env python3 /opt/skills/crawl4ai/crawl4ai.py https://example.com
+    gateway-env env | cut -d= -f1 | sort      # names only
+
+Variables already set in this shell are replaced by the gateway's values.
+Run as root, the command is run as the gateway user (node, HOME=/data)
+unless --keep-user is given. Nothing is printed by this wrapper itself.
+"""
+import os
+import pwd
+import sys
+
+sys.path.insert(0, '/opt/skills/rbw')
+from creds import gateway_environ  # noqa: E402
+
+
+def main(argv):
+    keep_user = False
+    if argv and argv[0] == '--keep-user':
+        keep_user, argv = True, argv[1:]
+    if not argv or argv[0] in ('-h', '--help'):
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    gw = gateway_environ()
+    if not gw:
+        print('gateway-env: no running OpenClaw gateway found (is OpenClaw running? run as root or node)',
+              file=sys.stderr)
+        return 1
+    env = {**os.environ, **gw}
+    if os.geteuid() == 0 and not keep_user:
+        try:
+            node = pwd.getpwnam('node')
+        except KeyError:
+            print('gateway-env: no user "node" here; use --keep-user', file=sys.stderr)
+            return 1
+        os.setgroups([])
+        os.setgid(node.pw_gid)
+        os.setuid(node.pw_uid)
+        env.update(HOME='/data', USER='node', LOGNAME='node')
+        try:
+            os.chdir('/data')
+        except OSError:
+            pass
+    try:
+        os.execvpe(argv[0], argv, env)
+    except OSError as e:
+        print(f'gateway-env: cannot run {argv[0]}: {e.strerror}', file=sys.stderr)
+        return 127
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

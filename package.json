@@ -1,0 +1,13 @@
+{
+  "name": "openclaw-extrabutter-startos",
+  "scripts": {
+    "check": "tsc --noEmit && node node_modules/@start9labs/start-sdk/lint.mjs && prettier --config node_modules/@start9labs/start-sdk/prettier.config.json --check startos",
+    "format": "prettier --config node_modules/@start9labs/start-sdk/prettier.config.json --write startos"
+  },
+  "dependencies": {
+    "@start9labs/start-sdk": "3.0.4"
+  },
+  "overrides": {
+    "@start9labs/start-sdk": "$@start9labs/start-sdk"
+  }
+}

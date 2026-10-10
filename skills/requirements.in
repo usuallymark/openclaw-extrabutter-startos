@@ -1,0 +1,6 @@
+# Python libraries baked into the image at /opt/python-libs (on PYTHONPATH).
+# Regenerate requirements.txt after editing (command at the top of that file).
+smbprotocol==1.17.0  # skills/nas
+pyspnego==0.12.3  # skills/nas (the version it was tested with)
+cryptography==50.0.2  # imported directly by workspace scripts; keep it pinned
+ocrmypdf==17.13.0  # skills/pdf (Tesseract OCR; no Ghostscript needed)
