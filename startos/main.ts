@@ -12,6 +12,7 @@ import {
   qdrantInternalPort,
 } from './interfaces'
 import { sdk } from './sdk'
+import { setGatewayContainer } from './gatewayContainer'
 import {
   mainMounts,
   qdrantMounts,
@@ -330,6 +331,8 @@ export const main = sdk.setupMain(async ({ effects }) => {
     'openclaw-sub',
   )
 
+  setGatewayContainer(effects, openclawSub)
+
   const qdrantSub = sdk.SubContainer.of(
     effects,
     { imageId: 'qdrant' },
@@ -574,7 +577,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
           uiPort.toString(),
           '--bind',
           'lan',
-          '--verbose',
           '--allow-unconfigured',
         ],
         user: 'node',

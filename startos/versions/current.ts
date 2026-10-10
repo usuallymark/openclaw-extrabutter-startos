@@ -1,11 +1,12 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.9.9:0',
+  version: '2026.9.9:1',
   releaseNotes: {
-    en_US: `First release of OpenClaw Extra Butter (OpenClaw 2026.9.9).
+    en_US: `Fixes the gateway refusing to save anything after an agent was removed.
 
-A build of OpenClaw for StartOS with extra butter: a bundled Qdrant vector database, helper agents, optional connectors to your self-hosted services (Vaultwarden, Ollama, NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy), a mobile webchat, and PDF reading with OCR. It has its own package id, so it installs alongside the community OpenClaw package and never replaces it.`,
+- **Removing an agent in Configure Agents no longer breaks the gateway.** The action ran OpenClaw's command-line tool in a temporary container, and with OpenClaw 2026.9.9 an agent removal made from there left the running gateway without its state lock: the removal failed ("state ownership … could not be verified") and the gateway then refused every state write (scheduled jobs, device pairing, cleanup) until it was restarted. Actions that run OpenClaw's command-line tool (Configure Agents, Approve Browser Pairing, Connect WhatsApp, Configure SimpleX) now run it inside the gateway's own container while the service is running.
+- **Quieter logs.** The gateway no longer runs with verbose logging, which in OpenClaw 2026.9.9 wrote a scheduler line many times a second and pushed useful lines out of the service log.`,
   },
   migrations: {
     up: async () => {},

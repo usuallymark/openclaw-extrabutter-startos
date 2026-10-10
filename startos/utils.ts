@@ -1,6 +1,7 @@
 import { T, z } from '@start9labs/start-sdk'
 import * as fs from 'node:fs/promises'
 import { sdk } from './sdk'
+import { inOpenclawContainer } from './gatewayContainer'
 
 export const uiPort = 18789
 export const qdrantPort = 6333
@@ -50,17 +51,12 @@ export async function runOpenclawCli(
   args: string[],
   timeoutMs = 600_000,
 ) {
-  return sdk.SubContainer.withTemp(
-    effects,
-    { imageId: 'openclaw' },
-    mainMounts(),
-    name,
-    (subc) =>
-      subc.exec(['openclaw', ...args], {
-        user: 'node',
-        env: OPENCLAW_CLI_ENV,
-        timeout: timeoutMs,
-      }),
+  return inOpenclawContainer(effects, name, (subc) =>
+    subc.exec(['openclaw', ...args], {
+      user: 'node',
+      env: OPENCLAW_CLI_ENV,
+      timeout: timeoutMs,
+    }),
   )
 }
 

@@ -1,9 +1,10 @@
 import { readFile, writeFile } from 'fs/promises'
 import { sdk } from '../sdk'
+import { inOpenclawContainer } from '../gatewayContainer'
 import { i18n } from '../i18n'
 import { openclawJson } from '../fileModels/openclaw.json'
 import { agentModelChoices, OLLAMA_SERVER_ID } from '../modelCatalog'
-import { mainMounts, OPENCLAW_CLI_ENV } from '../utils'
+import { OPENCLAW_CLI_ENV } from '../utils'
 import {
   ANTHROPIC_MODELS,
   GEMINI_MODELS,
@@ -327,18 +328,13 @@ export const configureAgents = sdk.Action.withInput(
       }
     }
 
-    const res = await sdk.SubContainer.withTemp(
-      effects,
-      { imageId: 'openclaw' },
-      mainMounts(),
-      'configure-agents',
-      (subc) =>
-        subc.exec(['python3', HELPER, 'apply', '--ui'], {
-          user: 'node',
-          env: OPENCLAW_CLI_ENV,
-          input: JSON.stringify({ ops }),
-          timeout: 300_000,
-        }),
+    const res = await inOpenclawContainer(effects, 'configure-agents', (subc) =>
+      subc.exec(['python3', HELPER, 'apply', '--ui'], {
+        user: 'node',
+        env: OPENCLAW_CLI_ENV,
+        input: JSON.stringify({ ops }),
+        timeout: 300_000,
+      }),
     )
     let out: any
     try {

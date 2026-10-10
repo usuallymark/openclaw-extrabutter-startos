@@ -1,6 +1,6 @@
 import { sdk } from '../sdk'
+import { inOpenclawContainer } from '../gatewayContainer'
 import { openclawJson } from '../fileModels/openclaw.json'
-import { mainMounts } from '../utils'
 import { i18n } from '../i18n'
 
 const { InputSpec, Value } = sdk
@@ -72,10 +72,8 @@ export const connectWhatsapp = sdk.Action.withInput(
     })
 
     // Run openclaw channels login to get the QR code for WhatsApp linking
-    const result = await sdk.SubContainer.withTemp(
+    const result = await inOpenclawContainer(
       effects,
-      { imageId: 'openclaw' },
-      mainMounts(),
       'whatsapp-login',
       async (subc) => {
         return subc.exec(['openclaw', 'channels', 'login'], {
