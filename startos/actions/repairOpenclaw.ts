@@ -14,6 +14,44 @@ function trimOutput(raw: string): string {
   )}`
 }
 
+// doctor's report modes print one line of JSON. Show its findings as readable
+// lines, followed by the JSON itself (indented); any other output is shown as is.
+function readable(stdout: string): string {
+  let parsed: any
+  try {
+    parsed = JSON.parse(stdout)
+  } catch {
+    return stdout
+  }
+  const pretty = JSON.stringify(parsed, null, 2)
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    !Array.isArray(parsed.findings)
+  ) {
+    return pretty
+  }
+  const head = [
+    parsed.ok === true ? 'ok' : parsed.ok === false ? 'problems found' : null,
+    typeof parsed.checksRun === 'number'
+      ? `${parsed.checksRun} checks run`
+      : null,
+    typeof parsed.checksSkipped === 'number'
+      ? `${parsed.checksSkipped} skipped`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(', ')
+  const lines = parsed.findings.map((f: any) => {
+    const where = f.path ? ` (${f.path})` : ''
+    const fix = f.fixHint
+      ? `\n    fix: ${String(f.fixHint).replace(/\n/g, '\n         ')}`
+      : ''
+    return `[${f.severity ?? 'note'}] ${f.message ?? f.checkId ?? ''}${where}${fix}`
+  })
+  return [head, ...lines, '', '--- full JSON ---', pretty].join('\n')
+}
+
 export const repairOpenclaw = sdk.Action.withInput(
   'repair-openclaw',
 
@@ -83,7 +121,7 @@ export const repairOpenclaw = sdk.Action.withInput(
 
     const stdout = String(result.stdout ?? '').trim()
     const stderr = String(result.stderr ?? '').trim()
-    const combined = [stdout, stderr && `[stderr]\n${stderr}`]
+    const combined = [readable(stdout), stderr && `[stderr]\n${stderr}`]
       .filter(Boolean)
       .join('\n\n')
 

@@ -213,7 +213,7 @@ export const configureWebchat = sdk.Action.withInput(
   async () => ({
     name: 'Configure Webchat',
     description:
-      'Turn on the mobile-friendly webchat and set up a profile for each person (name, color, optional PIN, preset conversations). Saving restarts OpenClaw.',
+      'Turn on the mobile-friendly webchat and set up a profile for each person (name, color, optional PIN, preset conversations). Saving starts or stops the webchat; the rest of OpenClaw keeps running.',
     warning: null,
     allowedStatuses: 'any',
     group: null,

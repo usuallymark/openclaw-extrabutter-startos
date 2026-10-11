@@ -41,6 +41,10 @@ const controlUiSchema = z.looseObject({
 })
 
 const gatewaySchema = z.looseObject({
+  // Recorded so OpenClaw's own checks (doctor) see what the package runs: a
+  // local gateway bound to the LAN (main passes --bind lan as well).
+  mode: z.string().optional().catch(undefined),
+  bind: z.string().optional().catch(undefined),
   auth: authSchema.catch(() => authSchema.parse({})),
   controlUi: controlUiSchema.catch(() => controlUiSchema.parse({})),
   trustedProxies: z.array(z.string()).optional().catch(undefined),

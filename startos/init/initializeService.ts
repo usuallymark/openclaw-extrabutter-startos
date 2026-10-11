@@ -42,6 +42,8 @@ export const initializeService = sdk.setupOnInit(async (effects, kind) => {
   // but OpenClaw reads the JSON directly)
   await openclawJson.merge(effects, {
     gateway: {
+      mode: 'local',
+      bind: 'lan',
       auth: { mode: 'password' },
       controlUi: {
         enabled: true,
