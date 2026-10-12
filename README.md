@@ -24,6 +24,14 @@
 - **Upstream repo:** <https://github.com/openclaw/openclaw>
 - **This package:** <https://github.com/usuallymark/openclaw-extrabutter-startos> (releases carry the `.s9pk` files for sideloading: StartOS → System → Sideload a Service)
 
+## Screenshots
+
+The service dashboard, with a health check for every external service you enable:
+
+![OpenClaw Extra Butter service dashboard with health checks](docs/screenshots/dashboard-health.png)
+
+More: [Actions & Config](docs/screenshots/actions.png), Configure External Services ([part 1](docs/screenshots/external-services-1.png), [part 2](docs/screenshots/external-services-2.png)), or all of it as a [three-page PDF tour](docs/OpenClaw-Extra-Butter-tour.pdf). The screenshots are StartOS's own interface showing this package's real actions and forms, filled in with example values.
+
 ---
 
 ## Table of Contents
