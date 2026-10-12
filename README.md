@@ -15,7 +15,8 @@
 
 - a bundled **Qdrant** vector database (its own volume) and a skill for it;
 - **helper agents** the main agent can spawn, managed from an action (Configure Agents) or by the agent itself;
-- **Configure External Services**: optional skills for Vaultwarden (via `rbw`), Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI and ntfy, plus host mappings and a custom CA for internal HTTPS services;
+- a built-in **rbw** vault client (rbw 1.15.0, Bitwarden-compatible, installed for x86_64 and aarch64): point it at your Vaultwarden once and the package logs in and unlocks the vault at every start, keeps it unlocked, and lets the other services fetch their credentials from it instead of storing them in plain config;
+- **Configure External Services**: optional skills for services you already run (Vaultwarden, Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI and ntfy), plus host mappings and a custom CA for internal HTTPS services;
 - a **mobile webchat** with one profile per person (optional);
 - a built-in **pdf** skill (text extraction and OCR of scanned pages) and a **health** skill;
 - **memory embeddings** settings and a daily server snapshot in the agent's memory.
@@ -209,7 +210,7 @@ Adds, changes or removes the helper agents the main agent can spawn: model (clou
 
 ### Configure External Services
 
-Connects the agent to self-hosted tools, each optional and independent: Vaultwarden (via `rbw`; other services can then fetch their credentials from it), Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI and ntfy. Also: custom host mappings (StartOS never resolves `.local` names inside a service) and a custom CA certificate for internal HTTPS.
+Connects the agent to self-hosted tools, each optional and independent: Vaultwarden (through the built-in `rbw` client; other services can then fetch their credentials from it), Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI and ntfy. Also: custom host mappings (StartOS never resolves `.local` names inside a service) and a custom CA certificate for internal HTTPS.
 
 - **What it changes:** `external-services.json`; each enabled service loads its skill and gets a health check.
 - **Cost:** the service restarts.

@@ -3,8 +3,9 @@
 OpenClaw is a self-hosted AI agent gateway. It works with Anthropic (Claude),
 OpenAI, Google Gemini, xAI, or a local model server (Ollama, vLLM, llama.cpp).
 This package includes OpenClaw plus a built-in Qdrant vector database for
-long-term memory, and optional integrations with your own self-hosted services
-(Vaultwarden via rbw, Ollama, a NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy).
+long-term memory, the built-in rbw client for fetching credentials from a
+vault, and optional integrations with your own self-hosted services
+(Vaultwarden, Ollama, a NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy).
 
 ---
 
@@ -29,7 +30,7 @@ self-hosted tools. Each service can be independently enabled or disabled:
 
 | Service | What it enables |
 |---|---|
-| **Vaultwarden** | Secure credential storage — enable this first if you use it |
+| **Vaultwarden** | Secure credential storage through the built-in rbw client — enable this first if you use it |
 | **Ollama** | Local AI models for embeddings and vision analysis |
 | **NAS** | Read/write files on your network storage |
 | **n8n** | Trigger automated workflows |
@@ -38,8 +39,9 @@ self-hosted tools. Each service can be independently enabled or disabled:
 | **Crawl4AI** | Fetch web pages in a real browser and return clean Markdown |
 | **ntfy** | Send push notifications to your phone |
 
-Reading PDFs (text, OCR of scanned pages in English, ingest into Qdrant)
-is built in and needs no external service.
+Built in, with nothing extra to install: reading PDFs (text, OCR of scanned
+pages in English, ingest into Qdrant), and the rbw vault client that the
+Vaultwarden option uses.
 
 **Configure Vaultwarden first** if you use it — once it's enabled, credential
 fields for other services will automatically offer to fetch from Vaultwarden
@@ -73,6 +75,12 @@ Vaultwarden stores all your service credentials securely. OpenClaw fetches
 them automatically at startup, so you never need to enter passwords directly
 into skill files.
 
+The client side is part of this package: rbw 1.15.0, a Bitwarden-compatible
+command-line client, is installed in the image for both x86_64 and aarch64,
+and the package sets it up for you. It logs in and unlocks the vault at every
+start, re-checks it every 5 minutes, and re-unlocks on its own when a skill
+needs a credential. All you provide is your Vaultwarden server and account.
+
 **To set up Vaultwarden integration:**
 
 In Configure External Services, enable Vaultwarden and enter:
@@ -82,7 +90,6 @@ In Configure External Services, enable Vaultwarden and enter:
   private file and never shown again; leave the field blank later to keep it.
 
 Login uses the master password only (rbw does not support API-key login).
-The vault unlocks at startup and re-unlocks automatically when a skill needs it.
 
 **If Vaultwarden has a `.local` name or an internal certificate**, also fill in:
 - **Custom Host Mappings** — e.g. `vaultwarden.home.local` → `192.168.1.50`.
