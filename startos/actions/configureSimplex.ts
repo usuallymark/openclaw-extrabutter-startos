@@ -14,16 +14,20 @@ import {
 
 const { InputSpec, Value, Variants } = sdk
 
-// The minimum plugin version whose config schema accepts the file-exchange
-// connection keys (filesFolder / outboundFolder / outboundFolderOnClient).
-// Earlier versions reject them and OpenClaw fails to start, so enable installs
-// at least this version before writing that config. `openclaw plugins install`
-// rejects npm ranges, so the spec pins this exact version; the version-aware
-// skip below still honors any newer build an operator installed out-of-band.
-// Uninstall/list by id. `--force` overwrites a partial/older install.
-const MIN_PLUGIN_VERSION = '2.0.0'
-const SIMPLEX_PLUGIN_SPEC = `@dangoldbj/openclaw-simplex@${MIN_PLUGIN_VERSION}`
-const SIMPLEX_PLUGIN_ID = 'openclaw-simplex'
+// The minimum plugin version this OpenClaw can load. 2.0.0 added the
+// file-exchange connection keys (filesFolder / outboundFolder /
+// outboundFolderOnClient); 2.2.0 is the first build for OpenClaw 2026.10.1,
+// which removed `plugin-sdk/infra-runtime` that 2.0.x/2.1.x import (with them,
+// doctor and every plugin-loading CLI command, `agents add` included, fail).
+// Enable installs at least this version before writing the config.
+// `openclaw plugins install` rejects npm ranges, so the spec pins this exact
+// version; the version-aware skip below still honors any newer build an
+// operator installed out-of-band. Uninstall/list by id. `--force` overwrites a
+// partial/older install. The state-migrate oneshot in main.ts upgrades an
+// older install on its own before the gateway starts.
+export const MIN_PLUGIN_VERSION = '2.2.0'
+export const SIMPLEX_PLUGIN_SPEC = `@dangoldbj/openclaw-simplex@${MIN_PLUGIN_VERSION}`
+export const SIMPLEX_PLUGIN_ID = 'openclaw-simplex'
 
 // installed >= required, comparing numeric release components (prerelease/build
 // suffixes ignored). Returns false when the version is missing/unparsable, so

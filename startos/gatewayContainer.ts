@@ -8,13 +8,15 @@ type Sub = SubContainer<typeof manifest>
 // The subcontainer the gateway daemon runs in, while main is running.
 //
 // Actions that run the `openclaw` CLI must run it here, not in a fresh
-// temporary subcontainer: OpenClaw 2026.9.9 checks and reclaims its state
-// lock files, and an agent change (config patch, then agents delete) made
-// from a temporary subcontainer leaves the running gateway without its lock
-// in /data/.openclaw/tmp/openclaw-<uid>/. From then on the gateway refuses
-// every state write ("state ownership ... could not be verified") until it
-// restarts. The same commands run in the gateway's own subcontainer (as an
-// attach shell does) leave the lock alone.
+// temporary subcontainer. OpenClaw decides whether the gateway owning its
+// state is alive by PID, and a temporary subcontainer has its own PID
+// namespace. OpenClaw 2026.9.9 took the gateway for dead and removed its lock
+// files in /data/.openclaw/tmp/openclaw-<uid>/, after which the gateway
+// refused every state write ("state ownership ... could not be verified")
+// until it restarted. 2026.10.1 records the PID namespace and refuses the
+// command instead ("different PID namespace"). Either way the command belongs
+// in the gateway's own subcontainer (as an attach shell does). With the
+// service stopped the lock files are gone, so the temporary fallback is fine.
 let current: Sub | null = null
 
 /** Called by main once the gateway's subcontainer exists. */

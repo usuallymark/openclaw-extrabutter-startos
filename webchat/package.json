@@ -5,8 +5,8 @@
   "description": "Multi-profile webchat for OpenClaw on StartOS",
   "scripts": { "start": "node server.mjs" },
   "dependencies": {
-    "@openclaw/gateway-client": "2026.9.9",
-    "@openclaw/gateway-protocol": "2026.9.9",
+    "@openclaw/gateway-client": "2026.10.1",
+    "@openclaw/gateway-protocol": "2026.10.1",
     "ws": "8.21.3"
   }
 }

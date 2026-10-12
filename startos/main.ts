@@ -24,7 +24,12 @@ import {
 import { webchatJson } from './fileModels/webchat.json'
 import { embeddingsJson } from './fileModels/embeddings.json'
 import { watchSimplexAddress, withSimplexMounts } from './simplex'
-import { requestSimplexPluginUpgrade } from './actions/configureSimplex'
+import {
+  MIN_PLUGIN_VERSION,
+  SIMPLEX_PLUGIN_ID,
+  SIMPLEX_PLUGIN_SPEC,
+  requestSimplexPluginUpgrade,
+} from './actions/configureSimplex'
 import {
   RBW_ENV,
   RBW_CONFIG,
@@ -63,6 +68,19 @@ marker=/data/.startos/openclaw-doctor-version
 ver=$(openclaw --version 2>/dev/null | awk '{print $2}')
 if [ -z "$ver" ]; then echo "state-migrate: could not read the OpenClaw version"; exit 0; fi
 if [ "$(cat "$marker" 2>/dev/null)" = "$ver" ]; then exit 0; fi
+# A SimpleX plugin older than this OpenClaw can load breaks doctor and every
+# plugin-loading CLI command (OpenClaw 2026.10.1 cannot load plugin 2.1.x), so
+# upgrade it first. If that fails (no network), doctor fails too and both are
+# retried at the next start; Configure SimpleX also asks for a re-submit.
+sx=$(openclaw plugins list --json 2>/dev/null | node -e 'let s="";process.stdin.on("data",(d)=>{s+=d}).on("end",()=>{try{const j=JSON.parse(s);const a=Array.isArray(j)?j:(j.plugins||[]);const e=a.find((p)=>p&&p.id==="${SIMPLEX_PLUGIN_ID}");if(e&&e.version)process.stdout.write(String(e.version))}catch(e){}})')
+if [ -n "$sx" ] && [ "$(printf '%s\\n%s\\n' "${MIN_PLUGIN_VERSION}" "$sx" | sort -V | head -n1)" != "${MIN_PLUGIN_VERSION}" ]; then
+  echo "state-migrate: upgrading the SimpleX plugin $sx -> ${MIN_PLUGIN_VERSION}"
+  if openclaw plugins install ${SIMPLEX_PLUGIN_SPEC} --force --accept-capabilities; then
+    echo "state-migrate: SimpleX plugin upgraded"
+  else
+    echo "state-migrate: SimpleX plugin upgrade failed; retrying at the next start"
+  fi
+fi
 echo "state-migrate: running openclaw doctor --non-interactive once for OpenClaw $ver (1-2 minutes)"
 if openclaw doctor --non-interactive; then
   mkdir -p /data/.startos && printf '%s' "$ver" > "$marker"

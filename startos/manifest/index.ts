@@ -19,7 +19,7 @@ export const manifest = setupManifest({
       en_US:
         'This update brings a new OpenClaw version. On its first start it migrates the agent databases (1–2 minutes), which cannot be undone. **Make a StartOS backup of OpenClaw Extra Butter before updating.**',
     },
-    when: { sourceVersion: '<2026.9.9:0' },
+    when: { sourceVersion: '<2026.10.1:0' },
   },
   description: { short, long },
   volumes: ['main', 'qdrant'],
