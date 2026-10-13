@@ -133,7 +133,8 @@ In **Configure External Services → Email**, pick one:
 1. Turn on 2-Step Verification for the Google account, if it isn't already:
    <https://myaccount.google.com/signinoptions/twosv>.
 2. Create an app password at <https://myaccount.google.com/apppasswords>
-   (name it "OpenClaw"). Google shows 16 letters once.
+   (name it "OpenClaw"). Google shows 16 letters once, in groups of four;
+   the spaces between them don't matter.
 3. In the form, enter the Gmail address and the app password (or choose
    **Fetch from Vaultwarden** and save it as the password of a Login item
    named `email`). Gmail's servers are filled in for you.
@@ -210,8 +211,11 @@ GitHub, etc.), you can restore it after installation:
 1. Connect to your Start9 server via SSH
 2. Attach to the OpenClaw container:
    ```
-   sudo start-cli package attach openclaw-extrabutter
+   sudo start-cli package attach openclaw-extrabutter --name openclaw-sub
    ```
+   Without `--name`, start-cli asks which container to use and shows a
+   "multiple subcontainers found" message above the list. That message is
+   the question, not an error: choose `openclaw-sub`.
 3. Clone your workspace:
    ```
    cd /data/.openclaw/workspace

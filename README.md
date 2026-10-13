@@ -79,7 +79,7 @@ Six oneshots run before the gateway, and three after it:
 | `chown`                 | Before | Hands `/data` to the unprivileged user the gateway runs as                                         |
 | `network-setup`         | Before | Writes custom host mappings to `/etc/hosts` and installs a custom CA (Configure External Services) |
 | `state-migrate`         | Before | Once per OpenClaw version: `openclaw doctor --non-interactive` to migrate the agent databases      |
-| `setup-vault`           | Before | Logs `rbw` in to Vaultwarden and unlocks it, if enabled                                            |
+| `setup-vault`           | Before | Logs `rbw` in to Vaultwarden, unlocks and syncs it; signs in again if Vaultwarden refuses the sync |
 | `google-sign-in`        | Before | Google account kept in Vaultwarden: loads the OAuth client and sign-in token into gog              |
 | `check-login`           | After  | Raises a task if `start-cli` is not authenticated                                                  |
 | `check-simplex-plugin`  | After  | Brings the SimpleX plugin up to the pinned version                                                 |
@@ -303,7 +303,7 @@ Three, two of them blocking (a SimpleX plugin task may also appear when the bund
 | `primary`       | "Web Interface"          | The gateway's `/healthz` on its own bridge address (40s grace) |
 | `qdrant`        | "Qdrant Vector Database" | Port open, then Qdrant's `/readyz`                             |
 | `webchat`       | "Webchat"                | Its `/healthz`, while enabled                                  |
-| `vault`         | "Vault (rbw)"            | A full unlock every 5 minutes, while Vaultwarden is enabled    |
+| `vault`         | "Vault (rbw)"            | An unlock and a sync every 5 minutes, while Vaultwarden is enabled |
 | `ext-<service>` | The service's name       | Reachability every minute, for each enabled external service   |
 | `ext-email`     | "Email (IMAP)" / "Google account" | IMAP server reachable; for Google, a stored sign-in for the address (local, no network) |
 

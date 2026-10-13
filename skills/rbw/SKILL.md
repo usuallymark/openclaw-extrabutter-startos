@@ -28,9 +28,11 @@ rbw is installed at `/usr/bin/rbw`. Configuration and cache are stored at:
 - Cache: `/data/.openclaw/rbw/cache/`
 - Runtime: `/data/.openclaw/rbw/runtime/`
 
-The vault is unlocked automatically at startup if Vaultwarden is configured.
-rbw uses a non-interactive pinentry, so if the vault has locked (timeout or
-agent restart), the next `rbw get` unlocks it again on its own.
+The vault is unlocked and synced automatically at startup if Vaultwarden is
+configured. If the sync fails while Vaultwarden is up (Vaultwarden no longer
+accepts rbw's stored sign-in), startup signs in again on its own. rbw uses a
+non-interactive pinentry, so if the vault has locked (timeout or agent
+restart), the next `rbw get` unlocks it again on its own.
 
 ## Credentials of configured services: use auth_headers / getcred
 
@@ -121,7 +123,14 @@ Services the package configures are read for you through `getcred`; use
 
 ```bash
 rbw unlocked && echo "UNLOCKED" || echo "LOCKED"
+rbw sync && echo "SYNCED" || echo "SYNC FAILED"
 ```
 
 If a `rbw get` still fails with the vault locked, the master password is
 missing or wrong — check the `setup-vault` lines in the service logs.
+
+If the sync fails, rbw still answers from its local copy, but items added
+or renamed in Vaultwarden since then are missing. A message like
+"missing field `access_token`" means Vaultwarden refused rbw's stored
+sign-in: if Vaultwarden is running, ask the user to restart OpenClaw, which
+signs in again. Never run `rbw purge` yourself.

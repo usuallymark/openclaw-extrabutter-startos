@@ -17,8 +17,11 @@ same addresses, so its answer matches what the user sees there:
 
 - **Web Interface** (the OpenClaw gateway), **Qdrant**, **Webchat** (if
   enabled)
-- **Vault (rbw)**: whether the vault is unlocked (read-only; a locked vault
-  unlocks itself on the next credential lookup)
+- **Vault (rbw)**: whether the vault is unlocked (a locked vault unlocks
+  itself on the next credential lookup) and whether a sync with Vaultwarden
+  works. rbw keeps answering from its local copy when the sync fails, so a
+  failed sync means changes made in Vaultwarden are not reaching OpenClaw;
+  if Vaultwarden is running, a restart of OpenClaw signs in again.
 - each **enabled external service**: Vaultwarden, Ollama, NAS (SMB),
   n8n, Trilium, SearXNG, Crawl4AI, ntfy. For **n8n and Trilium** it also
   makes one authenticated read request, so it says whether the API key is

@@ -86,18 +86,29 @@ lookup() {
 # rbw answers from its local copy of the vault, which it refreshes only
 # now and then, so an entry added or fixed in Vaultwarden may not be seen
 # yet. On a miss, sync once (quietly, with a time limit) and look again.
+# Error messages carry rbw's own reason (never the secret) and say when the
+# sync itself failed, which is how a refused Vaultwarden sign-in shows up.
 if ! lookup; then
-  if command -v timeout >/dev/null 2>&1; then
-    timeout 30 rbw sync >/dev/null 2>&1
+  t=
+  command -v timeout >/dev/null 2>&1 && t="timeout 30"
+  if out=$($t rbw sync 2>&1 >/dev/null); then
+    syncerr=
   else
-    rbw sync >/dev/null 2>&1
+    syncerr=$(printf '%s\n' "${out:-no answer within 30 s}" | head -n 1)
+  fi
+  if [ -n "$syncerr" ]; then
+    syncnote="; rbw sync also failed ($syncerr), so recent Vaultwarden changes are not here yet: if Vaultwarden is running, restart OpenClaw to sign in again"
+  else
+    syncnote=", also after rbw sync"
   fi
   if ! value=$(rbw get -i --field "$field" "$entry" 2>/dev/null); then
-    echo "getcred: Vaultwarden lookup failed for entry \"$entry\", field \"$field\" ($var), also after rbw sync. Check that Vaultwarden is enabled and the entry and field exist." >&2
+    # Ask again only for rbw's error message (stdout, the secret, is dropped).
+    why=$(rbw get -i --field "$field" "$entry" 2>&1 >/dev/null | head -n 1)
+    echo "getcred: Vaultwarden lookup failed for entry \"$entry\", field \"$field\" ($var): ${why:-no answer from rbw}$syncnote" >&2
     exit 1
   fi
   if [ -z "$value" ]; then
-    echo "getcred: Vaultwarden entry \"$entry\", field \"$field\" is empty ($var), also after rbw sync" >&2
+    echo "getcred: Vaultwarden entry \"$entry\", field \"$field\" is empty ($var)$syncnote" >&2
     exit 1
   fi
 fi

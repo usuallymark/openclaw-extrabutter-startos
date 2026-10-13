@@ -44,6 +44,7 @@ import {
   RBW_DIR,
   RBW_PINENTRY,
   PINENTRY_SCRIPT,
+  VAULT_START_SCRIPT,
   CUSTOM_CA_DIR,
   CUSTOM_CA_PREFIX,
   applyHostsBlock,
@@ -560,25 +561,25 @@ export const main = sdk.setupMain(async ({ effects }) => {
               { user: 'root' },
             )
 
-            // rbw spawns (and daemonizes) rbw-agent itself. stop-agent
-            // clears any stale agent holding an old config.
-            const script = [
-              'rbw stop-agent >/dev/null 2>&1 || true',
-              'sleep 1',
-              'timeout 90 rbw login || echo "rbw login: exit $?" >&2',
-              'timeout 90 rbw unlock || echo "rbw unlock: exit $?" >&2',
-              'timeout 120 rbw sync || echo "rbw sync: exit $?" >&2',
-              'rbw unlocked',
-            ].join('\n')
-            const res = await subcontainer.exec(['sh', '-c', script], {
-              user: 'node',
-              env: RBW_ENV,
-            })
+            // rbw spawns (and daemonizes) rbw-agent itself; the script
+            // stops any stale agent first (see VAULT_START_SCRIPT).
+            const res = await subcontainer.exec(
+              ['sh', '-c', VAULT_START_SCRIPT],
+              {
+                user: 'node',
+                env: { ...RBW_ENV, VW_URL: vw.url.replace(/\/+$/, '') },
+              },
+            )
+            for (const line of String(res.stdout).split('\n')) {
+              if (line.trim()) console.info(line.trim())
+            }
+            const errText = String(res.stderr).trim()
             if (res.exitCode === 0) {
+              if (errText) console.warn(errText)
               console.info('Vault unlocked successfully')
             } else {
               console.error(
-                `Vault setup did not unlock (exit ${res.exitCode}): ${String(res.stderr).trim()}`,
+                `Vault setup did not unlock (exit ${res.exitCode}): ${errText}`,
               )
             }
           } catch (e) {

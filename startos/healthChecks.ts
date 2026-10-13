@@ -1,6 +1,6 @@
 import type { SubContainer } from '@start9labs/start-sdk'
 import { sdk } from './sdk'
-import { RBW_ENV } from './vault'
+import { RBW_ENV, VAULT_PROBE_SCRIPT } from './vault'
 import { EmailConfig, googleSignInStatus, mailServers } from './email'
 
 // Health checks for the vault and external services.
@@ -129,22 +129,28 @@ export async function probeTcp(
 
 /**
  * End-to-end vault check: `rbw unlock` exercises the master password, the
- * file pinentry and the Vaultwarden connection; `rbw unlocked` confirms it.
- * Unlock is a no-op when already unlocked.
+ * file pinentry and the Vaultwarden connection (a no-op when unlocked), and
+ * `rbw sync` confirms Vaultwarden still accepts rbw's sign-in. rbw keeps
+ * answering from its local copy when a sync fails, so without the sync a
+ * refused sign-in looked healthy while vault edits stopped arriving.
  */
 export async function probeVault(sub: Sub): Promise<Result> {
   try {
-    const res = await sub.exec(
-      ['sh', '-c', 'timeout 60 rbw unlock && rbw unlocked'],
-      { user: 'node', env: RBW_ENV, timeout: 90_000 },
-    )
+    const res = await sub.exec(['sh', '-c', VAULT_PROBE_SCRIPT], {
+      user: 'node',
+      env: RBW_ENV,
+      timeout: 150_000,
+    })
     if (res.exitCode === 0) {
-      return { result: 'success', message: 'Vault unlocked' }
+      return { result: 'success', message: 'Vault unlocked and synced' }
     }
-    const why =
-      res.exitCode === 124
-        ? 'unlock timed out'
-        : firstLine(res.stderr) || `exit ${res.exitCode}`
+    const why = firstLine(res.stderr) || `exit ${res.exitCode}`
+    if (res.exitCode === 20) {
+      return {
+        result: 'failure',
+        message: `Vault unlocked, but syncing with Vaultwarden fails (${why}): changes made in Vaultwarden do not reach OpenClaw. If Vaultwarden is running, restart OpenClaw to sign in again.`,
+      }
+    }
     return {
       result: 'failure',
       message: `Vault locked — ${why}. Check the master password and Vaultwarden settings in Configure External Services.`,

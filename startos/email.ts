@@ -145,11 +145,18 @@ export function renderHimalayaConfig(
   if (email.displayName?.trim()) {
     lines.push(`display-name = ${tomlString(email.displayName.trim())}`)
   }
+  // Google shows an app password as four groups of four letters; the spaces
+  // are display only. For Gmail, drop any that were copied with it. A
+  // getcred failure still fails the command (and shows its message).
+  const passwordCommand =
+    email.mode === 'gmail'
+      ? `p=$(getcred EMAIL_PASS) && printf '%s' "$p" | tr -d ' '`
+      : 'getcred EMAIL_PASS'
   for (const proto of ['imap', 'smtp'] as const) {
     lines.push(
       ...serverEntries(proto, servers[proto]),
       `${proto}.sasl.plain.username = ${tomlString(login)}`,
-      `${proto}.sasl.plain.password.command = "getcred EMAIL_PASS"`,
+      `${proto}.sasl.plain.password.command = ${tomlString(passwordCommand)}`,
     )
   }
   if (email.mode === 'gmail') {

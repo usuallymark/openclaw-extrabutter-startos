@@ -153,20 +153,34 @@ def check_tcp(t):
 
 
 def check_vault(_t):
-    # Read-only: `rbw unlocked` only asks the agent. A locked vault unlocks
-    # itself on the next `rbw get`, so this is reported but rarely fatal.
+    # `rbw unlocked` only asks the agent. A locked vault unlocks itself on the
+    # next `rbw get`, so that is reported but rarely fatal. Then `rbw sync`:
+    # rbw keeps answering from its local copy when Vaultwarden refuses it, so
+    # a failed sync means vault edits no longer reach OpenClaw.
     env = {**os.environ, **RBW_ENV}
-    if os.geteuid() == 0:
-        cmd = ['runuser', '-u', 'node', '--', 'env'] + [f'{k}={v}' for k, v in RBW_ENV.items()] + ['rbw', 'unlocked']
-    else:
-        cmd = ['rbw', 'unlocked']
+
+    def rbw(*args):
+        cmd = ['rbw', *args]
+        if os.geteuid() == 0:
+            cmd = ['runuser', '-u', 'node', '--', 'env'] + [f'{k}={v}' for k, v in RBW_ENV.items()] + cmd
+        return subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
+
     try:
-        r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=15)
+        r = rbw('unlocked')
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         return False, f'check error: {e.__class__.__name__}'
-    if r.returncode == 0:
-        return True, 'unlocked'
-    return False, 'locked (the next credential lookup will try to unlock it; if that fails, check the Vaultwarden settings)'
+    if r.returncode != 0:
+        return False, 'locked (the next credential lookup will try to unlock it; if that fails, check the Vaultwarden settings)'
+    try:
+        s = rbw('sync')
+    except subprocess.TimeoutExpired:
+        return False, 'unlocked, but the sync with Vaultwarden did not finish within 60 s'
+    if s.returncode == 0:
+        return True, 'unlocked, synced with Vaultwarden'
+    why = first_line(s.stderr) or f'exit {s.returncode}'
+    return False, (f'unlocked, but the sync with Vaultwarden fails ({why}): changes made in '
+                   'Vaultwarden do not reach OpenClaw. If Vaultwarden is running, ask the user '
+                   'to restart OpenClaw, which signs in to Vaultwarden again')
 
 
 def check_memory(_t):
