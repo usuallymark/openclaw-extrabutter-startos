@@ -6,7 +6,9 @@ vault and every enabled external service, with the same URLs (the package
 passes them in OPENCLAW_HEALTH_TARGETS). Adds disk and memory. Read-only and
 prints no secrets. For services with an API key (n8n, Trilium) it also makes
 one authenticated read request to that service, so a wrong or missing key
-shows up here; the key is sent only to that service.
+shows up here; the key is sent only to that service. Email logs in to the
+IMAP and SMTP servers (himalaya account check); a Google account asks
+Google to refresh its stored sign-in.
 
     python3 /opt/skills/health/health.py          # short text report
     python3 /opt/skills/health/health.py --json   # machine-readable
@@ -197,7 +199,107 @@ def check_memory(_t):
     return True, f'embeddings via {provider}' + (f', {model}' if model else '')
 
 
-CHECKS = {'http': check_http, 'tcp': check_tcp, 'vault': check_vault, 'memory': check_memory}
+def _service_env(keys):
+    """Our environment plus the given variables from the gateway process
+    (a root attach shell has none of the service settings)."""
+    env = dict(os.environ)
+    missing = [k for k in keys if k not in env]
+    if missing:
+        sys.path.insert(0, '/opt/skills/rbw')
+        try:
+            from creds import gateway_environ
+            gw = gateway_environ()
+        except Exception:
+            gw = {}
+        for k in missing:
+            if k in gw:
+                env[k] = gw[k]
+    return env
+
+
+def _as_node(cmd, env, keys):
+    """Run as the gateway user when we are root (the files belong to node)."""
+    if os.geteuid() == 0:
+        return ['runuser', '-u', 'node', '--', 'env', 'HOME=/data'] + \
+            [f'{k}={env[k]}' for k in keys if k in env] + cmd
+    return cmd
+
+
+def check_email_login(t, msg):
+    """IMAP server reachable: also log in to IMAP and SMTP (himalaya account
+    check). himalaya fetches the password through getcred; it is never shown."""
+    keys = ['HIMALAYA_CONFIG', 'EMAIL_PASS', 'EMAIL_PASS_FROM_VAULT',
+            'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR']
+    env = _service_env(keys)
+    env.setdefault('HIMALAYA_CONFIG', '/data/.openclaw/himalaya/config.toml')
+
+    def account_check(extra, timeout):
+        """{'imap': 'OK'|'FAIL (…)', 'smtp': …}, or a string saying why it could not run."""
+        try:
+            r = subprocess.run(_as_node(['himalaya', 'account', 'check'] + extra, env, keys),
+                               env=env, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return f'no answer within {timeout} s'
+        except FileNotFoundError as e:
+            return f'could not run ({e.__class__.__name__})'
+        # `account check` exits 0 even when a backend fails; read its lines.
+        status = {}
+        for line in (r.stdout + r.stderr).splitlines():
+            line = line.strip()
+            for proto in ('imap', 'smtp'):
+                if line.startswith(proto + ':'):
+                    status[proto] = line.split(':', 1)[1].strip()
+        return status or (first_line(r.stderr) or first_line(r.stdout) or f'exit {r.returncode}')
+
+    # IMAP alone first: quick, and a wrong password fails here (both servers
+    # share it). Some SMTP servers keep the connection open after refusing a
+    # login, so SMTP is checked only after IMAP passed, with its own limit.
+    imap = account_check(['-b', 'imap'], 30)
+    if isinstance(imap, str):
+        return False, f'{msg}, but the IMAP login check failed: {imap}'
+    if not imap.get('imap', '').startswith('OK'):
+        return False, f'{msg}, but: IMAP {imap.get("imap", "?")}'
+    full = account_check([], 45)
+    if isinstance(full, str):
+        return False, f'{msg}; IMAP login OK, but the SMTP check failed: {full}'
+    smtp = full.get('smtp', '')
+    if smtp.startswith('OK'):
+        return True, f'{msg}; IMAP and SMTP logins OK'
+    return False, f'{msg}; IMAP login OK, but: SMTP {smtp or "not checked"}'
+
+
+def check_google(t):
+    """Google account: ask Google to refresh the stored sign-in (gog auth list --check)."""
+    keys = ['GOG_HOME', 'GOG_KEYRING_BACKEND', 'GOG_KEYRING_PASSWORD', 'GOG_ACCOUNT']
+    env = _service_env(keys)
+    if 'GOG_KEYRING_PASSWORD' not in env:
+        return False, 'the Google sign-in settings are not available here (is OpenClaw running?)'
+    try:
+        r = subprocess.run(_as_node(['gog', 'auth', 'list', '--check', '--json', '--no-input'], env, keys),
+                           env=env, capture_output=True, text=True, timeout=60)
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        return False, f'the Google sign-in check could not run ({e.__class__.__name__})'
+    try:
+        accounts = json.loads(r.stdout or '{}').get('accounts', [])
+    except ValueError:
+        accounts = None
+    if accounts is None or (not accounts and r.returncode != 0):
+        return False, f'the Google sign-in could not be read: {first_line(r.stderr) or f"exit {r.returncode}"}'
+    want = (t.get('address') or '').lower()
+    acct = next((a for a in accounts if str(a.get('email', '')).lower() == want), None)
+    if not acct:
+        return False, (f'not signed in as {t.get("address")}: add the OAuth client and sign-in token in '
+                       'Configure External Services → Email')
+    services = ', '.join(acct.get('services') or [])
+    if acct.get('valid'):
+        return True, (f'signed in as {acct["email"]}' + (f' ({services})' if services else '')
+                      + ', token accepted by Google')
+    return False, (f'the sign-in for {acct["email"]} was refused: {first_line(str(acct.get("error", "")))}. '
+                   'Renew it in Configure External Services → Email')
+
+
+CHECKS = {'http': check_http, 'tcp': check_tcp, 'vault': check_vault, 'memory': check_memory,
+          'google': check_google}
 
 
 def run_check(t):
@@ -208,6 +310,8 @@ def run_check(t):
             authed = check_auth(t, msg)
             if authed:
                 ok, msg = authed
+        if ok and t['kind'] == 'tcp' and t['key'] == 'email':
+            ok, msg = check_email_login(t, msg)
     except Exception as e:  # never crash the report over one check
         ok, msg = False, f'check error: {e.__class__.__name__}: {first_line(str(e))}'
     return {'key': t['key'], 'label': t['label'], 'ok': ok, 'message': msg,

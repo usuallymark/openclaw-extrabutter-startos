@@ -75,7 +75,8 @@ python3 -c "
 import subprocess, sys
 
 def rbw_get(entry, field=None):
-    cmd = ['rbw', 'get', entry] if not field else ['rbw', 'get', '--field', field, entry]
+    # -i: item names are matched without regard to case (field names always are).
+    cmd = ['rbw', 'get', '-i', entry] if not field else ['rbw', 'get', '-i', '--field', field, entry]
     env = {
         'XDG_CONFIG_HOME': '/data/.openclaw/rbw/config',
         'XDG_CACHE_HOME': '/data/.openclaw/rbw/cache',
@@ -89,28 +90,32 @@ def rbw_get(entry, field=None):
         return None
     return result.stdout.strip()
 
-# Examples:
-value = rbw_get('n8n', 'API_Key')
-print(value)
+# Example: pass the value straight on; never print it.
+headers = {'X-N8N-API-KEY': rbw_get('n8n', 'api_key')}
 "
 ```
 
-## Entry Naming Convention
+## Naming Standard
 
-All Vaultwarden entries used by OpenClaw follow this convention:
-- Entry name: the service name exactly as listed (e.g. `n8n`, `Trilium`, `NAS`, `Qdrant`)
-- Field name: `API_Key` for API keys, `Password` for passwords, `username` for usernames
+One Vaultwarden item per service, named after the service in lowercase:
+- Logins (`email`, `nas`, …): the item's own `username` and `password`.
+- API keys: a hidden custom field `api_key`.
+- Names are matched without regard to case (`rbw get -i`), so older items
+  such as `NAS` or a field `API_Key` still work.
 
-Example entries:
-| Service | Entry Name | Field |
+| Service | Item | Field |
 |---|---|---|
-| n8n | `n8n` | `API_Key` |
-| Trilium | `Trilium` | `API_Key` |
-| NAS username | `NAS` | `username` |
-| NAS password | `NAS` | `Password` |
-| Qdrant | `Qdrant` | `API_Key` |
-| Gitea | `Gitea` | `API_Key` |
-| Anthropic | `Anthropic` | `API_Key` |
+| Email | `email` | `password` |
+| NAS | `nas` | `username`, `password` |
+| n8n | `n8n` | `api_key` |
+| Trilium | `trilium` | `api_key` |
+| Crawl4AI | `crawl4ai` | `api_key` |
+| ntfy | `ntfy` | `api_key` |
+| Google account | `google` | `client_json`, `token_json` (read only by the package at start) |
+
+Services the package configures are read for you through `getcred`; use
+`rbw_get` only for items the user set up for your own scripts (for example
+`gitea` / `api_key`), following the same standard.
 
 ## Checking Vault Status
 

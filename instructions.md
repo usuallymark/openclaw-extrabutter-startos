@@ -31,6 +31,7 @@ self-hosted tools. Each service can be independently enabled or disabled:
 | Service | What it enables |
 |---|---|
 | **Vaultwarden** | Secure credential storage through the built-in rbw client — enable this first if you use it |
+| **Email** | Read, search and send email (Gmail, any IMAP/SMTP provider), or a Google account with Calendar and Drive — see [Email Setup](#email-setup) |
 | **Ollama** | Local AI models for embeddings and vision analysis |
 | **NAS** | Read/write files on your network storage |
 | **n8n** | Trigger automated workflows |
@@ -98,18 +99,106 @@ Login uses the master password only (rbw does not support API-key login).
 - **Custom CA Certificate** — paste the PEM of the CA that signed the
   certificate, so HTTPS to it is trusted.
 
-**Vaultwarden entry naming convention:**
+**Vaultwarden naming standard:**
 
-OpenClaw looks up credentials by entry name and field. Use these exact names:
+One item per service, named after the service in lowercase:
 
-| Service | Entry Name | Field |
+| Service | Item | What OpenClaw reads |
 |---|---|---|
-| n8n | `n8n` | `API_Key` |
-| Trilium | `Trilium` | `API_Key` |
-| NAS username | `NAS` | `username` |
-| NAS password | `NAS` | `Password` |
-| Crawl4AI | `Crawl4AI` | `API_Key` |
-| ntfy | `ntfy` | `API_Key` |
+| Email (Gmail app password or IMAP) | `email` | the login's **password** |
+| NAS | `nas` | the login's **username** and **password** |
+| n8n | `n8n` | hidden custom field `api_key` |
+| Trilium | `trilium` | hidden custom field `api_key` |
+| Crawl4AI | `crawl4ai` | hidden custom field `api_key` |
+| ntfy | `ntfy` | hidden custom field `api_key` |
+| Google account | `google` | hidden custom fields `client_json` and `token_json` |
+
+- For `email` and `nas`, create a normal **Login** item and fill in its own
+  username/password; no custom fields needed.
+- For keys, add a **hidden** custom field named `api_key` to the item.
+- The two Google fields hold the whole contents of the two JSON files (see
+  [Email Setup](#email-setup)).
+- Names are matched without regard to upper/lower case, so an existing
+  `NAS` item or `API_Key` field keeps working; the lowercase names above
+  are the standard to use for new items.
+
+---
+
+## Email Setup
+
+In **Configure External Services → Email**, pick one:
+
+### Gmail (app password) — the simple way, mail only
+
+1. Turn on 2-Step Verification for the Google account, if it isn't already:
+   <https://myaccount.google.com/signinoptions/twosv>.
+2. Create an app password at <https://myaccount.google.com/apppasswords>
+   (name it "OpenClaw"). Google shows 16 letters once.
+3. In the form, enter the Gmail address and the app password (or choose
+   **Fetch from Vaultwarden** and save it as the password of a Login item
+   named `email`). Gmail's servers are filled in for you.
+
+The agent can then read, search, send, reply and file mail. Calendar and
+Drive need the Google account option below.
+
+### Other IMAP/SMTP provider
+
+Enter the address, the IMAP and SMTP servers with their ports and
+encryption from your provider's help pages (typically IMAP 993 SSL/TLS and
+SMTP 587 STARTTLS), and the password. Many providers (iCloud, Fastmail,
+Yahoo, Outlook with two-factor sign-in) require an app-specific password
+here. A server with a `.local` name or a private certificate needs a
+**Custom Host Mapping** and the **Custom CA Certificate**, as for other
+services.
+
+### Google account (Gmail, Calendar, Drive)
+
+This uses Google's own sign-in, which needs a browser, so you do it once
+on your computer with the `gog` tool and bring the result to the server.
+About 15 minutes the first time.
+
+**1. Create your own Google Cloud app (once).**
+
+1. Create a project at <https://console.cloud.google.com/projectcreate>.
+2. Enable the Gmail, Google Calendar and Google Drive APIs (and any others
+   you want) in the [API Library](https://console.cloud.google.com/apis/library).
+3. Set up the [OAuth consent screen](https://console.cloud.google.com/auth/branding):
+   "External", your own email address.
+4. Under [Audience](https://console.cloud.google.com/auth/audience), click
+   **Publish app** → **Confirm**. Without this the sign-in expires every 7
+   days. (A personal app doesn't need Google's verification; you'll see an
+   "unverified app" warning at sign-in, which is expected.)
+5. Under [Clients](https://console.cloud.google.com/auth/clients), create an
+   OAuth client of type **Desktop app** and download its JSON
+   (`client_secret_….json`).
+
+**2. Sign in on your computer (once).** Install gog
+(<https://gogcli.sh>; on a Mac, `brew install gogcli`), then:
+
+```
+gog auth credentials ~/Downloads/client_secret_*.json
+gog auth add you@gmail.com --services gmail,calendar,drive
+gog auth tokens export you@gmail.com --out ~/Desktop/token.json
+```
+
+The second command opens your browser to approve access. `--services`
+decides what the agent may use; add `contacts`, `docs` or `sheets` if you
+want those too.
+
+**3. Give both files to the server.** Either:
+
+- **Fetch from Vaultwarden** (recommended): create a Vaultwarden item named
+  `google` with two hidden custom fields, `client_json` and `token_json`,
+  holding the contents of `client_secret_….json` and `token.json`. The
+  package loads them at every start. Vaultwarden must be enabled.
+- **Paste here**: paste both files' contents into the form once.
+
+Either way the server keeps an encrypted copy for gog. Delete `token.json`
+from your computer afterwards. The dashboard's **Google account** check
+shows "Signed in as …" when it worked.
+
+To renew or change the sign-in later (new services, revoked access), repeat
+step 2 and update the Vaultwarden fields or paste the new token.
 
 ---
 

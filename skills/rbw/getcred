@@ -69,6 +69,10 @@ if [ -z "$entry" ] || [ "$field" = "$pointer" ] || [ -z "$field" ]; then
   exit 1
 fi
 
+# Item and field names are matched without regard to case (rbw -i; rbw
+# always compares field names that way), so "NAS"/"nas" and
+# "API_Key"/"api_key" are the same. The documented standard is lowercase.
+
 # rbw locations used by the package (also set in the gateway environment).
 : "${XDG_CONFIG_HOME:=/data/.openclaw/rbw/config}"
 : "${XDG_CACHE_HOME:=/data/.openclaw/rbw/cache}"
@@ -76,7 +80,7 @@ fi
 export XDG_CONFIG_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR
 
 lookup() {
-  value=$(rbw get --field "$field" "$entry" 2>/dev/null) && [ -n "$value" ]
+  value=$(rbw get -i --field "$field" "$entry" 2>/dev/null) && [ -n "$value" ]
 }
 
 # rbw answers from its local copy of the vault, which it refreshes only
@@ -88,7 +92,7 @@ if ! lookup; then
   else
     rbw sync >/dev/null 2>&1
   fi
-  if ! value=$(rbw get --field "$field" "$entry" 2>/dev/null); then
+  if ! value=$(rbw get -i --field "$field" "$entry" 2>/dev/null); then
     echo "getcred: Vaultwarden lookup failed for entry \"$entry\", field \"$field\" ($var), also after rbw sync. Check that Vaultwarden is enabled and the entry and field exist." >&2
     exit 1
   fi

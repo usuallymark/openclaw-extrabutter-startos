@@ -31,6 +31,13 @@ import {
   requestSimplexPluginUpgrade,
 } from './actions/configureSimplex'
 import {
+  GOOGLE_SIGN_IN_SCRIPT,
+  emailEnvAndSkill,
+  googleFromVault,
+  googleSignInEnv,
+  writeHimalayaConfig,
+} from './email'
+import {
   RBW_ENV,
   RBW_CONFIG,
   RBW_CREDENTIALS,
@@ -174,13 +181,13 @@ export const main = sdk.setupMain(async ({ effects }) => {
     if (u?.source === 'manual' && u.value) {
       externalEnv['NAS_USER'] = u.value
     } else if (u?.source === 'from-vaultwarden') {
-      externalEnv['NAS_USER_FROM_VAULT'] = 'NAS:username'
+      externalEnv['NAS_USER_FROM_VAULT'] = 'nas:username'
     }
     const p = ext.nas.password
     if (p?.source === 'manual' && p.value) {
       externalEnv['NAS_PASS'] = p.value
     } else if (p?.source === 'from-vaultwarden') {
-      externalEnv['NAS_PASS_FROM_VAULT'] = 'NAS:Password'
+      externalEnv['NAS_PASS_FROM_VAULT'] = 'nas:password'
     }
     enabledSkills.push('/opt/skills/nas')
   }
@@ -191,7 +198,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
     if (k?.source === 'manual' && k.value) {
       externalEnv['N8N_KEY'] = k.value
     } else if (k?.source === 'from-vaultwarden') {
-      externalEnv['N8N_KEY_FROM_VAULT'] = 'n8n:API_Key'
+      externalEnv['N8N_KEY_FROM_VAULT'] = 'n8n:api_key'
     }
     enabledSkills.push('/opt/skills/n8n')
   }
@@ -202,7 +209,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
     if (k?.source === 'manual' && k.value) {
       externalEnv['TRILIUM_KEY'] = k.value
     } else if (k?.source === 'from-vaultwarden') {
-      externalEnv['TRILIUM_KEY_FROM_VAULT'] = 'Trilium:API_Key'
+      externalEnv['TRILIUM_KEY_FROM_VAULT'] = 'trilium:api_key'
     }
     enabledSkills.push('/opt/skills/trilium')
   }
@@ -218,7 +225,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
     if (k?.source === 'manual' && k.value) {
       externalEnv['CRAWL4AI_KEY'] = k.value
     } else if (k?.source === 'from-vaultwarden') {
-      externalEnv['CRAWL4AI_KEY_FROM_VAULT'] = 'Crawl4AI:API_Key'
+      externalEnv['CRAWL4AI_KEY_FROM_VAULT'] = 'crawl4ai:api_key'
     }
     enabledSkills.push('/opt/skills/crawl4ai')
   }
@@ -230,10 +237,17 @@ export const main = sdk.setupMain(async ({ effects }) => {
     if (k?.source === 'manual' && k.value) {
       externalEnv['NTFY_KEY'] = k.value
     } else if (k?.source === 'from-vaultwarden') {
-      externalEnv['NTFY_KEY_FROM_VAULT'] = 'ntfy:API_Key'
+      externalEnv['NTFY_KEY_FROM_VAULT'] = 'ntfy:api_key'
     }
     enabledSkills.push('/opt/skills/ntfy')
   }
+
+  // Email (Configure External Services → Email): himalaya for the IMAP
+  // choices, gog for the Google account. Only one email skill loads.
+  const email = await emailEnvAndSkill(ext?.email)
+  Object.assign(externalEnv, email.env)
+  if (email.skill) enabledSkills.push(email.skill)
+  await writeHimalayaConfig(ext?.email)
 
   // Webchat (Configure Webchat). Reactive: main re-runs when it changes.
   const webchatEnabled =
@@ -307,10 +321,18 @@ export const main = sdk.setupMain(async ({ effects }) => {
     ...externalTargets(ext),
   ]
 
-  // Load only the skills for enabled services.
+  // Load only the skills for enabled services. OpenClaw's own bundled
+  // `himalaya` and `gog` skills stay off: they become eligible now that both
+  // programs are in the image, but the bundled himalaya one documents the
+  // 1.x CLI (the image has 2.x) and both tell the agent to set up
+  // credentials itself. The package's `email` and `google` skills replace
+  // them.
   await openclawJson.merge(effects, {
-    skills: { load: { extraDirs: enabledSkills } },
-  })
+    skills: {
+      load: { extraDirs: enabledSkills },
+      entries: { himalaya: { enabled: false }, gog: { enabled: false } },
+    },
+  } as any)
 
   const bridge = await sdk.host
     .getOwn(effects, uiHostId, (host) => {
@@ -567,6 +589,28 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['install-root-ca', 'chown', 'network-setup'],
     })
+    // Google account kept in Vaultwarden: fetch the OAuth client and token
+    // and load them into gog before the gateway starts. A no-op for every
+    // other email choice. Never fatal (the Google health check says why).
+    .addOneshot('google-sign-in', {
+      subcontainer: openclawSub,
+      exec: {
+        command: googleFromVault(ext?.email)
+          ? ['sh', '-c', GOOGLE_SIGN_IN_SCRIPT]
+          : ['true'],
+        user: 'node',
+        env: {
+          ...RBW_ENV, // includes HOME=/data and a PATH with getcred and gog
+          ...(googleFromVault(ext?.email)
+            ? {
+                ...email.env,
+                ...googleSignInEnv(ext!.email!.address!),
+              }
+            : {}),
+        },
+      },
+      requires: ['chown', 'setup-vault'],
+    })
     .addDaemon('qdrant', {
       subcontainer: qdrantSub,
       exec: {
@@ -632,6 +676,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
         'state-migrate',
         'network-setup',
         'setup-vault',
+        'google-sign-in',
         'qdrant',
       ],
     })
@@ -754,6 +799,15 @@ export const main = sdk.setupMain(async ({ effects }) => {
       ready: {
         display: extChecks.ntfy.display,
         fn: () => extChecks.ntfy.fn(openclawSub),
+        trigger: externalTrigger,
+        gracePeriod: 0,
+      },
+      requires: ['network-setup'],
+    })
+    .addHealthCheck('ext-email', {
+      ready: {
+        display: extChecks.email.display,
+        fn: () => extChecks.email.fn(openclawSub),
         trigger: externalTrigger,
         gracePeriod: 0,
       },

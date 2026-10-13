@@ -1,6 +1,7 @@
 import type { SubContainer } from '@start9labs/start-sdk'
 import { sdk } from './sdk'
 import { RBW_ENV } from './vault'
+import { EmailConfig, googleSignInStatus, mailServers } from './email'
 
 // Health checks for the vault and external services.
 //
@@ -168,6 +169,7 @@ export type ExtConfig =
       searxng?: { enabled?: boolean; url?: string }
       crawl4ai?: { enabled?: boolean; url?: string }
       ntfy?: { enabled?: boolean; url?: string }
+      email?: EmailConfig
     }
   | undefined
   | null
@@ -187,6 +189,7 @@ export type HealthTarget =
   | { key: string; label: string; kind: 'http'; url: string; okBelow?: number }
   | { key: string; label: string; kind: 'tcp'; host: string; port: number }
   | { key: string; label: string; kind: 'vault' }
+  | { key: string; label: string; kind: 'google'; address: string }
 
 // Health path per HTTP service, appended to the configured URL.
 const HTTP_PATHS = {
@@ -231,6 +234,26 @@ export function externalTargets(ext: ExtConfig): HealthTarget[] {
   push('searxng')
   push('crawl4ai')
   push('ntfy')
+  // Email: the IMAP server for the himalaya choices (reachability only, as
+  // for every other service); the stored sign-in for the Google account.
+  const email = ext?.email
+  const servers = mailServers(email)
+  if (servers) {
+    out.push({
+      key: 'email',
+      label: 'Email (IMAP)',
+      kind: 'tcp',
+      host: servers.imap.host,
+      port: servers.imap.port,
+    })
+  } else if (email?.mode === 'google' && email.address) {
+    out.push({
+      key: 'email',
+      label: 'Google account',
+      kind: 'google',
+      address: email.address,
+    })
+  }
   return out
 }
 
@@ -247,7 +270,25 @@ function specFor(t: HealthTarget | undefined): CheckSpec {
         probeTcp(sub, t.key === 'nas' ? 'NAS' : t.label, t.host, t.port),
     }
   }
+  if (t.kind === 'google') {
+    return { display: t.label, fn: (sub) => probeGoogle(sub, t.address) }
+  }
   return { display: t.label, fn: probeVault }
+}
+
+/** Google account: is a sign-in stored and readable? Local; no network. */
+async function probeGoogle(sub: Sub, address: string): Promise<Result> {
+  try {
+    const s = await googleSignInStatus(sub, address)
+    return s.ok
+      ? { result: 'success', message: s.message }
+      : { result: 'failure', message: s.message }
+  } catch (e) {
+    return {
+      result: 'failure',
+      message: `Google sign-in check error: ${firstLine((e as Error)?.message)}`,
+    }
+  }
 }
 
 export function externalChecks(ext: ExtConfig) {
@@ -261,5 +302,6 @@ export function externalChecks(ext: ExtConfig) {
     crawl4ai: specFor(byKey.get('crawl4ai')),
     ntfy: specFor(byKey.get('ntfy')),
     nas: specFor(byKey.get('nas')),
+    email: specFor(byKey.get('email')),
   } satisfies Record<string, CheckSpec>
 }

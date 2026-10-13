@@ -17,6 +17,7 @@
 - **helper agents** the main agent can spawn, managed from an action (Configure Agents) or by the agent itself;
 - a built-in **rbw** vault client (rbw 1.15.0, Bitwarden-compatible, installed for x86_64 and aarch64): point it at your Vaultwarden once and the package logs in and unlocks the vault at every start, keeps it unlocked, and lets the other services fetch their credentials from it instead of storing them in plain config;
 - **Configure External Services**: optional skills for services you already run (Vaultwarden, Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI and ntfy), plus host mappings and a custom CA for internal HTTPS services;
+- **email**: Gmail with an app password or any IMAP/SMTP provider (himalaya 2.2.1), or a Google account with Gmail, Calendar and Drive (gog 0.44.0); every credential can live in Vaultwarden;
 - a **mobile webchat** with one profile per person (optional);
 - a built-in **pdf** skill (text extraction and OCR of scanned pages) and a **health** skill;
 - **memory embeddings** settings and a daily server snapshot in the agent's memory.
@@ -70,7 +71,7 @@ One image, built here.
 
 Daemons: `qdrant`, `primary` (the gateway), and `webchat` while it is enabled.
 
-Five oneshots run before the gateway, and three after it:
+Six oneshots run before the gateway, and three after it:
 
 | Oneshot                 | When   | Purpose                                                                                            |
 | ----------------------- | ------ | -------------------------------------------------------------------------------------------------- |
@@ -79,6 +80,7 @@ Five oneshots run before the gateway, and three after it:
 | `network-setup`         | Before | Writes custom host mappings to `/etc/hosts` and installs a custom CA (Configure External Services) |
 | `state-migrate`         | Before | Once per OpenClaw version: `openclaw doctor --non-interactive` to migrate the agent databases      |
 | `setup-vault`           | Before | Logs `rbw` in to Vaultwarden and unlocks it, if enabled                                            |
+| `google-sign-in`        | Before | Google account kept in Vaultwarden: loads the OAuth client and sign-in token into gog              |
 | `check-login`           | After  | Raises a task if `start-cli` is not authenticated                                                  |
 | `check-simplex-plugin`  | After  | Brings the SimpleX plugin up to the pinned version                                                 |
 | `server-state-snapshot` | After  | Writes a server inventory (or, when not logged in, a health report) into `MEMORY.md`               |
@@ -218,10 +220,14 @@ Adds, changes or removes the helper agents the main agent can spawn: model (clou
 
 ### Configure External Services
 
-Connects the agent to self-hosted tools, each optional and independent: Vaultwarden (through the built-in `rbw` client; other services can then fetch their credentials from it), Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI and ntfy. Also: custom host mappings (StartOS never resolves `.local` names inside a service) and a custom CA certificate for internal HTTPS.
+Connects the agent to email and self-hosted tools, each optional and independent: Vaultwarden (through the built-in `rbw` client; other services can then fetch their credentials from it), Email (below), Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI and ntfy. Also: custom host mappings (StartOS never resolves `.local` names inside a service) and a custom CA certificate for internal HTTPS.
 
 - **What it changes:** `external-services.json`; each enabled service loads its skill and gets a health check.
 - **Cost:** the service restarts.
+- **Email** has one choice with three backends; only one email skill loads:
+  - *Gmail (app password)* and *Other IMAP/SMTP provider* use `himalaya` 2.x. The package writes `/data/.openclaw/himalaya/config.toml` at every start (`HIMALAYA_CONFIG`); the password is never in it: himalaya runs `getcred EMAIL_PASS` (manual value, or Vaultwarden item `email`, its login password). Skill: `email`.
+  - *Google account (Gmail, Calendar, Drive)* uses `gog`. The OAuth client and the sign-in token (made once with `gog auth add` on a computer with a browser, then `gog auth tokens export`) are either fetched from Vaultwarden item `google` (fields `client_json`, `token_json`) by the `google-sign-in` oneshot at every start, or pasted once. gog keeps them in an encrypted file keyring under `/data/.openclaw/gog`; the keyring password is generated once (`/data/.startos/gog-keyring-password`). The Vaultwarden pointers are not in the agent's environment. Skill: `google`.
+  - OpenClaw's own bundled `himalaya` and `gog` skills are kept disabled (`skills.entries`): the bundled himalaya one documents the 1.x CLI, and both tell the agent to set up credentials itself.
 
 ### Configure Webchat
 
@@ -299,8 +305,9 @@ Three, two of them blocking (a SimpleX plugin task may also appear when the bund
 | `webchat`       | "Webchat"                | Its `/healthz`, while enabled                                  |
 | `vault`         | "Vault (rbw)"            | A full unlock every 5 minutes, while Vaultwarden is enabled    |
 | `ext-<service>` | The service's name       | Reachability every minute, for each enabled external service   |
+| `ext-email`     | "Email (IMAP)" / "Google account" | IMAP server reachable; for Google, a stored sign-in for the address (local, no network) |
 
-The external checks test reachability only; the `health` skill (`/opt/skills/health/health.py`) also tests the n8n and Trilium API keys and memory search. **None of them says anything about the model**: a wrong API key, a rate limit, or a local backend that is running but not loaded all show green checks and an error in the chat.
+The external checks test reachability only; the `health` skill (`/opt/skills/health/health.py`) also tests the n8n and Trilium API keys, the IMAP and SMTP logins, the Google sign-in (Google refreshes the token) and memory search. **None of them says anything about the model**: a wrong API key, a rate limit, or a local backend that is running but not loaded all show green checks and an error in the chat.
 
 ## Backups and Restore
 
@@ -331,7 +338,7 @@ A restored instance comes back configured and remembers what it knew. The `start
 
 ```yaml
 package_id: openclaw-extrabutter # title: OpenClaw Extra Butter
-image: built from ./Dockerfile # also installs a pinned start-cli binary
+image: built from ./Dockerfile # also installs pinned start-cli, rbw, himalaya and gog binaries
 architectures:
   - x86_64
   - aarch64
@@ -349,6 +356,7 @@ file_models:
   - .startos/embeddings.json
   - .startos/config.yaml # start-cli host, rewritten each start
   - simplex.json # whether SimpleX file exchange is enabled
+  - .openclaw/himalaya/config.toml # email (IMAP choices), rewritten each start; no password in it
 helpers_in_container:
   - gateway-env CMD # run CMD with the running gateway's environment, as node
   - refresh-snapshot # rewrite MEMORY.md's server snapshot
@@ -361,6 +369,9 @@ startos_managed_env_vars:
   - OPENAI_API_KEY
   - GEMINI_API_KEY
   - XAI_API_KEY
+  - EMAIL_MODE / EMAIL_ADDRESS # while Email is enabled
+  - HIMALAYA_CONFIG, EMAIL_PASS or EMAIL_PASS_FROM_VAULT # IMAP choices
+  - GOG_HOME, GOG_KEYRING_BACKEND, GOG_KEYRING_PASSWORD, GOG_ACCOUNT # Google account
 dependencies:
   - ollama # optional, kind: running + primary health check, only while selected
   - vllm # same
@@ -392,4 +403,5 @@ health_checks:
   - webchat # while enabled
   - vault # while Vaultwarden is enabled
   - ext-* # one per enabled external service, reachability only
+  - ext-email # IMAP server reachable, or a stored Google sign-in for the address
 ```

@@ -1,6 +1,12 @@
 import { sdk } from '../sdk'
 import { externalServicesJson } from '../fileModels/externalServices.json'
 import { splitPemCerts, writeMasterPassword } from '../vault'
+import {
+  EmailConfig,
+  importGoogleSignIn,
+  parseClientJson,
+  parseTokenJson,
+} from '../email'
 
 const { InputSpec, Value, Variants } = sdk
 
@@ -36,7 +42,7 @@ const credentialUnion = (
 ) =>
   Value.union({
     name: label,
-    description: `${helpText}\n\nWhen "Fetch from Vaultwarden" is selected, OpenClaw looks up entry "${entryName}", field "${fieldName}". This only works if Vaultwarden is enabled above.`,
+    description: `${helpText}\n\nWhen "Fetch from Vaultwarden" is selected, OpenClaw reads Vaultwarden item "${entryName}", field "${fieldName}" (${fieldName === 'username' || fieldName === 'password' ? "the login's own username/password" : 'a hidden custom field'}; names are not case-sensitive). This only works if Vaultwarden is enabled above.`,
     default: 'from-vaultwarden',
     variants: credentialVariants(entryName, fieldName),
   })
@@ -65,7 +71,7 @@ const urlField = (label: string, description: string, placeholder: string) =>
 const vaultwardenService = Value.union({
   name: 'Vaultwarden (Password Manager)',
   description:
-    'Vaultwarden is a self-hosted password manager compatible with Bitwarden clients. When enabled, OpenClaw fetches credentials for other services from it at runtime, so you do not need to enter passwords here.\nGitHub: https://github.com/dani-garcia/vaultwarden',
+    'Vaultwarden is a self-hosted password manager compatible with Bitwarden clients. When enabled, OpenClaw fetches credentials for other services from it at runtime, so you do not need to enter passwords here.\n\nItems OpenClaw looks for (one item per service, named in lowercase; names are not case-sensitive):\n• email, nas: a Login item with its username and password\n• n8n, trilium, crawl4ai, ntfy: a hidden custom field api_key\n• google: hidden custom fields client_json and token_json\n\nGitHub: https://github.com/dani-garcia/vaultwarden',
   default: 'disabled',
   variants: Variants.of({
     disabled: { name: 'Disabled', spec: InputSpec.of({}) },
@@ -146,14 +152,14 @@ const nasService = Value.union({
         }),
         username: credentialUnion(
           'Username',
-          'NAS',
+          'nas',
           'username',
           'SMB username for the NAS share.',
         ),
         password: credentialUnion(
           'Password',
-          'NAS',
-          'Password',
+          'nas',
+          'password',
           'SMB password for the NAS share.',
         ),
       }),
@@ -179,7 +185,7 @@ const n8nService = Value.union({
         apiKey: credentialUnion(
           'API Key',
           'n8n',
-          'API_Key',
+          'api_key',
           'n8n API key. Found in n8n → Settings → API → Create API Key.',
         ),
       }),
@@ -204,8 +210,8 @@ const triliumService = Value.union({
         ),
         apiKey: credentialUnion(
           'ETAPI Token',
-          'Trilium',
-          'API_Key',
+          'trilium',
+          'api_key',
           'Trilium ETAPI token. Create it in Trilium → Menu → Options → ETAPI → Create new ETAPI token.',
         ),
       }),
@@ -250,8 +256,8 @@ const crawl4aiService = Value.union({
         ),
         apiKey: credentialUnion(
           'API Token',
-          'Crawl4AI',
-          'API_Key',
+          'crawl4ai',
+          'api_key',
           'The CRAWL4AI_API_TOKEN your Crawl4AI server was started with.',
         ),
       }),
@@ -293,9 +299,175 @@ const ntfyService = Value.union({
         apiKey: credentialUnion(
           'Access Token',
           'ntfy',
-          'API_Key',
+          'api_key',
           'An ntfy access token (starts with "tk_"). Create one in the ntfy web app → Account → Access tokens, or with `ntfy token add <user>` on the server.',
         ),
+      }),
+    },
+  }),
+})
+
+// ── Email ───────────────────────────────────────────────────────────────────
+// One choice, three backends. The two IMAP choices stay plain password forms;
+// Calendar/Drive live only under "Google account".
+
+const emailAddress = (description: string, placeholder: string) =>
+  Value.text({
+    name: 'Email Address',
+    description,
+    required: true,
+    default: null,
+    masked: false,
+    placeholder,
+    inputmode: 'email',
+    patterns: [
+      {
+        regex: '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$',
+        description: 'Must be an email address, e.g. you@example.com',
+      },
+    ],
+  })
+
+const displayName = Value.text({
+  name: 'Display Name (optional)',
+  description:
+    'The name shown with the address on sent mail, e.g. "Home Assistant Bot". Leave blank to send with the address only.',
+  required: false,
+  default: null,
+  masked: false,
+  placeholder: 'My Agent',
+})
+
+const emailPassword = (label: string, helpText: string) =>
+  credentialUnion(label, 'email', 'password', helpText)
+
+const securitySelect = (label: string, dflt: 'tls' | 'starttls') =>
+  Value.select({
+    name: label,
+    description:
+      'SSL/TLS encrypts from the first byte (usually port 993 for IMAP, 465 for SMTP). STARTTLS connects in plain text and switches to encryption before logging in (usually port 143 for IMAP, 587 for SMTP). Use what your provider documents.',
+    default: dflt,
+    values: { tls: 'SSL/TLS', starttls: 'STARTTLS' },
+  })
+
+const portField = (label: string, dflt: number) =>
+  Value.number({
+    name: label,
+    description: null,
+    required: true,
+    default: dflt,
+    min: 1,
+    max: 65535,
+    integer: true,
+    placeholder: String(dflt),
+  })
+
+const hostField = (label: string, placeholder: string) =>
+  Value.text({
+    name: label,
+    description: `Hostname or IP address, e.g. ${placeholder}. For a ".local" name, also add a Custom Host Mapping above.`,
+    required: true,
+    default: null,
+    masked: false,
+    placeholder,
+  })
+
+const emailService = Value.union({
+  name: 'Email',
+  description:
+    'Lets agents read, search and send email.\n\n• Gmail (app password): the simplest way to use a Gmail address. Mail only.\n• Other IMAP/SMTP provider: any mail service that offers IMAP and SMTP (Fastmail, iCloud, your own server…).\n• Google account: Gmail plus Google Calendar, Drive and other Google services, through a one-time sign-in you make on a computer with a browser.',
+  default: 'disabled',
+  variants: Variants.of({
+    disabled: { name: 'Disabled', spec: InputSpec.of({}) },
+    gmail: {
+      name: 'Gmail (app password)',
+      spec: InputSpec.of({
+        address: emailAddress(
+          'The Gmail address the agent uses, e.g. you@gmail.com.',
+          'you@gmail.com',
+        ),
+        displayName,
+        password: emailPassword(
+          'App Password',
+          'A Google app password: 16 letters, not your Google password. It requires 2-Step Verification on the account; create one at https://myaccount.google.com/apppasswords (name it "OpenClaw"). Gmail\'s IMAP and SMTP servers are filled in for you.',
+        ),
+      }),
+    },
+    imap: {
+      name: 'Other IMAP/SMTP provider',
+      spec: InputSpec.of({
+        address: emailAddress(
+          'The address the agent reads and sends as.',
+          'you@example.com',
+        ),
+        displayName,
+        imapHost: hostField('IMAP Server', 'imap.example.com'),
+        imapPort: portField('IMAP Port', 993),
+        imapSecurity: securitySelect('IMAP Encryption', 'tls'),
+        smtpHost: hostField('SMTP Server', 'smtp.example.com'),
+        smtpPort: portField('SMTP Port', 587),
+        smtpSecurity: securitySelect('SMTP Encryption', 'starttls'),
+        username: Value.text({
+          name: 'Login Name (optional)',
+          description:
+            'The login for both servers, if it differs from the email address. Leave blank to log in with the address.',
+          required: false,
+          default: null,
+          masked: false,
+          placeholder: 'Same as the email address',
+        }),
+        password: emailPassword(
+          'Password',
+          'The mailbox password, or an app-specific password if your provider requires one (iCloud, Fastmail, Yahoo, Outlook with 2FA…).',
+        ),
+      }),
+    },
+    google: {
+      name: 'Google account (Gmail, Calendar, Drive)',
+      spec: InputSpec.of({
+        address: emailAddress(
+          'The Google account the agent uses, e.g. you@gmail.com.',
+          'you@gmail.com',
+        ),
+        signIn: Value.union({
+          name: 'Google Sign-in',
+          description:
+            'The sign-in has two parts, both made once on a computer with a browser (Instructions → Email walks through it):\n\n1. OAuth client: the client_secret_….json of a "Desktop app" client in your own Google Cloud project.\n2. Sign-in token, made with gog on that computer:\n   gog auth credentials ~/Downloads/client_secret_*.json\n   gog auth add you@gmail.com --services gmail,calendar,drive\n   gog auth tokens export you@gmail.com --out token.json\n\nFetch from Vaultwarden: create an item named "google" with two hidden custom fields, client_json and token_json, holding the two files\' contents. They are fetched at every start (requires Vaultwarden above).\nPaste here: stored once, encrypted, on this server only.',
+          default: 'from-vaultwarden',
+          variants: Variants.of({
+            'from-vaultwarden': {
+              name: 'Fetch from Vaultwarden',
+              spec: InputSpec.of({}),
+            },
+            manual: {
+              name: 'Paste here',
+              spec: InputSpec.of({
+                clientJson: Value.textarea({
+                  name: 'OAuth Client (JSON)',
+                  description:
+                    'The whole client_secret_….json file. Leave blank to keep the client already saved.',
+                  required: false,
+                  default: null,
+                  minRows: 3,
+                  maxRows: 8,
+                  placeholder:
+                    'Leave blank to keep the saved client. {"installed":{"client_id":"…","client_secret":"…",…}}',
+                }),
+                tokenJson: Value.textarea({
+                  name: 'Sign-in Token (JSON)',
+                  description:
+                    'The whole token.json written by `gog auth tokens export`. Delete token.json afterwards. Leave blank to keep the sign-in already saved.',
+                  required: false,
+                  default: null,
+                  minRows: 3,
+                  maxRows: 8,
+                  placeholder:
+                    'Leave blank to keep the saved sign-in. {"email":"…","refresh_token":"…",…}',
+                }),
+              }),
+            },
+          }),
+        }),
       }),
     },
   }),
@@ -364,6 +536,7 @@ const inputSpec = InputSpec.of({
   hostMappings,
   caCert,
   vaultwarden: vaultwardenService,
+  email: emailService,
   ollama: ollamaService,
   nas: nasService,
   n8n: n8nService,
@@ -394,6 +567,124 @@ function credToPrefill(
   return { selection: 'manual' as const, value: { value: stored.value ?? '' } }
 }
 
+function emailPrefill(email: EmailConfig | undefined) {
+  const common = {
+    address: email?.address ?? '',
+    displayName: email?.displayName || null,
+  }
+  switch (email?.mode) {
+    case 'gmail':
+      return {
+        selection: 'gmail' as const,
+        value: { ...common, password: credToPrefill(email.password) },
+      }
+    case 'imap':
+      return {
+        selection: 'imap' as const,
+        value: {
+          ...common,
+          imapHost: email.imap?.host ?? '',
+          imapPort: email.imap?.port ?? 993,
+          imapSecurity: email.imap?.security ?? ('tls' as const),
+          smtpHost: email.smtp?.host ?? '',
+          smtpPort: email.smtp?.port ?? 587,
+          smtpSecurity: email.smtp?.security ?? ('starttls' as const),
+          username: email.username || null,
+          password: credToPrefill(email.password),
+        },
+      }
+    case 'google':
+      // The client and token are never echoed; blank keeps them.
+      return {
+        selection: 'google' as const,
+        value: {
+          address: email.address ?? '',
+          signIn:
+            email.signIn?.source === 'manual'
+              ? {
+                  selection: 'manual' as const,
+                  value: { clientJson: null, tokenJson: null },
+                }
+              : { selection: 'from-vaultwarden' as const, value: {} },
+        },
+      }
+    default:
+      return { selection: 'disabled' as const, value: {} }
+  }
+}
+
+/** Stored email settings from the form, plus a Google sign-in to import. */
+function emailFromInput(e: { selection: string; value: any }) {
+  const v = e.value ?? {}
+  const address = String(v.address ?? '').trim()
+  const displayName = String(v.displayName ?? '').trim() || undefined
+  if (e.selection === 'gmail') {
+    return {
+      stored: {
+        mode: 'gmail' as const,
+        address,
+        displayName,
+        password: credToStored(v.password),
+      },
+      google: null,
+    }
+  }
+  if (e.selection === 'imap') {
+    return {
+      stored: {
+        mode: 'imap' as const,
+        address,
+        displayName,
+        username: String(v.username ?? '').trim() || undefined,
+        imap: {
+          host: String(v.imapHost).trim(),
+          port: Number(v.imapPort),
+          security: v.imapSecurity,
+        },
+        smtp: {
+          host: String(v.smtpHost).trim(),
+          port: Number(v.smtpPort),
+          security: v.smtpSecurity,
+        },
+        password: credToStored(v.password),
+      },
+      google: null,
+    }
+  }
+  if (e.selection === 'google') {
+    if (v.signIn?.selection !== 'manual') {
+      // Fetched from Vaultwarden by the google-sign-in oneshot at start.
+      return {
+        stored: {
+          mode: 'google' as const,
+          address,
+          signIn: { source: 'from-vaultwarden' as const },
+        },
+        google: null,
+      }
+    }
+    const pasted = v.signIn.value ?? {}
+    const clientText = String(pasted.clientJson ?? '').trim()
+    const tokenText = String(pasted.tokenJson ?? '').trim()
+    const client = clientText ? parseClientJson(clientText) : null
+    const token = tokenText ? parseTokenJson(tokenText) : null
+    if (token && token.email.toLowerCase() !== address.toLowerCase()) {
+      throw new Error(
+        `Sign-in Token: it is for ${token.email}, but the Email Address is ${address}. Export the token for ${address}, or change the address.`,
+      )
+    }
+    return {
+      stored: {
+        mode: 'google' as const,
+        address,
+        signIn: { source: 'manual' as const },
+      },
+      google: { address, client, token: token?.json ?? null },
+    }
+  }
+  return { stored: { mode: 'disabled' as const }, google: null }
+}
+
 // ── Action ──────────────────────────────────────────────────────────────────
 
 export const configureExternalServices = sdk.Action.withInput(
@@ -402,7 +693,7 @@ export const configureExternalServices = sdk.Action.withInput(
   async ({ effects }) => ({
     name: 'Configure External Services',
     description:
-      'Connect OpenClaw to your self-hosted tools (Vaultwarden, Ollama, NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy), plus host mappings and a custom CA for internal HTTPS services. Enable only the services you use. If Vaultwarden is enabled, other services can fetch their credentials from it automatically. Saving restarts OpenClaw to apply changes.',
+      'Connect OpenClaw to your email and self-hosted tools (Vaultwarden, Ollama, NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy), plus host mappings and a custom CA for internal HTTPS services. Enable only the services you use. If Vaultwarden is enabled, other services can fetch their credentials from it automatically. Saving restarts OpenClaw to apply changes.',
     warning: null,
     allowedStatuses: 'any',
     group: null,
@@ -427,6 +718,7 @@ export const configureExternalServices = sdk.Action.withInput(
     const searxng = cfg?.searxng
     const crawl4ai = cfg?.crawl4ai
     const ntfy = cfg?.ntfy
+    const email = cfg?.email
 
     return {
       hostMappings: (cfg?.hostMappings ?? []).map((m) => ({
@@ -444,6 +736,7 @@ export const configureExternalServices = sdk.Action.withInput(
             },
           }
         : { selection: 'disabled' as const, value: {} },
+      email: emailPrefill(email),
       ollama: ollama?.enabled
         ? { selection: 'enabled' as const, value: { url: ollama.url ?? '' } }
         : { selection: 'disabled' as const, value: {} },
@@ -593,14 +886,27 @@ export const configureExternalServices = sdk.Action.withInput(
           }
         : { enabled: false }
 
+    // Validates the pasted Google client/token before anything is saved.
+    const email = emailFromInput(i.email)
+
     if (newMasterPassword) {
       await writeMasterPassword(newMasterPassword)
+    }
+
+    if (email.google && (email.google.client || email.google.token)) {
+      await importGoogleSignIn(
+        effects,
+        email.google.address,
+        email.google.client,
+        email.google.token,
+      )
     }
 
     await externalServicesJson.write(effects, {
       hostMappings,
       caCert,
       vaultwarden,
+      email: email.stored,
       ollama,
       nas,
       n8n,

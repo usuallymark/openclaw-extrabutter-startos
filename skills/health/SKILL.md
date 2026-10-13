@@ -23,6 +23,10 @@ same addresses, so its answer matches what the user sees there:
   n8n, Trilium, SearXNG, Crawl4AI, ntfy. For **n8n and Trilium** it also
   makes one authenticated read request, so it says whether the API key is
   accepted, rejected or not configured (Trilium also reports its version).
+- **Email (IMAP)**: the IMAP server answers, and the IMAP and SMTP logins
+  work (a wrong or missing password shows here). **Google account**: the
+  stored sign-in is valid (Google is asked to refresh it), and which
+  services it covers.
 - **PDF/OCR tools**: Tesseract with English, for the pdf skill
 - **Disk** (`/data`) and **memory**
 - **Memory search**: whether OpenClaw's memory search has working
