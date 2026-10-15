@@ -204,31 +204,24 @@ const n8nService = placedService({
   },
 })
 
-// Trilium has no StartOS package (yet): address only.
-const triliumService = Value.union({
+const triliumService = placedService({
   name: 'Trilium Notes',
+  title: 'Trilium Notes',
   description:
     'Trilium Notes is a hierarchical note-taking application. Used by agents to create and organize research notes.\nGitHub: https://github.com/TriliumNext/Trilium',
-  default: 'disabled',
-  variants: Variants.of({
-    disabled: { name: 'Disabled', spec: InputSpec.of({}) },
-    enabled: {
-      name: 'Enabled',
-      spec: InputSpec.of({
-        url: urlField(
-          'Trilium URL',
-          'The URL of your Trilium instance including the ETAPI path, e.g. https://trilium.yourdomain.local/etapi',
-          'https://trilium.yourdomain.local/etapi',
-        ),
-        apiKey: credentialUnion(
-          'ETAPI Token',
-          'trilium',
-          'api_key',
-          'Trilium ETAPI token. Create it in Trilium → Menu → Options → ETAPI → Create new ETAPI token.',
-        ),
-      }),
-    },
-  }),
+  url: urlField(
+    'Trilium URL',
+    'The URL of your Trilium instance including the ETAPI path, e.g. https://trilium.yourdomain.local/etapi',
+    'https://trilium.yourdomain.local/etapi',
+  ),
+  extra: {
+    apiKey: credentialUnion(
+      'ETAPI Token',
+      'trilium',
+      'api_key',
+      'Trilium ETAPI token. Create it in Trilium → Menu → Options → ETAPI → Create new ETAPI token.',
+    ),
+  },
 })
 
 const searxngService = placedService({
@@ -777,15 +770,9 @@ export const configureExternalServices = sdk.Action.withInput(
           }
         : { selection: 'disabled' as const, value: {} },
       n8n: placedPrefill(n8n, { apiKey: credToPrefill(n8n?.apiKey) }),
-      trilium: trilium?.enabled
-        ? {
-            selection: 'enabled' as const,
-            value: {
-              url: trilium.url ?? '',
-              apiKey: credToPrefill(trilium.apiKey),
-            },
-          }
-        : { selection: 'disabled' as const, value: {} },
+      trilium: placedPrefill(trilium, {
+        apiKey: credToPrefill(trilium?.apiKey),
+      }),
       searxng: placedPrefill(searxng, {}),
       crawl4ai: placedPrefill(crawl4ai, {
         apiKey: credToPrefill(crawl4ai?.apiKey),
@@ -851,14 +838,9 @@ export const configureExternalServices = sdk.Action.withInput(
       apiKey: credToStored(v.apiKey),
     }))
 
-    const trilium =
-      i.trilium.selection === 'enabled'
-        ? {
-            enabled: true,
-            url: i.trilium.value.url,
-            apiKey: credToStored(i.trilium.value.apiKey),
-          }
-        : { enabled: false }
+    const trilium = placedFromInput(i.trilium, prior?.trilium, (v) => ({
+      apiKey: credToStored(v.apiKey),
+    }))
 
     const searxng = placedFromInput(i.searxng, prior?.searxng, () => ({}))
 

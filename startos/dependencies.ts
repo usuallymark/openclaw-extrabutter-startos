@@ -130,6 +130,12 @@ export const dependencies = sdk.Dependencies.of()
   )
   .addDependency(
     localService(
+      'trilium',
+      'Optional: let agents create and search notes in Trilium Notes on this server. Choose "On this server" for Trilium in Configure External Services.',
+    ),
+  )
+  .addDependency(
+    localService(
       'ntfy',
       'Optional: push notifications through ntfy on this server. Choose "On this server" for ntfy in Configure External Services.',
     ),

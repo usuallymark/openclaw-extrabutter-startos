@@ -11,6 +11,7 @@ import { externalServicesJson } from './fileModels/externalServices.json'
 // interfaces.ts): the MultiHost id and the internal port of its HTTP
 // binding. versionRange starts at the package's first StartOS 0.4 release;
 // healthChecks names the daemon whose readiness means "serving".
+// urlSuffix is a path the service's URL carries (Trilium: /etapi).
 // To add a service: one row here (and its key in LocalKey's users).
 export const LOCAL_SERVICES = {
   vaultwarden: {
@@ -67,6 +68,17 @@ export const LOCAL_SERVICES = {
     healthChecks: ['primary'],
     icon: 'https://raw.githubusercontent.com/Start9Labs/ntfy-startos/master/icon.svg',
   },
+  trilium: {
+    packageId: 'trilium',
+    title: 'Trilium Notes',
+    hostId: 'main',
+    port: 8080,
+    versionRange: '>=0.106.0:0',
+    healthChecks: ['primary'],
+    // Trilium's address ends in its ETAPI path (as in "At an address").
+    urlSuffix: '/etapi',
+    icon: 'https://raw.githubusercontent.com/usuallymark/trilium-startos/master/icon.svg',
+  },
 } as const
 
 export type LocalKey = keyof typeof LOCAL_SERVICES
@@ -114,7 +126,8 @@ export async function resolveLocalServices<E extends Record<string, any>>(
       })
       .const()
     if (addr) {
-      out[key] = { ...svc, url: `http://${addr}` }
+      const suffix = 'urlSuffix' in s ? s.urlSuffix : ''
+      out[key] = { ...svc, url: `http://${addr}${suffix}` }
     } else {
       out[key] = { ...svc, url: undefined }
       missing[key] = s.title

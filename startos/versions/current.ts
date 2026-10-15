@@ -1,14 +1,12 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:3',
+  version: '2026.10.1:4',
   releaseNotes: {
-    en_US: `Services on this server.
+    en_US: `Trilium on this server.
 
-- **New choice in Configure External Services: "On this server".** Vaultwarden, Ollama, n8n, SearXNG, Crawl4AI and ntfy can now each be set to Disabled, On this server, or At an address. On this server means the service is installed on this StartOS server: OpenClaw finds it over the server's internal network, with no URL, host mapping or certificate, and asks only for the credentials. Moving a service onto your server becomes a change of choice instead of a new URL.
-- A service set to On this server is listed as a dependency, so StartOS shows when it is not installed or not running, and the health check says so plainly. If it is reinstalled and its internal address changes, OpenClaw restarts on its own to use the new one.
-- Existing settings are unchanged (At an address), and the URL you had stays saved when you switch, for switching back.
-- Trilium's link in the form now points to TriliumNext, where Trilium is developed.`,
+- **Trilium Notes can now be set to "On this server"** in Configure External Services, like Vaultwarden, n8n and the others. Install the Trilium package from the Marketplace, choose On this server, and enter only the ETAPI token (or fetch it from Vaultwarden); OpenClaw finds Trilium over the server's internal network, with no URL or certificate. It is listed as a dependency only while chosen, and the health check says so if it is not installed.
+- Existing settings are unchanged: a Trilium you reach at an address stays "At an address", and its URL stays saved when you switch.`,
   },
   migrations: {
     up: async () => {},

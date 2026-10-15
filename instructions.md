@@ -63,7 +63,7 @@ address*.
   NAS, the cloud); enter its URL as before.
 
 Moving a service onto this server is just a change of choice; the URL you
-had stays saved for switching back. Trilium, the NAS and email are always
+had stays saved for switching back. The NAS and email are always
 "at an address". If you use SearXNG on this server, leave its access
 password off (the search skill doesn't send one). Ollama on this server here
 covers vision and the Ollama skill; the embeddings address is set separately
