@@ -2,6 +2,7 @@ import type { SubContainer } from '@start9labs/start-sdk'
 import { sdk } from './sdk'
 import { RBW_ENV, VAULT_PROBE_SCRIPT } from './vault'
 import { EmailConfig, googleSignInStatus, mailServers } from './email'
+import { LocalKey, notInstalledMessage } from './localServices'
 
 // Health checks for the vault and external services.
 //
@@ -196,6 +197,7 @@ export type HealthTarget =
   | { key: string; label: string; kind: 'tcp'; host: string; port: number }
   | { key: string; label: string; kind: 'vault' }
   | { key: string; label: string; kind: 'google'; address: string }
+  | { key: string; label: string; kind: 'missing'; message: string }
 
 // Health path per HTTP service, appended to the configured URL.
 const HTTP_PATHS = {
@@ -214,13 +216,30 @@ const HTTP_PATHS = {
 
 type HttpKey = keyof typeof HTTP_PATHS
 
-/** Enabled external-service targets, in display order. */
-export function externalTargets(ext: ExtConfig): HealthTarget[] {
+/**
+ * Enabled external-service targets, in display order. `ext` has "On this
+ * server" URLs already resolved (localServices.ts); `missing` lists the
+ * services chosen as local whose package is not installed.
+ */
+export function externalTargets(
+  ext: ExtConfig,
+  missing: Partial<Record<LocalKey, string>> = {},
+): HealthTarget[] {
   const out: HealthTarget[] = []
   const push = (key: HttpKey) => {
     const svc = ext?.[key]
-    if (!svc?.enabled || !svc.url) return
     const [label, path] = HTTP_PATHS[key]
+    const absent = (missing as Record<string, string | undefined>)[key]
+    if (svc?.enabled && absent) {
+      out.push({
+        key,
+        label,
+        kind: 'missing',
+        message: notInstalledMessage(absent),
+      })
+      return
+    }
+    if (!svc?.enabled || !svc.url) return
     out.push({ key, label, kind: 'http', url: joinUrl(svc.url, path) })
   }
   push('vaultwarden')
@@ -279,6 +298,13 @@ function specFor(t: HealthTarget | undefined): CheckSpec {
   if (t.kind === 'google') {
     return { display: t.label, fn: (sub) => probeGoogle(sub, t.address) }
   }
+  if (t.kind === 'missing') {
+    const message = t.message
+    return {
+      display: t.label,
+      fn: async () => ({ result: 'failure' as const, message }),
+    }
+  }
   return { display: t.label, fn: probeVault }
 }
 
@@ -297,8 +323,11 @@ async function probeGoogle(sub: Sub, address: string): Promise<Result> {
   }
 }
 
-export function externalChecks(ext: ExtConfig) {
-  const byKey = new Map(externalTargets(ext).map((t) => [t.key, t]))
+export function externalChecks(
+  ext: ExtConfig,
+  missing: Partial<Record<LocalKey, string>> = {},
+) {
+  const byKey = new Map(externalTargets(ext, missing).map((t) => [t.key, t]))
   return {
     vaultwarden: specFor(byKey.get('vaultwarden')),
     ollama: specFor(byKey.get('ollama')),

@@ -140,7 +140,7 @@ The `start-cli` configuration is rewritten at every start with the server's curr
 
 ## Dependencies
 
-Four, all optional, and **each declared only while it is selected**. (Qdrant is bundled, not a dependency. The external services in Configure External Services are reached by URL and are not StartOS dependencies either.)
+All optional, and **each declared only while it is selected**. (Qdrant is bundled, not a dependency. External services set to *At an address* are reached by URL and are not dependencies; those set to *On this server* are.)
 
 | Dependency               | Required             | Kind      | Why                           |
 | ------------------------ | -------------------- | --------- | ----------------------------- |
@@ -148,6 +148,7 @@ Four, all optional, and **each declared only while it is selected**. (Qdrant is 
 | vLLM                     | No — only if chosen  | `running` | Local inference backend       |
 | llama.cpp                | No — only if chosen  | `running` | Local inference backend       |
 | SimpleX Websocket Bridge | No — only if enabled | `running` | Exchanging files over SimpleX |
+| Vaultwarden, n8n, SearXNG, Crawl4AI, ntfy | No — only while *On this server* | `running` | Configure External Services (Ollama too, besides the AI backend) |
 
 **The inference dependency follows the model you are actually using.** The declaration is derived from the primary model and its fallbacks, so selecting a local backend adds it and switching to a cloud provider drops it — including when the switch is made from inside the chat rather than through the action. Each is required to be running _and_ passing its own health check, since an unhealthy model server is the same as an absent one.
 
@@ -223,6 +224,7 @@ Adds, changes or removes the helper agents the main agent can spawn: model (clou
 Connects the agent to email and self-hosted tools, each optional and independent: Vaultwarden (through the built-in `rbw` client; other services can then fetch their credentials from it), Email (below), Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI and ntfy. Also: custom host mappings (StartOS never resolves `.local` names inside a service) and a custom CA certificate for internal HTTPS.
 
 - **What it changes:** `external-services.json`; each enabled service loads its skill and gets a health check.
+- **On this server / At an address** (Vaultwarden, Ollama, n8n, SearXNG, Crawl4AI, ntfy): *On this server* stores `location: "local"`; at every start `startos/localServices.ts` asks StartOS for the service's bridge address (`sdk.host.getBridgeAddress`, plain HTTP inside the server) from one table of package id, host id and port, and puts it in `url`, so the skill environment, rbw's `base_url` and the health checks need nothing else. The service becomes an optional dependency (`kind: running`) only while chosen. Not installed → the health check says so. Older settings have no `location` and stay *At an address*; the stored URL is kept while *On this server* is chosen. rbw keys its local vault copy by server URL, so a new address simply signs in again. Adding a service = one table row.
 - **Cost:** the service restarts.
 - **Email** has one choice with three backends; only one email skill loads:
   - *Gmail (app password)* and *Other IMAP/SMTP provider* use `himalaya` 2.x. The package writes `/data/.openclaw/himalaya/config.toml` at every start (`HIMALAYA_CONFIG`); the password is never in it: himalaya runs `getcred EMAIL_PASS` (manual value, or Vaultwarden item `email`, its login password). Skill: `email`.
@@ -377,6 +379,7 @@ dependencies:
   - vllm # same
   - llama-cpp # same
   - simplex-websocket-bridge # optional, only while file exchange is enabled
+  - vaultwarden, n8n, searxng, crawl4ai, ntfy # optional, only while "On this server" in Configure External Services
 interfaces:
   ui: { type: ui, port: 18789 } # gateway password + one-time browser approval (approve-devices)
   webchat: { type: ui, port: 18800 } # only while enabled; per-profile PIN

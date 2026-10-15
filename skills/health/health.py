@@ -312,8 +312,13 @@ def check_google(t):
                    'Renew it in Configure External Services → Email')
 
 
+def check_missing(t):
+    # "On this server" is chosen, but that service is not installed here.
+    return False, t.get('message') or 'chosen "On this server", but not installed on this server'
+
+
 CHECKS = {'http': check_http, 'tcp': check_tcp, 'vault': check_vault, 'memory': check_memory,
-          'google': check_google}
+          'google': check_google, 'missing': check_missing}
 
 
 def run_check(t):

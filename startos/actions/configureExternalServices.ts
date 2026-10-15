@@ -66,64 +66,81 @@ const urlField = (label: string, description: string, placeholder: string) =>
     placeholder,
   })
 
-// ── Service variants (Disabled / Enabled) ───────────────────────────────────
+// ── Service variants ────────────────────────────────────────────────────────
+// Services that exist as StartOS packages offer Disabled / On this server /
+// At an address (startos/localServices.ts). "On this server" asks only for
+// the credentials: the address comes from StartOS at every start. The
+// "At an address" variant keeps its old id `enabled`, so existing settings
+// prefill as before.
 
-const vaultwardenService = Value.union({
+const placeNote = (title: string) =>
+  `\n\nOn this server: ${title} is installed as a service on this StartOS server. OpenClaw finds it by itself over the server's internal network (no URL, host mapping or certificate needed) and lists ${title} as a dependency.\nAt an address: ${title} runs somewhere else; enter its URL.`
+
+function placedService<Extra extends Record<string, any>>(o: {
+  name: string
+  title: string
+  description: string
+  url: ReturnType<typeof urlField>
+  extra: Extra
+}) {
+  return Value.union({
+    name: o.name,
+    description: o.description + placeNote(o.title),
+    default: 'disabled',
+    variants: Variants.of({
+      disabled: { name: 'Disabled', spec: InputSpec.of({}) },
+      local: { name: 'On this server', spec: InputSpec.of(o.extra) },
+      enabled: {
+        name: 'At an address',
+        spec: InputSpec.of({ url: o.url, ...o.extra }),
+      },
+    }),
+  })
+}
+
+const vaultwardenService = placedService({
   name: 'Vaultwarden (Password Manager)',
+  title: 'Vaultwarden',
   description:
     'Vaultwarden is a self-hosted password manager compatible with Bitwarden clients. When enabled, OpenClaw fetches credentials for other services from it at runtime, so you do not need to enter passwords here.\n\nItems OpenClaw looks for (one item per service, named in lowercase; names are not case-sensitive):\n• email, nas: a Login item with its username and password\n• n8n, trilium, crawl4ai, ntfy: a hidden custom field api_key\n• google: hidden custom fields client_json and token_json\n\nGitHub: https://github.com/dani-garcia/vaultwarden',
-  default: 'disabled',
-  variants: Variants.of({
-    disabled: { name: 'Disabled', spec: InputSpec.of({}) },
-    enabled: {
-      name: 'Enabled',
-      spec: InputSpec.of({
-        url: urlField(
-          'Vaultwarden URL',
-          'The base URL of your Vaultwarden server, e.g. https://vaultwarden.yourdomain.local',
-          'https://vaultwarden.yourdomain.local',
-        ),
-        email: Value.text({
-          name: 'Account Email',
-          description: 'The email address of your Vaultwarden account.',
-          required: true,
-          default: null,
-          masked: false,
-          placeholder: 'you@example.com',
-          inputmode: 'email',
-        }),
-        masterPassword: Value.text({
-          name: 'Master Password',
-          description:
-            'Your Vaultwarden master password, used to log in and unlock the vault at every startup. Paste it exactly — it is stored byte-for-byte in a private file (not in the settings file) and read by rbw non-interactively.\n\nLeave blank to keep the password already saved.',
-          required: false,
-          default: null,
-          masked: true,
-          placeholder: 'Leave blank to keep the saved password',
-        }),
-      }),
-    },
-  }),
+  url: urlField(
+    'Vaultwarden URL',
+    'The base URL of your Vaultwarden server, e.g. https://vaultwarden.yourdomain.local',
+    'https://vaultwarden.yourdomain.local',
+  ),
+  extra: {
+    email: Value.text({
+      name: 'Account Email',
+      description: 'The email address of your Vaultwarden account.',
+      required: true,
+      default: null,
+      masked: false,
+      placeholder: 'you@example.com',
+      inputmode: 'email',
+    }),
+    masterPassword: Value.text({
+      name: 'Master Password',
+      description:
+        'Your Vaultwarden master password, used to log in and unlock the vault at every startup. Paste it exactly — it is stored byte-for-byte in a private file (not in the settings file) and read by rbw non-interactively.\n\nLeave blank to keep the password already saved.',
+      required: false,
+      default: null,
+      masked: true,
+      placeholder: 'Leave blank to keep the saved password',
+    }),
+  },
 })
 
-const ollamaService = Value.union({
+const ollamaService = placedService({
   name: 'Ollama (Local AI Models)',
+  title: 'Ollama',
   description:
     'Ollama runs large language models locally. Used by OpenClaw for embeddings (nomic-embed-text) and vision analysis (llama3.2-vision).\nGitHub: https://github.com/ollama/ollama',
-  default: 'disabled',
-  variants: Variants.of({
-    disabled: { name: 'Disabled', spec: InputSpec.of({}) },
-    enabled: {
-      name: 'Enabled',
-      spec: InputSpec.of({
-        url: urlField(
-          'Ollama URL',
-          'The HTTP URL of your Ollama server, e.g. http://192.168.1.50:11434. Must be reachable from this server on your local network.',
-          'http://192.168.1.x:11434',
-        ),
-      }),
-    },
-  }),
+  url: urlField(
+    'Ollama URL',
+    'The HTTP URL of your Ollama server, e.g. http://192.168.1.50:11434. Must be reachable from this server on your local network.',
+    'http://192.168.1.x:11434',
+  ),
+  extra: {},
 })
 
 const nasService = Value.union({
@@ -167,36 +184,31 @@ const nasService = Value.union({
   }),
 })
 
-const n8nService = Value.union({
+const n8nService = placedService({
   name: 'n8n (Workflow Automation)',
+  title: 'n8n',
   description:
     'n8n is an open-source workflow automation tool. Used by agents to trigger and monitor automated workflows.\nGitHub: https://github.com/n8n-io/n8n',
-  default: 'disabled',
-  variants: Variants.of({
-    disabled: { name: 'Disabled', spec: InputSpec.of({}) },
-    enabled: {
-      name: 'Enabled',
-      spec: InputSpec.of({
-        url: urlField(
-          'n8n URL',
-          'The URL of your n8n instance, e.g. https://n8n.yourdomain.local',
-          'https://n8n.yourdomain.local',
-        ),
-        apiKey: credentialUnion(
-          'API Key',
-          'n8n',
-          'api_key',
-          'n8n API key. Found in n8n → Settings → API → Create API Key.',
-        ),
-      }),
-    },
-  }),
+  url: urlField(
+    'n8n URL',
+    'The URL of your n8n instance, e.g. https://n8n.yourdomain.local',
+    'https://n8n.yourdomain.local',
+  ),
+  extra: {
+    apiKey: credentialUnion(
+      'API Key',
+      'n8n',
+      'api_key',
+      'n8n API key. Found in n8n → Settings → API → Create API Key.',
+    ),
+  },
 })
 
+// Trilium has no StartOS package (yet): address only.
 const triliumService = Value.union({
   name: 'Trilium Notes',
   description:
-    'Trilium Notes is a hierarchical note-taking application. Used by agents to create and organize research notes.\nGitHub: https://github.com/zadam/trilium',
+    'Trilium Notes is a hierarchical note-taking application. Used by agents to create and organize research notes.\nGitHub: https://github.com/TriliumNext/Trilium',
   default: 'disabled',
   variants: Variants.of({
     disabled: { name: 'Disabled', spec: InputSpec.of({}) },
@@ -219,92 +231,73 @@ const triliumService = Value.union({
   }),
 })
 
-const searxngService = Value.union({
+const searxngService = placedService({
   name: 'SearXNG (Web Search)',
+  title: 'SearXNG',
   description:
-    'SearXNG is a privacy-respecting metasearch engine. Used by agents for web search without tracking. No authentication required.\nGitHub: https://github.com/searxng/searxng',
-  default: 'disabled',
-  variants: Variants.of({
-    disabled: { name: 'Disabled', spec: InputSpec.of({}) },
-    enabled: {
-      name: 'Enabled',
-      spec: InputSpec.of({
-        url: urlField(
-          'SearXNG URL',
-          'The URL of your SearXNG instance, e.g. https://search.yourdomain.local',
-          'https://search.yourdomain.local',
-        ),
-      }),
-    },
-  }),
+    'SearXNG is a privacy-respecting metasearch engine. Used by agents for web search without tracking. No authentication required; its JSON output must be enabled (it is in the StartOS package), and on this server leave its access password off.\nGitHub: https://github.com/searxng/searxng',
+  url: urlField(
+    'SearXNG URL',
+    'The URL of your SearXNG instance, e.g. https://search.yourdomain.local',
+    'https://search.yourdomain.local',
+  ),
+  extra: {},
 })
 
-const crawl4aiService = Value.union({
+const crawl4aiService = placedService({
   name: 'Crawl4AI (Web Scraping)',
+  title: 'Crawl4AI',
   description:
     'Crawl4AI fetches web pages in a real browser (JavaScript included) and returns clean Markdown agents can read. Used when a plain fetch is not enough. Self-hosted; the API token is required since Crawl4AI 0.9.\nGitHub: https://github.com/unclecode/crawl4ai',
-  default: 'disabled',
-  variants: Variants.of({
-    disabled: { name: 'Disabled', spec: InputSpec.of({}) },
-    enabled: {
-      name: 'Enabled',
-      spec: InputSpec.of({
-        url: urlField(
-          'Crawl4AI URL',
-          'The URL of your Crawl4AI server, e.g. https://crawl.yourdomain.local',
-          'https://crawl.yourdomain.local',
-        ),
-        apiKey: credentialUnion(
-          'API Token',
-          'crawl4ai',
-          'api_key',
-          'The CRAWL4AI_API_TOKEN your Crawl4AI server was started with.',
-        ),
-      }),
-    },
-  }),
+  url: urlField(
+    'Crawl4AI URL',
+    'The URL of your Crawl4AI server, e.g. https://crawl.yourdomain.local',
+    'https://crawl.yourdomain.local',
+  ),
+  extra: {
+    apiKey: credentialUnion(
+      'API Token',
+      'crawl4ai',
+      'api_key',
+      'The CRAWL4AI_API_TOKEN your Crawl4AI server was started with.',
+    ),
+  },
 })
 
-const ntfyService = Value.union({
+const ntfyService = placedService({
   name: 'ntfy (Push Notifications)',
+  title: 'ntfy',
   description:
     'ntfy sends push notifications to your phone. Used by agents to report finished work, changes and problems. Self-hosted.\nGitHub: https://github.com/binwiederhier/ntfy',
-  default: 'disabled',
-  variants: Variants.of({
-    disabled: { name: 'Disabled', spec: InputSpec.of({}) },
-    enabled: {
-      name: 'Enabled',
-      spec: InputSpec.of({
-        url: urlField(
-          'ntfy URL',
-          'The URL of your ntfy server, e.g. https://ntfy.yourdomain.local',
-          'https://ntfy.yourdomain.local',
-        ),
-        topic: Value.text({
-          name: 'Default Topic',
+  url: urlField(
+    'ntfy URL',
+    'The URL of your ntfy server, e.g. https://ntfy.yourdomain.local',
+    'https://ntfy.yourdomain.local',
+  ),
+  extra: {
+    topic: Value.text({
+      name: 'Default Topic',
+      description:
+        'Topic notifications are sent to unless the agent names another one. Letters, digits, "-" and "_" only. Subscribe to it in the ntfy app on your phone.',
+      required: true,
+      default: null,
+      masked: false,
+      placeholder: 'openclaw',
+      patterns: [
+        {
+          regex: '^[-_A-Za-z0-9]{1,64}$',
           description:
-            'Topic notifications are sent to unless the agent names another one. Letters, digits, "-" and "_" only. Subscribe to it in the ntfy app on your phone.',
-          required: true,
-          default: null,
-          masked: false,
-          placeholder: 'openclaw',
-          patterns: [
-            {
-              regex: '^[-_A-Za-z0-9]{1,64}$',
-              description:
-                'Letters, digits, "-" and "_" only (at most 64 characters).',
-            },
-          ],
-        }),
-        apiKey: credentialUnion(
-          'Access Token',
-          'ntfy',
-          'api_key',
-          'An ntfy access token (starts with "tk_"). Create one in the ntfy web app → Account → Access tokens, or with `ntfy token add <user>` on the server.',
-        ),
-      }),
-    },
-  }),
+            'Letters, digits, "-" and "_" only (at most 64 characters).',
+        },
+      ],
+    }),
+    apiKey: credentialUnion(
+      'Access Token',
+      'ntfy',
+      'api_key',
+      'An ntfy access token (starts with "tk_"). Create one in the ntfy web app → Account → Access tokens, or with `ntfy token add <user>` on the server.',
+    ),
+  },
 })
 
 // ── Email ───────────────────────────────────────────────────────────────────
@@ -567,6 +560,46 @@ function credToPrefill(
   return { selection: 'manual' as const, value: { value: stored.value ?? '' } }
 }
 
+// "On this server" services: prefill and store. Switching to "On this
+// server" keeps the stored URL, so switching back needs no retyping.
+type Placed = { enabled?: boolean; location?: string; url?: string }
+
+function placedPrefill<V extends Record<string, unknown>>(
+  svc: Placed | undefined,
+  value: V,
+) {
+  if (!svc?.enabled) return { selection: 'disabled' as const, value: {} }
+  if (svc.location === 'local') return { selection: 'local' as const, value }
+  return {
+    selection: 'enabled' as const,
+    value: { url: svc.url ?? '', ...value },
+  }
+}
+
+function placedFromInput<X extends Record<string, unknown>>(
+  u: { selection: string; value: any },
+  prior: Placed | undefined,
+  extra: (v: any) => X,
+) {
+  if (u.selection === 'local') {
+    return {
+      enabled: true,
+      location: 'local' as const,
+      url: prior?.url,
+      ...extra(u.value ?? {}),
+    }
+  }
+  if (u.selection === 'enabled') {
+    return {
+      enabled: true,
+      location: 'address' as const,
+      url: String(u.value?.url ?? '').trim(),
+      ...extra(u.value ?? {}),
+    }
+  }
+  return { enabled: false }
+}
+
 function emailPrefill(email: EmailConfig | undefined) {
   const common = {
     address: email?.address ?? '',
@@ -693,7 +726,7 @@ export const configureExternalServices = sdk.Action.withInput(
   async ({ effects }) => ({
     name: 'Configure External Services',
     description:
-      'Connect OpenClaw to your email and self-hosted tools (Vaultwarden, Ollama, NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy), plus host mappings and a custom CA for internal HTTPS services. Enable only the services you use. If Vaultwarden is enabled, other services can fetch their credentials from it automatically. Saving restarts OpenClaw to apply changes.',
+      'Connect OpenClaw to your email and self-hosted tools (Vaultwarden, Ollama, NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy), plus host mappings and a custom CA for internal HTTPS services. Enable only the services you use; a service installed on this server can be chosen "On this server", with no URL. If Vaultwarden is enabled, other services can fetch their credentials from it automatically. Saving restarts OpenClaw to apply changes.',
     warning: null,
     allowedStatuses: 'any',
     group: null,
@@ -726,20 +759,12 @@ export const configureExternalServices = sdk.Action.withInput(
         ip: m.ip,
       })),
       caCert: cfg?.caCert ?? null,
-      vaultwarden: vw?.enabled
-        ? {
-            selection: 'enabled' as const,
-            value: {
-              url: vw.url ?? '',
-              email: vw.email ?? '',
-              masterPassword: null, // never echo secrets
-            },
-          }
-        : { selection: 'disabled' as const, value: {} },
+      vaultwarden: placedPrefill(vw, {
+        email: vw?.email ?? '',
+        masterPassword: null, // never echo secrets
+      }),
       email: emailPrefill(email),
-      ollama: ollama?.enabled
-        ? { selection: 'enabled' as const, value: { url: ollama.url ?? '' } }
-        : { selection: 'disabled' as const, value: {} },
+      ollama: placedPrefill(ollama, {}),
       nas: nas?.enabled
         ? {
             selection: 'enabled' as const,
@@ -751,15 +776,7 @@ export const configureExternalServices = sdk.Action.withInput(
             },
           }
         : { selection: 'disabled' as const, value: {} },
-      n8n: n8n?.enabled
-        ? {
-            selection: 'enabled' as const,
-            value: {
-              url: n8n.url ?? '',
-              apiKey: credToPrefill(n8n.apiKey),
-            },
-          }
-        : { selection: 'disabled' as const, value: {} },
+      n8n: placedPrefill(n8n, { apiKey: credToPrefill(n8n?.apiKey) }),
       trilium: trilium?.enabled
         ? {
             selection: 'enabled' as const,
@@ -769,28 +786,14 @@ export const configureExternalServices = sdk.Action.withInput(
             },
           }
         : { selection: 'disabled' as const, value: {} },
-      searxng: searxng?.enabled
-        ? { selection: 'enabled' as const, value: { url: searxng.url ?? '' } }
-        : { selection: 'disabled' as const, value: {} },
-      crawl4ai: crawl4ai?.enabled
-        ? {
-            selection: 'enabled' as const,
-            value: {
-              url: crawl4ai.url ?? '',
-              apiKey: credToPrefill(crawl4ai.apiKey),
-            },
-          }
-        : { selection: 'disabled' as const, value: {} },
-      ntfy: ntfy?.enabled
-        ? {
-            selection: 'enabled' as const,
-            value: {
-              url: ntfy.url ?? '',
-              topic: ntfy.topic ?? '',
-              apiKey: credToPrefill(ntfy.apiKey),
-            },
-          }
-        : { selection: 'disabled' as const, value: {} },
+      searxng: placedPrefill(searxng, {}),
+      crawl4ai: placedPrefill(crawl4ai, {
+        apiKey: credToPrefill(crawl4ai?.apiKey),
+      }),
+      ntfy: placedPrefill(ntfy, {
+        topic: ntfy?.topic ?? '',
+        apiKey: credToPrefill(ntfy?.apiKey),
+      }),
     }
   },
 
@@ -812,26 +815,26 @@ export const configureExternalServices = sdk.Action.withInput(
     }
     const caCert = caText ? splitPemCerts(caText).join('\n') + '\n' : undefined
 
+    // Prior settings: "On this server" keeps the stored URL for switching back.
+    const prior = await externalServicesJson
+      .read()
+      .once()
+      .catch(() => undefined)
+
     // The master password is never stored in the settings file. A non-empty
     // value is written byte-exact to rbw/.credentials; blank keeps the
     // existing file untouched.
-    const vaultwarden =
-      i.vaultwarden.selection === 'enabled'
-        ? {
-            enabled: true,
-            url: i.vaultwarden.value.url,
-            email: i.vaultwarden.value.email,
-          }
-        : { enabled: false }
+    const vaultwarden = placedFromInput(
+      i.vaultwarden,
+      prior?.vaultwarden,
+      (v) => ({ email: String(v.email ?? '').trim() }),
+    )
     const newMasterPassword: string =
-      i.vaultwarden.selection === 'enabled'
+      i.vaultwarden.selection !== 'disabled'
         ? (i.vaultwarden.value.masterPassword ?? '')
         : ''
 
-    const ollama =
-      i.ollama.selection === 'enabled'
-        ? { enabled: true, url: i.ollama.value.url }
-        : { enabled: false }
+    const ollama = placedFromInput(i.ollama, prior?.ollama, () => ({}))
 
     const nas =
       i.nas.selection === 'enabled'
@@ -844,14 +847,9 @@ export const configureExternalServices = sdk.Action.withInput(
           }
         : { enabled: false }
 
-    const n8n =
-      i.n8n.selection === 'enabled'
-        ? {
-            enabled: true,
-            url: i.n8n.value.url,
-            apiKey: credToStored(i.n8n.value.apiKey),
-          }
-        : { enabled: false }
+    const n8n = placedFromInput(i.n8n, prior?.n8n, (v) => ({
+      apiKey: credToStored(v.apiKey),
+    }))
 
     const trilium =
       i.trilium.selection === 'enabled'
@@ -862,29 +860,16 @@ export const configureExternalServices = sdk.Action.withInput(
           }
         : { enabled: false }
 
-    const searxng =
-      i.searxng.selection === 'enabled'
-        ? { enabled: true, url: i.searxng.value.url }
-        : { enabled: false }
+    const searxng = placedFromInput(i.searxng, prior?.searxng, () => ({}))
 
-    const crawl4ai =
-      i.crawl4ai.selection === 'enabled'
-        ? {
-            enabled: true,
-            url: i.crawl4ai.value.url,
-            apiKey: credToStored(i.crawl4ai.value.apiKey),
-          }
-        : { enabled: false }
+    const crawl4ai = placedFromInput(i.crawl4ai, prior?.crawl4ai, (v) => ({
+      apiKey: credToStored(v.apiKey),
+    }))
 
-    const ntfy =
-      i.ntfy.selection === 'enabled'
-        ? {
-            enabled: true,
-            url: i.ntfy.value.url,
-            topic: String(i.ntfy.value.topic ?? '').trim(),
-            apiKey: credToStored(i.ntfy.value.apiKey),
-          }
-        : { enabled: false }
+    const ntfy = placedFromInput(i.ntfy, prior?.ntfy, (v) => ({
+      topic: String(v.topic ?? '').trim(),
+      apiKey: credToStored(v.apiKey),
+    }))
 
     // Validates the pasted Google client/token before anything is saved.
     const email = emailFromInput(i.email)

@@ -13,6 +13,7 @@ import {
 } from './interfaces'
 import { sdk } from './sdk'
 import { setGatewayContainer } from './gatewayContainer'
+import { notInstalledMessage, resolveLocalServices } from './localServices'
 import {
   mainMounts,
   qdrantMounts,
@@ -141,7 +142,12 @@ export const main = sdk.setupMain(async ({ effects }) => {
   }
 
   // Read external services configuration (reactive — main re-runs on change).
-  const ext = await externalServicesJson.read((c) => c).const(effects)
+  // Services set to "On this server" get their bridge URL here, so everything
+  // below (skill env, rbw, health checks) just uses `url`.
+  const { ext, missing: missingLocal } = await resolveLocalServices(
+    effects,
+    await externalServicesJson.read((c) => c).const(effects),
+  )
 
   // Build env vars (non-secret config + vault-lookup markers) and the set of
   // skill dirs to load. Secrets are NOT resolved here — skills call rbw at
@@ -317,9 +323,18 @@ export const main = sdk.setupMain(async ({ effects }) => {
         ]
       : []),
     ...(vw?.enabled
-      ? [{ key: 'vault', label: 'Vault (rbw)', kind: 'vault' as const }]
+      ? [
+          missingLocal.vaultwarden
+            ? {
+                key: 'vault',
+                label: 'Vault (rbw)',
+                kind: 'missing' as const,
+                message: notInstalledMessage(missingLocal.vaultwarden),
+              }
+            : { key: 'vault', label: 'Vault (rbw)', kind: 'vault' as const },
+        ]
       : []),
-    ...externalTargets(ext),
+    ...externalTargets(ext, missingLocal),
   ]
 
   // Load only the skills for enabled services. OpenClaw's own bundled
@@ -381,9 +396,18 @@ export const main = sdk.setupMain(async ({ effects }) => {
     'qdrant-sub',
   )
 
-  const extChecks = externalChecks(ext)
+  const extChecks = externalChecks(ext, missingLocal)
+  const vaultMissing = missingLocal.vaultwarden
   const vaultCheck = vw?.enabled
-    ? { display: 'Vault (rbw)', fn: probeVault }
+    ? vaultMissing
+      ? {
+          display: 'Vault (rbw)',
+          fn: async () => ({
+            result: 'failure' as const,
+            message: notInstalledMessage(vaultMissing),
+          }),
+        }
+      : { display: 'Vault (rbw)', fn: probeVault }
     : {
         display: null,
         fn: async () => ({ result: 'disabled' as const, message: null }),
@@ -516,6 +540,12 @@ export const main = sdk.setupMain(async ({ effects }) => {
       subcontainer: openclawSub,
       exec: {
         fn: async (subcontainer) => {
+          if (vw?.enabled && missingLocal.vaultwarden) {
+            console.error(
+              `${notInstalledMessage(missingLocal.vaultwarden)} Skipping vault setup.`,
+            )
+            return null
+          }
           if (!vw?.enabled || !vw.url || !vw.email) {
             console.info(
               'Vaultwarden not enabled/configured — skipping vault setup',

@@ -58,6 +58,16 @@ Two static binaries for Configure External Services → Email, pinned in `Docker
 
 OpenClaw ships its own `himalaya` and `gog` skills; `main.ts` keeps them disabled (`skills.entries`). Keep it that way unless the bundled himalaya skill documents the himalaya major version the image has.
 
+## "On this server" services (`startos/localServices.ts`)
+
+Each row (package id, MultiHost id, internal port, health check id, first
+0.4 version) is copied from that service's own `-startos` repo
+(`startos/utils.ts`, `interfaces.ts`, `main.ts`, `versions/`). Re-check the
+rows when a service's package changes its host id or port: a wrong row shows
+as "not installed" while the service is running. To add a service: a row
+there, a `localService(...)` in `dependencies.ts`, and `placedService(...)`
+for its form section.
+
 ## File models and the SDK (start-sdk 3)
 
 Every file-model shape is built with `z.looseObject` at every level. Since start-sdk 3, a `z.object` shape deletes every key it does not declare on the next `merge()`/`write()`, and `openclaw.json` is co-owned with OpenClaw, which writes far more than the package models. Never add a `z.object` (or `z\n  .object`) to `startos/fileModels/`. `npm run check` runs the same gate as the build: TypeScript, the SDK's lint and the SDK's Prettier config (`npm run format` writes).

@@ -9,9 +9,17 @@ const credentialShape = z
   })
   .catch({ source: 'manual' as const, value: undefined })
 
+// Where a service runs (since 2026.10.1:3): "address" = at the URL below;
+// "local" = as a StartOS package on this server, reached over the internal
+// bridge (startos/localServices.ts). Older files have no `location` and stay
+// on "address". The URL is kept while "local" is chosen, for switching back.
+const locationShape = z.enum(['address', 'local']).catch('address')
+const OFF = { enabled: false, location: 'address' as const }
+
 const vaultwardenShape = z
   .looseObject({
     enabled: z.boolean().catch(false),
+    location: locationShape,
     url: z.string().optional().catch(undefined),
     email: z.string().optional().catch(undefined),
     // Legacy (<= 2026.9.4:1). No longer written: rbw cannot log in with an
@@ -20,7 +28,7 @@ const vaultwardenShape = z
     apiKey: z.string().optional().catch(undefined),
     masterPassword: z.string().optional().catch(undefined),
   })
-  .catch({ enabled: false })
+  .catch(OFF)
 
 const hostMappingShape = z.looseObject({
   hostname: z.string(),
@@ -30,26 +38,29 @@ const hostMappingShape = z.looseObject({
 const urlOnlyShape = z
   .looseObject({
     enabled: z.boolean().catch(false),
+    location: locationShape,
     url: z.string().optional().catch(undefined),
   })
-  .catch({ enabled: false })
+  .catch(OFF)
 
 const urlWithKeyShape = z
   .looseObject({
     enabled: z.boolean().catch(false),
+    location: locationShape,
     url: z.string().optional().catch(undefined),
     apiKey: credentialShape.optional().catch(undefined),
   })
-  .catch({ enabled: false })
+  .catch(OFF)
 
 const ntfyShape = z
   .looseObject({
     enabled: z.boolean().catch(false),
+    location: locationShape,
     url: z.string().optional().catch(undefined),
     topic: z.string().optional().catch(undefined),
     apiKey: credentialShape.optional().catch(undefined),
   })
-  .catch({ enabled: false })
+  .catch(OFF)
 
 const nasShape = z
   .looseObject({
@@ -97,17 +108,17 @@ const emailShape = z
 const shape = z.looseObject({
   hostMappings: z.array(hostMappingShape).catch([]),
   caCert: z.string().optional().catch(undefined),
-  vaultwarden: vaultwardenShape.catch({ enabled: false }),
-  ollama: urlOnlyShape.catch({ enabled: false }),
+  vaultwarden: vaultwardenShape.catch(OFF),
+  ollama: urlOnlyShape.catch(OFF),
   nas: nasShape.catch({ enabled: false }),
-  n8n: urlWithKeyShape.catch({ enabled: false }),
-  trilium: urlWithKeyShape.catch({ enabled: false }),
-  searxng: urlOnlyShape.catch({ enabled: false }),
+  n8n: urlWithKeyShape.catch(OFF),
+  trilium: urlWithKeyShape.catch(OFF),
+  searxng: urlOnlyShape.catch(OFF),
   // Firecrawl (<= 2026.9.4:9) was replaced by Crawl4AI and Stirling PDF
   // (<= 2026.9.4:19) by the built-in pdf skill; an old `firecrawl` or
   // `stirling` key in the file is ignored and dropped on the next save.
-  crawl4ai: urlWithKeyShape.catch({ enabled: false }),
-  ntfy: ntfyShape.catch({ enabled: false }),
+  crawl4ai: urlWithKeyShape.catch(OFF),
+  ntfy: ntfyShape.catch(OFF),
   email: emailShape.catch({ mode: 'disabled' as const }),
 })
 

@@ -1,16 +1,14 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:2',
+  version: '2026.10.1:3',
   releaseNotes: {
-    en_US: `Vault sync fix, and two email details.
+    en_US: `Services on this server.
 
-- **Vault sync is checked and repaired.** rbw kept answering from its local copy of the vault when Vaultwarden stopped accepting its stored sign-in, so the vault looked healthy while items added or renamed in Vaultwarden never reached OpenClaw. Now:
-  - At every start, a failed sync is logged, and if Vaultwarden itself is up, the package signs in to Vaultwarden again with the saved master password. If that does not help either, the previous local copy is kept, so lookups work as before.
-  - The dashboard's "Vault (rbw)" check also syncs, and turns red when the sync fails. The agent's health skill reports the same.
-  - A failed credential lookup now says why (for example "no entry found"), and whether the sync failed too.
-- **Gmail app passwords work with or without their spaces.** Google shows them as four groups of four letters; the spaces are dropped when signing in.
-- The instructions give the attach command with \`--name openclaw-sub\`, which skips the container question.`,
+- **New choice in Configure External Services: "On this server".** Vaultwarden, Ollama, n8n, SearXNG, Crawl4AI and ntfy can now each be set to Disabled, On this server, or At an address. On this server means the service is installed on this StartOS server: OpenClaw finds it over the server's internal network, with no URL, host mapping or certificate, and asks only for the credentials. Moving a service onto your server becomes a change of choice instead of a new URL.
+- A service set to On this server is listed as a dependency, so StartOS shows when it is not installed or not running, and the health check says so plainly. If it is reinstalled and its internal address changes, OpenClaw restarts on its own to use the new one.
+- Existing settings are unchanged (At an address), and the URL you had stays saved when you switch, for switching back.
+- Trilium's link in the form now points to TriliumNext, where Trilium is developed.`,
   },
   migrations: {
     up: async () => {},

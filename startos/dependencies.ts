@@ -2,6 +2,7 @@ import { T } from '@start9labs/start-sdk'
 import { sdk } from './sdk'
 import { openclawJson } from './fileModels/openclaw.json'
 import { SIMPLEX_BRIDGE_ID, simplexEnabled } from './simplex'
+import { LOCAL_SERVICES, LocalKey, localChosen } from './localServices'
 
 // Every dependency is optional and enabled only while it is in use. Each
 // `enabled` reads reactively, so a dependency follows the model selection even
@@ -35,8 +36,29 @@ const localBackend = <const Id extends string>(
     versionRange,
     kind: 'running',
     healthChecks: ['primary'],
-    enabled: async ({ effects }) => (await providersInUse(effects)).has(id),
+    enabled: async ({ effects }) =>
+      (await providersInUse(effects)).has(id) ||
+      // Ollama also serves embeddings/vision when Configure External Services
+      // has it "On this server".
+      (id === 'ollama' && (await localChosen(effects, 'ollama'))),
   })
+
+// A service from Configure External Services set to "On this server":
+// required (running and healthy) only while that choice is made.
+const localService = (
+  key: Exclude<LocalKey, 'ollama'>,
+  description: string,
+) => {
+  const s = LOCAL_SERVICES[key]
+  return sdk.Dependency.optional(s.packageId, {
+    description: { en_US: description },
+    metadata: { title: { en_US: s.title }, icon: s.icon },
+    versionRange: s.versionRange,
+    kind: 'running',
+    healthChecks: [...s.healthChecks],
+    enabled: ({ effects }) => localChosen(effects, key),
+  })
+}
 
 export const dependencies = sdk.Dependencies.of()
   .addDependency(
@@ -44,7 +66,7 @@ export const dependencies = sdk.Dependencies.of()
       'ollama',
       'Ollama',
       'https://raw.githubusercontent.com/Start9Labs/ollama-startos/master/icon.svg',
-      'Optional: run local LLMs with Ollama. Select it as your backend in the Configure AI Provider action.',
+      'Optional: run local LLMs with Ollama. Select it as your backend in the Configure AI Provider action, or choose "On this server" for Ollama in Configure External Services (embeddings and vision).',
       '>=0.31.2:2',
     ),
   )
@@ -81,4 +103,34 @@ export const dependencies = sdk.Dependencies.of()
       healthChecks: ['websocket'],
       enabled: ({ effects }) => simplexEnabled(effects),
     }),
+  )
+  .addDependency(
+    localService(
+      'vaultwarden',
+      'Optional: keep the credentials OpenClaw uses in Vaultwarden on this server. Choose "On this server" for Vaultwarden in Configure External Services.',
+    ),
+  )
+  .addDependency(
+    localService(
+      'n8n',
+      'Optional: let agents trigger n8n workflows on this server. Choose "On this server" for n8n in Configure External Services.',
+    ),
+  )
+  .addDependency(
+    localService(
+      'searxng',
+      'Optional: private web search through SearXNG on this server. Choose "On this server" for SearXNG in Configure External Services.',
+    ),
+  )
+  .addDependency(
+    localService(
+      'crawl4ai',
+      'Optional: fetch web pages in a real browser with Crawl4AI on this server. Choose "On this server" for Crawl4AI in Configure External Services.',
+    ),
+  )
+  .addDependency(
+    localService(
+      'ntfy',
+      'Optional: push notifications through ntfy on this server. Choose "On this server" for ntfy in Configure External Services.',
+    ),
   )

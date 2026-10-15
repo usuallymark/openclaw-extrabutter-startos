@@ -48,6 +48,27 @@ Vaultwarden option uses.
 fields for other services will automatically offer to fetch from Vaultwarden
 instead of requiring manual entry.
 
+**Services on this server.** Vaultwarden, Ollama, n8n, SearXNG, Crawl4AI and
+ntfy each offer three choices: *Disabled*, *On this server* and *At an
+address*.
+
+- **On this server**: the service is installed on this StartOS server from
+  the Marketplace. OpenClaw finds it by itself over the server's internal
+  network: no URL, host mapping or certificate. Only the credentials are
+  asked for. The service shows up as a dependency on OpenClaw's page, and
+  StartOS tells you if it isn't installed or isn't running. If it is
+  reinstalled and its internal address changes, OpenClaw restarts on its own
+  to pick up the new one.
+- **At an address**: the service runs somewhere else (another computer, a
+  NAS, the cloud); enter its URL as before.
+
+Moving a service onto this server is just a change of choice; the URL you
+had stays saved for switching back. Trilium, the NAS and email are always
+"at an address". If you use SearXNG on this server, leave its access
+password off (the search skill doesn't send one). Ollama on this server here
+covers vision and the Ollama skill; the embeddings address is set separately
+in **Configure AI Provider → Memory Embeddings**.
+
 ### 4. Open the Web Interface
 
 Find the OpenClaw interface address under **Interfaces** in the StartOS UI.
