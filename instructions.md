@@ -252,10 +252,17 @@ What the package sets up, at every start:
   fetched at that moment. Nothing is written into repositories, remote URLs
   or `~/.git-credentials`.
 - **Remotes keep working when addresses change.** With Gitea on this
-  server, a remote written with any address Gitea shows (its clone URL, a
-  LAN address and port, a private domain) is reached over the server's
+  server, a remote written with any address Gitea publishes (its LAN
+  address and port, its `.local` name, a private domain) is reached over the server's
   internal network instead. It no longer depends on that address, DNS or
   the certificate, and the same URL keeps working on your other computers.
+- **New remotes use a placeholder.** The agent writes them as
+  `gitea:OWNER/REPO.git`; at every start the package maps `gitea:` to
+  Gitea's current address, like the address variables of the other
+  services. Those remotes never go stale: not after a reinstall, a new LAN
+  address or domain, or Gitea moving elsewhere. Links the agent gives you
+  use an address you can open (a domain if Gitea has one, else its LAN
+  address).
 - **Commit name and email** are left as they are. If none is set, the
   agent uses the Gitea account's (`gitea.py identity`).
 
@@ -270,7 +277,9 @@ python3 /opt/skills/gitea/gitea.py check
 exit
 ```
 
-`check --fix` removes tokens from Gitea remote URLs. A credential helper
+`check --fix` removes tokens from Gitea remote URLs and changes a remote
+written with the internal `10.0.3.1` address (it changes when Gitea is
+reinstalled) to `gitea:`. A credential helper
 of your own for a Gitea address is no longer used for those remotes; the
 check says how to remove it.
 

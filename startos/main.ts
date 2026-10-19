@@ -18,7 +18,7 @@ import {
   notInstalledMessage,
   resolveLocalServices,
 } from './localServices'
-import { GIT_SYSTEM_CONFIG, giteaGitConfig, giteaPublishedUrls } from './gitea'
+import { GIT_SYSTEM_CONFIG, giteaAddresses, giteaGitConfig } from './gitea'
 import {
   mainMounts,
   qdrantMounts,
@@ -266,10 +266,12 @@ export const main = sdk.setupMain(async ({ effects }) => {
       externalEnv['GITEA_KEY_FROM_VAULT'] = 'gitea:api_key'
     }
     enabledSkills.push('/opt/skills/gitea')
-    giteaGit = {
-      url: ext.gitea.url,
-      aliases: isLocal(ext.gitea) ? await giteaPublishedUrls(effects) : [],
-    }
+    const addrs = isLocal(ext.gitea)
+      ? await giteaAddresses(effects)
+      : { aliases: [], web: null }
+    // The address for links shown to people (never the bridge).
+    if (addrs.web) externalEnv['GITEA_WEB_URL'] = addrs.web
+    giteaGit = { url: ext.gitea.url, aliases: addrs.aliases }
   }
 
   // Email (Configure External Services → Email): himalaya for the IMAP

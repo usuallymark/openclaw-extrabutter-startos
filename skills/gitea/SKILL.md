@@ -17,9 +17,13 @@ The package sets git up (in `/etc/gitconfig`, rewritten at every start):
   External Services, fetched at that moment. **Never put a token or password
   in a remote URL, `~/.git-credentials`, a script or a file**, and don't
   write your own credential helper: it is all handled.
-- A remote can use any address Gitea shows (its clone URL, a LAN address, a
-  private domain): when Gitea runs on this server, git reaches it over the
-  server's internal network whatever the address.
+- **Gitea remotes are written `gitea:OWNER/REPO.git`** (what `gitea.py`
+  prints). `gitea:` is a placeholder git maps to Gitea's current address at
+  every start, so these remotes never go stale. Clone the same way:
+  `git clone gitea:OWNER/REPO.git`. Never write a remote with the internal
+  `10.0.3.1:…` address, even where Gitea's API shows it: it changes when
+  Gitea is reinstalled. Links for the user (`web:`) use a published
+  address they can open.
 - If `GITEA_URL` is unset, Gitea is not configured: tell the user to enable
   it in Configure External Services.
 
@@ -79,6 +83,10 @@ git push -u origin main
 - `unreachable`: run `python3 /opt/skills/health/health.py`; the Gitea line
   shows whether the server answers and whether the token works.
 - `$G check` reports a token stored in a remote URL or
-  `~/.git-credentials`: tell the user. `$G check --fix` removes tokens from
-  Gitea remote URLs (git signs in without them); run it only with the
-  user's OK.
+  `~/.git-credentials`, or a remote written with the internal address: tell
+  the user. `$G check --fix` removes tokens from Gitea remote URLs (git
+  signs in without them) and changes internal-address remotes to `gitea:`;
+  run it only with the user's OK.
+- `ssh: Could not resolve hostname gitea`: a `gitea:` remote while Gitea is
+  not enabled in Configure External Services (the placeholder is only
+  mapped while it is).

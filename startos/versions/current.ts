@@ -1,14 +1,13 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:5',
+  version: '2026.10.1:6',
   releaseNotes: {
-    en_US: `Gitea.
+    en_US: `Gitea remotes that never go stale.
 
-- **Gitea joins Configure External Services**, with Disabled, On this server and At an address like the others. The agent can then keep its workspace, scripts and projects in your own git repositories: create a repository, commit and push, with nothing going to a public site. Enter an access token of the Gitea account the agent uses (permissions: repository and user, Read and Write), or fetch it from Vaultwarden (item gitea, field api_key).
-- **git signs in to Gitea by itself.** Every push and pull uses the token, fetched at that moment; nothing is written into repositories, remote URLs or credential files.
-- **Existing remotes keep working.** With Gitea on this server, remotes written with any address Gitea shows (its clone URL, a LAN address, a private domain) go over the server's internal network, so they no longer depend on that address, DNS or the certificate.
-- **A new gitea skill** gives the agent one documented way to create repositories, add remotes and push, and \`gitea.py check\` reports the set-up, including tokens stored in plain text. The health checks show whether Gitea answers and which account the token belongs to.`,
+- **New Gitea remotes use a placeholder: gitea:OWNER/REPO.git.** At every start the package maps gitea: to Gitea's current address, the way the other services get their address from a setting. Remotes made by the agent keep working after Gitea is reinstalled, gets a new LAN address or domain, or moves to another address. (In 2026.10.1:5, new repositories got the internal address Gitea reports to OpenClaw, which changes when Gitea is reinstalled.)
+- **Links the agent gives you** use an address you can open: a domain if Gitea has one, otherwise its LAN address.
+- **\`gitea.py check\` finds remotes made with the internal address**, and \`check --fix\` changes them to gitea:. Remotes written with Gitea's own addresses keep working as before.`,
   },
   migrations: {
     up: async () => {},

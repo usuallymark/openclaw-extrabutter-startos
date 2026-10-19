@@ -109,16 +109,32 @@ def rewrites():
     return out
 
 
-def remote_for(repo):
-    """The remote URL to use for a repository (JSON from the API).
+REMOTE_PREFIX = 'gitea:'
 
-    Gitea's own clone URL when git reaches it (same URL as on any other
-    computer), else the URL OpenClaw is configured with."""
-    clone = repo.get('clone_url') or ''
+
+def web_url(url):
+    """A link for people: the internal (bridge) address swapped for
+    GITEA_WEB_URL, a published address of Gitea on this server."""
     base = base_url()
-    if clone.startswith(base + '/') or any(clone.startswith(p) for p in rewrites()):
-        return clone
-    return f'{base}/{repo["full_name"]}.git'
+    web = os.environ.get('GITEA_WEB_URL', '').strip().rstrip('/')
+    if url and web and url.startswith(base + '/'):
+        return web + url[len(base):]
+    return url
+
+
+def placeholder_mapped():
+    return any(v.rstrip('/') == base_url() for k, v in rewrites().items() if k == REMOTE_PREFIX)
+
+
+def remote_for(repo):
+    """The remote URL to use for a repository (JSON from the API):
+    gitea:OWNER/REPO.git. The package maps gitea: to Gitea's current address
+    at every start, so the remote never goes stale. (Gitea's own clone URL is
+    built from the address the request arrived at: for OpenClaw on this
+    server the internal one, which changes when Gitea is reinstalled.)"""
+    if placeholder_mapped():
+        return f'{REMOTE_PREFIX}{repo["full_name"]}.git'
+    return f'{base_url()}/{repo["full_name"]}.git'  # no mapping: restart OpenClaw
 
 
 def cmd_whoami(_a):
@@ -141,7 +157,7 @@ def cmd_repos(a):
     if a.json:
         print(json.dumps([{'full_name': r['full_name'], 'private': r.get('private'),
                            'description': r.get('description'), 'remote': remote_for(r),
-                           'web': r.get('html_url'), 'updated': r.get('updated_at')} for r in repos], indent=2))
+                           'web': web_url(r.get('html_url') or ''), 'updated': r.get('updated_at')} for r in repos], indent=2))
         return
     if not repos:
         print('No repositories yet.')
@@ -157,7 +173,7 @@ def cmd_create(a):
     r = api('POST', path, body)
     print(f'Created {r["full_name"]} ({"public" if not r.get("private") else "private"}).')
     print(f'remote: {remote_for(r)}')
-    print(f'web: {r.get("html_url")}')
+    print(f'web: {web_url(r.get("html_url") or "")}')
 
 
 def cmd_remote(a):
@@ -228,8 +244,14 @@ def cmd_check(a):
         print(f'  [BAD] git has no OpenClaw sign-in for {base} (restart OpenClaw to rewrite /etc/gitconfig)')
         problems += 1
     mapped = {k: v for k, v in rewrites().items() if v.rstrip('/') == base}
-    if mapped:
-        print(f'  [OK ] remotes using {", ".join(sorted(k.rstrip("/") for k in mapped))} go to Gitea over the internal network')
+    if REMOTE_PREFIX in mapped:
+        print(f'  [OK ] remotes written as {REMOTE_PREFIX}OWNER/REPO.git go to Gitea at its current address')
+    else:
+        print(f'  [BAD] {REMOTE_PREFIX} remotes are not mapped to Gitea (restart OpenClaw to rewrite /etc/gitconfig)')
+        problems += 1
+    others = sorted(k.rstrip('/') for k in mapped if k != REMOTE_PREFIX)
+    if others:
+        print(f'  [OK ] remotes using {", ".join(others)} go to Gitea over the internal network')
 
     name = git('config', '--global', 'user.name').stdout.strip()
     email = git('config', '--global', 'user.email').stdout.strip()
@@ -272,15 +294,30 @@ def cmd_check(a):
             shown = clean + ' (with credentials in the URL)' if clean else url
             where = 'Gitea' if to_gitea else 'another server'
             print(f'  {path}: {rn} {shown} → {where}')
-            if clean and to_gitea:
+            if not to_gitea:
+                continue
+            # Without credentials; a remote written with the internal (bridge)
+            # address, which changes when Gitea is reinstalled, becomes gitea:.
+            target = clean or url
+            if target.startswith(base + '/') and REMOTE_PREFIX in mapped:
+                target = REMOTE_PREFIX + target[len(base) + 1:]
+            if clean:
                 if a.fix and token_ok:
-                    git('remote', 'set-url', rn, clean, cwd=path, check=True)
-                    print('      fixed: credentials removed from the URL; git signs in by itself')
+                    git('remote', 'set-url', rn, target, cwd=path, check=True)
+                    print(f'      fixed: credentials removed from the URL (now {target}); git signs in by itself')
                 elif a.fix:
                     print('      not fixed: the token above does not work yet, so git could not sign in without them')
                     problems += 1
                 else:
                     print('      a token or password is stored in this URL: run `gitea.py check --fix` to remove it')
+                    problems += 1
+            elif target != url:
+                if a.fix:
+                    git('remote', 'set-url', rn, target, cwd=path, check=True)
+                    print(f'      fixed: now {target}')
+                else:
+                    print('      uses the internal address, which changes when Gitea is reinstalled: '
+                          f'`gitea.py check --fix` changes it to {target}')
                     problems += 1
     return 1 if problems else 0
 
