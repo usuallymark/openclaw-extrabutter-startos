@@ -4,7 +4,7 @@
 Runs the same checks as the StartOS health list: gateway, Qdrant, webchat,
 vault and every enabled external service, with the same URLs (the package
 passes them in OPENCLAW_HEALTH_TARGETS). Adds disk and memory. Read-only and
-prints no secrets. For services with an API key (n8n, Trilium) it also makes
+prints no secrets. For services with an API key (n8n, Trilium, Gitea) it also makes
 one authenticated read request to that service, so a wrong or missing key
 shows up here; the key is sent only to that service. Email logs in to the
 IMAP and SMTP servers (himalaya account check); a Google account asks
@@ -89,12 +89,13 @@ def check_http(t):
 AUTH_CHECKS = {
     'n8n': ('N8N_KEY', 'X-N8N-API-KEY', '', '/api/v1/workflows?limit=1'),
     'trilium': ('TRILIUM_KEY', 'Authorization', '', '/app-info'),
+    'gitea': ('GITEA_KEY', 'Authorization', 'token ', '/api/v1/user'),
 }
 
 
 def _base_url(t):
     # Targets carry the full probe URL; strip the probe path back off.
-    probe = {'n8n': '/healthz', 'trilium': '/app-info'}.get(t['key'], '')
+    probe = {'n8n': '/healthz', 'trilium': '/app-info', 'gitea': '/api/healthz'}.get(t['key'], '')
     url = t['url']
     return url[: -len(probe)] if probe and url.endswith(probe) else url.rstrip('/')
 
@@ -129,6 +130,11 @@ def check_auth(t, msg):
         if t['key'] == 'trilium':
             try:
                 extra = f", Trilium {json.loads(body).get('appVersion')}"
+            except ValueError:
+                pass
+        if t['key'] == 'gitea':
+            try:
+                extra = f", Gitea account {json.loads(body).get('login')}"
             except ValueError:
                 pass
         return True, f'reachable, API key accepted (HTTP {code}{extra})'

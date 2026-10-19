@@ -102,7 +102,7 @@ const vaultwardenService = placedService({
   name: 'Vaultwarden (Password Manager)',
   title: 'Vaultwarden',
   description:
-    'Vaultwarden is a self-hosted password manager compatible with Bitwarden clients. When enabled, OpenClaw fetches credentials for other services from it at runtime, so you do not need to enter passwords here.\n\nItems OpenClaw looks for (one item per service, named in lowercase; names are not case-sensitive):\n• email, nas: a Login item with its username and password\n• n8n, trilium, crawl4ai, ntfy: a hidden custom field api_key\n• google: hidden custom fields client_json and token_json\n\nGitHub: https://github.com/dani-garcia/vaultwarden',
+    'Vaultwarden is a self-hosted password manager compatible with Bitwarden clients. When enabled, OpenClaw fetches credentials for other services from it at runtime, so you do not need to enter passwords here.\n\nItems OpenClaw looks for (one item per service, named in lowercase; names are not case-sensitive):\n• email, nas: a Login item with its username and password\n• n8n, trilium, crawl4ai, ntfy, gitea: a hidden custom field api_key\n• google: hidden custom fields client_json and token_json\n\nGitHub: https://github.com/dani-garcia/vaultwarden',
   url: urlField(
     'Vaultwarden URL',
     'The base URL of your Vaultwarden server, e.g. https://vaultwarden.yourdomain.local',
@@ -289,6 +289,26 @@ const ntfyService = placedService({
       'ntfy',
       'api_key',
       'An ntfy access token (starts with "tk_"). Create one in the ntfy web app → Account → Access tokens, or with `ntfy token add <user>` on the server.',
+    ),
+  },
+})
+
+const giteaService = placedService({
+  name: 'Gitea (Git Repositories)',
+  title: 'Gitea',
+  description:
+    'Gitea hosts your own git repositories. Agents use it to keep their workspace, scripts and projects under version control without putting them on a public site: create a repository, commit and push. git signs in with the token below by itself, at every push and pull; the token is never written into a repository or a file.\n\nTip: give the agent its own Gitea account (a user just for it, with access to the repositories it should use), so its pushes are shown under its own name and its token reaches only those repositories.\nGitHub: https://github.com/go-gitea/gitea',
+  url: urlField(
+    'Gitea URL',
+    'The URL of your Gitea server, e.g. https://git.yourdomain.local',
+    'https://git.yourdomain.local',
+  ),
+  extra: {
+    apiKey: credentialUnion(
+      'Access Token',
+      'gitea',
+      'api_key',
+      'A Gitea access token of the account the agent uses. Create it in Gitea → Settings → Applications → Generate New Token, with permissions "repository: Read and Write" and "user: Read and Write". Both are needed for the agent to create repositories; with repository alone it can only push to existing ones.',
     ),
   },
 })
@@ -530,6 +550,7 @@ const inputSpec = InputSpec.of({
   searxng: searxngService,
   crawl4ai: crawl4aiService,
   ntfy: ntfyService,
+  gitea: giteaService,
 })
 
 // ── Helpers to map action input <-> stored file shape ───────────────────────
@@ -719,7 +740,7 @@ export const configureExternalServices = sdk.Action.withInput(
   async ({ effects }) => ({
     name: 'Configure External Services',
     description:
-      'Connect OpenClaw to your email and self-hosted tools (Vaultwarden, Ollama, NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy), plus host mappings and a custom CA for internal HTTPS services. Enable only the services you use; a service installed on this server can be chosen "On this server", with no URL. If Vaultwarden is enabled, other services can fetch their credentials from it automatically. Saving restarts OpenClaw to apply changes.',
+      'Connect OpenClaw to your email and self-hosted tools (Vaultwarden, Ollama, NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy, Gitea), plus host mappings and a custom CA for internal HTTPS services. Enable only the services you use; a service installed on this server can be chosen "On this server", with no URL. If Vaultwarden is enabled, other services can fetch their credentials from it automatically. Saving restarts OpenClaw to apply changes.',
     warning: null,
     allowedStatuses: 'any',
     group: null,
@@ -744,6 +765,7 @@ export const configureExternalServices = sdk.Action.withInput(
     const searxng = cfg?.searxng
     const crawl4ai = cfg?.crawl4ai
     const ntfy = cfg?.ntfy
+    const gitea = cfg?.gitea
     const email = cfg?.email
 
     return {
@@ -781,6 +803,7 @@ export const configureExternalServices = sdk.Action.withInput(
         topic: ntfy?.topic ?? '',
         apiKey: credToPrefill(ntfy?.apiKey),
       }),
+      gitea: placedPrefill(gitea, { apiKey: credToPrefill(gitea?.apiKey) }),
     }
   },
 
@@ -853,6 +876,10 @@ export const configureExternalServices = sdk.Action.withInput(
       apiKey: credToStored(v.apiKey),
     }))
 
+    const gitea = placedFromInput(i.gitea, prior?.gitea, (v) => ({
+      apiKey: credToStored(v.apiKey),
+    }))
+
     // Validates the pasted Google client/token before anything is saved.
     const email = emailFromInput(i.email)
 
@@ -881,6 +908,7 @@ export const configureExternalServices = sdk.Action.withInput(
       searxng,
       crawl4ai,
       ntfy,
+      gitea,
     } as any)
 
     await effects.restart()

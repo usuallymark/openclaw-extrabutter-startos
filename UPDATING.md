@@ -68,6 +68,11 @@ as "not installed" while the service is running. To add a service: a row
 there, a `localService(...)` in `dependencies.ts`, and `placedService(...)`
 for its form section.
 
+Gitea has one more tie to its package: `startos/gitea.ts` reads the
+addresses Gitea publishes from its interface id `http` (gitea-startos
+`startos/utils.ts`, `httpInterfaceId`) to map them onto the bridge for git.
+Re-check that id along with the row.
+
 ## File models and the SDK (start-sdk 3)
 
 Every file-model shape is built with `z.looseObject` at every level. Since start-sdk 3, a `z.object` shape deletes every key it does not declare on the next `merge()`/`write()`, and `openclaw.json` is co-owned with OpenClaw, which writes far more than the package models. Never add a `z.object` (or `z\n  .object`) to `startos/fileModels/`. `npm run check` runs the same gate as the build: TypeScript, the SDK's lint and the SDK's Prettier config (`npm run format` writes).

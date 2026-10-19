@@ -113,11 +113,12 @@ One Vaultwarden item per service, named after the service in lowercase:
 | Trilium | `trilium` | `api_key` |
 | Crawl4AI | `crawl4ai` | `api_key` |
 | ntfy | `ntfy` | `api_key` |
+| Gitea | `gitea` | `api_key` (git signs in with it by itself; see the gitea skill) |
 | Google account | `google` | `client_json`, `token_json` (read only by the package at start) |
 
 Services the package configures are read for you through `getcred`; use
-`rbw_get` only for items the user set up for your own scripts (for example
-`gitea` / `api_key`), following the same standard.
+`rbw_get` only for items the user set up for your own scripts, following
+the same standard.
 
 ## Checking Vault Status
 

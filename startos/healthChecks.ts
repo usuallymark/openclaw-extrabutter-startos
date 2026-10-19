@@ -176,6 +176,7 @@ export type ExtConfig =
       searxng?: { enabled?: boolean; url?: string }
       crawl4ai?: { enabled?: boolean; url?: string }
       ntfy?: { enabled?: boolean; url?: string }
+      gitea?: { enabled?: boolean; url?: string }
       email?: EmailConfig
     }
   | undefined
@@ -212,6 +213,8 @@ const HTTP_PATHS = {
   crawl4ai: ['Crawl4AI', '/health'],
   // ntfy's /v1/health needs no token and answers {"healthy":true}.
   ntfy: ['ntfy', '/v1/health'],
+  // Gitea's /api/healthz needs no token and answers {"status":"pass",...}.
+  gitea: ['Gitea', '/api/healthz'],
 } as const
 
 type HttpKey = keyof typeof HTTP_PATHS
@@ -259,6 +262,7 @@ export function externalTargets(
   push('searxng')
   push('crawl4ai')
   push('ntfy')
+  push('gitea')
   // Email: the IMAP server for the himalaya choices (reachability only, as
   // for every other service); the stored sign-in for the Google account.
   const email = ext?.email
@@ -336,6 +340,7 @@ export function externalChecks(
     searxng: specFor(byKey.get('searxng')),
     crawl4ai: specFor(byKey.get('crawl4ai')),
     ntfy: specFor(byKey.get('ntfy')),
+    gitea: specFor(byKey.get('gitea')),
     nas: specFor(byKey.get('nas')),
     email: specFor(byKey.get('email')),
   } satisfies Record<string, CheckSpec>

@@ -79,6 +79,15 @@ export const LOCAL_SERVICES = {
     urlSuffix: '/etapi',
     icon: 'https://raw.githubusercontent.com/usuallymark/trilium-startos/master/icon.svg',
   },
+  gitea: {
+    packageId: 'gitea',
+    title: 'Gitea',
+    hostId: 'main',
+    port: 3000,
+    versionRange: '>=1.27.0:0',
+    healthChecks: ['primary'],
+    icon: 'https://raw.githubusercontent.com/Start9Labs/gitea-startos/master/icon.svg',
+  },
 } as const
 
 export type LocalKey = keyof typeof LOCAL_SERVICES

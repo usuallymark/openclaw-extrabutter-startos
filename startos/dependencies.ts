@@ -140,3 +140,9 @@ export const dependencies = sdk.Dependencies.of()
       'Optional: push notifications through ntfy on this server. Choose "On this server" for ntfy in Configure External Services.',
     ),
   )
+  .addDependency(
+    localService(
+      'gitea',
+      'Optional: let agents create, commit to and push their own git repositories on Gitea on this server. Choose "On this server" for Gitea in Configure External Services.',
+    ),
+  )

@@ -13,7 +13,12 @@ import {
 } from './interfaces'
 import { sdk } from './sdk'
 import { setGatewayContainer } from './gatewayContainer'
-import { notInstalledMessage, resolveLocalServices } from './localServices'
+import {
+  isLocal,
+  notInstalledMessage,
+  resolveLocalServices,
+} from './localServices'
+import { GIT_SYSTEM_CONFIG, giteaGitConfig, giteaPublishedUrls } from './gitea'
 import {
   mainMounts,
   qdrantMounts,
@@ -247,6 +252,24 @@ export const main = sdk.setupMain(async ({ effects }) => {
       externalEnv['NTFY_KEY_FROM_VAULT'] = 'ntfy:api_key'
     }
     enabledSkills.push('/opt/skills/ntfy')
+  }
+
+  // Gitea: the gitea skill, plus git's own sign-in and address mapping
+  // (written to the container's system git config by the git-setup oneshot).
+  let giteaGit: { url: string; aliases: string[] } | null = null
+  if (ext?.gitea?.enabled && ext.gitea.url) {
+    externalEnv['GITEA_URL'] = ext.gitea.url
+    const k = ext.gitea.apiKey
+    if (k?.source === 'manual' && k.value) {
+      externalEnv['GITEA_KEY'] = k.value
+    } else if (k?.source === 'from-vaultwarden') {
+      externalEnv['GITEA_KEY_FROM_VAULT'] = 'gitea:api_key'
+    }
+    enabledSkills.push('/opt/skills/gitea')
+    giteaGit = {
+      url: ext.gitea.url,
+      aliases: isLocal(ext.gitea) ? await giteaPublishedUrls(effects) : [],
+    }
   }
 
   // Email (Configure External Services → Email): himalaya for the IMAP
@@ -511,6 +534,31 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['install-root-ca'],
     })
+    // git's system config: Gitea sign-in and address mapping (gitea.ts).
+    // Rewritten at every start; with Gitea off, it clears to a header.
+    .addOneshot('git-setup', {
+      subcontainer: openclawSub,
+      exec: {
+        fn: async (subcontainer) => {
+          try {
+            await subcontainer.writeFile(
+              GIT_SYSTEM_CONFIG,
+              giteaGitConfig(giteaGit),
+              { mode: 0o644 },
+            )
+            if (giteaGit) {
+              console.info(
+                `Gitea: git signs in to ${giteaGit.url}${giteaGit.aliases.length ? ` and maps ${giteaGit.aliases.length} Gitea address(es) to it` : ''}`,
+              )
+            }
+          } catch (e) {
+            console.error('Failed to write the git system config:', e)
+          }
+          return null
+        },
+      },
+      requires: [],
+    })
     // Configure rbw and unlock the vault (proven manual sequence):
     // master password in rbw/.credentials, answered by a file-based
     // pinentry, so login/unlock are non-interactive. Because pinentry is
@@ -708,6 +756,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
         'network-setup',
         'setup-vault',
         'google-sign-in',
+        'git-setup',
         'qdrant',
       ],
     })
@@ -830,6 +879,15 @@ export const main = sdk.setupMain(async ({ effects }) => {
       ready: {
         display: extChecks.ntfy.display,
         fn: () => extChecks.ntfy.fn(openclawSub),
+        trigger: externalTrigger,
+        gracePeriod: 0,
+      },
+      requires: ['network-setup'],
+    })
+    .addHealthCheck('ext-gitea', {
+      ready: {
+        display: extChecks.gitea.display,
+        fn: () => extChecks.gitea.fn(openclawSub),
         trigger: externalTrigger,
         gracePeriod: 0,
       },

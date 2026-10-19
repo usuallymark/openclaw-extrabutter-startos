@@ -5,7 +5,7 @@ OpenAI, Google Gemini, xAI, or a local model server (Ollama, vLLM, llama.cpp).
 This package includes OpenClaw plus a built-in Qdrant vector database for
 long-term memory, the built-in rbw client for fetching credentials from a
 vault, and optional integrations with your own self-hosted services
-(Vaultwarden, Ollama, a NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy).
+(Vaultwarden, Ollama, a NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy, Gitea).
 
 ---
 
@@ -39,6 +39,7 @@ self-hosted tools. Each service can be independently enabled or disabled:
 | **SearXNG** | Privacy-respecting web search |
 | **Crawl4AI** | Fetch web pages in a real browser and return clean Markdown |
 | **ntfy** | Send push notifications to your phone |
+| **Gitea** | Your own git repositories: the agent creates, commits to and pushes repositories for its workspace and scripts — see [Gitea Setup](#gitea-setup) |
 
 Built in, with nothing extra to install: reading PDFs (text, OCR of scanned
 pages in English, ingest into Qdrant), and the rbw vault client that the
@@ -48,8 +49,8 @@ Vaultwarden option uses.
 fields for other services will automatically offer to fetch from Vaultwarden
 instead of requiring manual entry.
 
-**Services on this server.** Vaultwarden, Ollama, n8n, SearXNG, Crawl4AI and
-ntfy each offer three choices: *Disabled*, *On this server* and *At an
+**Services on this server.** Vaultwarden, Ollama, n8n, Trilium, SearXNG,
+Crawl4AI, ntfy and Gitea each offer three choices: *Disabled*, *On this server* and *At an
 address*.
 
 - **On this server**: the service is installed on this StartOS server from
@@ -132,6 +133,7 @@ One item per service, named after the service in lowercase:
 | Trilium | `trilium` | hidden custom field `api_key` |
 | Crawl4AI | `crawl4ai` | hidden custom field `api_key` |
 | ntfy | `ntfy` | hidden custom field `api_key` |
+| Gitea | `gitea` | hidden custom field `api_key` |
 | Google account | `google` | hidden custom fields `client_json` and `token_json` |
 
 - For `email` and `nas`, create a normal **Login** item and fill in its own
@@ -221,6 +223,56 @@ shows "Signed in as …" when it worked.
 
 To renew or change the sign-in later (new services, revoked access), repeat
 step 2 and update the Vaultwarden fields or paste the new token.
+
+---
+
+## Gitea Setup
+
+With **Configure External Services → Gitea** enabled, the agent keeps its
+work in your own git repositories: it creates a repository, commits and
+pushes, without your help and without anything going to a public site.
+
+1. **An account for the agent (recommended).** In Gitea, create a user just
+   for the agent and give it access to the repositories it should use (or
+   let it create its own). Its pushes then show under its own name, and its
+   token reaches only those repositories. Your own account works too.
+2. **A token.** Signed in to Gitea as that account: **Settings →
+   Applications → Generate New Token**, with **repository: Read and Write**
+   and **user: Read and Write**. Both are needed to create repositories;
+   with repository alone the agent can only push to existing ones.
+3. **Store it.** In Vaultwarden, item `gitea`, hidden custom field
+   `api_key` (and keep "Fetch from Vaultwarden"), or paste it under
+   *Enter manually*.
+4. **Choose where Gitea runs.** *On this server* if Gitea is installed on
+   this StartOS server, otherwise *At an address* with its URL.
+
+What the package sets up, at every start:
+
+- **git signs in by itself.** Every push and pull to Gitea uses the token,
+  fetched at that moment. Nothing is written into repositories, remote URLs
+  or `~/.git-credentials`.
+- **Remotes keep working when addresses change.** With Gitea on this
+  server, a remote written with any address Gitea shows (its clone URL, a
+  LAN address and port, a private domain) is reached over the server's
+  internal network instead. It no longer depends on that address, DNS or
+  the certificate, and the same URL keeps working on your other computers.
+- **Commit name and email** are left as they are. If none is set, the
+  agent uses the Gitea account's (`gitea.py identity`).
+
+**Already using Gitea with the agent?** Existing remotes need no change. To
+see the set-up and find tokens stored in plain text (in a remote URL or
+`~/.git-credentials`), ask the agent to run its Gitea check, or run it
+yourself:
+
+```
+sudo start-cli package attach openclaw-extrabutter --name openclaw-sub
+python3 /opt/skills/gitea/gitea.py check
+exit
+```
+
+`check --fix` removes tokens from Gitea remote URLs. A credential helper
+of your own for a Gitea address is no longer used for those remotes; the
+check says how to remove it.
 
 ---
 

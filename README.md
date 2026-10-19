@@ -16,7 +16,7 @@
 - a bundled **Qdrant** vector database (its own volume) and a skill for it;
 - **helper agents** the main agent can spawn, managed from an action (Configure Agents) or by the agent itself;
 - a built-in **rbw** vault client (rbw 1.15.0, Bitwarden-compatible, installed for x86_64 and aarch64): point it at your Vaultwarden once and the package logs in and unlocks the vault at every start, keeps it unlocked, and lets the other services fetch their credentials from it instead of storing them in plain config;
-- **Configure External Services**: optional skills for services you already run (Vaultwarden, Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI and ntfy), plus host mappings and a custom CA for internal HTTPS services;
+- **Configure External Services**: optional skills for services you already run (Vaultwarden, Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy and Gitea), plus host mappings and a custom CA for internal HTTPS services;
 - **email**: Gmail with an app password or any IMAP/SMTP provider (himalaya 2.2.1), or a Google account with Gmail, Calendar and Drive (gog 0.44.0); every credential can live in Vaultwarden;
 - a **mobile webchat** with one profile per person (optional);
 - a built-in **pdf** skill (text extraction and OCR of scanned pages) and a **health** skill;
@@ -71,7 +71,7 @@ One image, built here.
 
 Daemons: `qdrant`, `primary` (the gateway), and `webchat` while it is enabled.
 
-Six oneshots run before the gateway, and three after it:
+Seven oneshots run before the gateway, and three after it:
 
 | Oneshot                 | When   | Purpose                                                                                            |
 | ----------------------- | ------ | -------------------------------------------------------------------------------------------------- |
@@ -81,6 +81,7 @@ Six oneshots run before the gateway, and three after it:
 | `state-migrate`         | Before | Once per OpenClaw version: `openclaw doctor --non-interactive` to migrate the agent databases      |
 | `setup-vault`           | Before | Logs `rbw` in to Vaultwarden, unlocks and syncs it; signs in again if Vaultwarden refuses the sync |
 | `google-sign-in`        | Before | Google account kept in Vaultwarden: loads the OAuth client and sign-in token into gog              |
+| `git-setup`             | Before | Writes git's system config: sign-in to Gitea and its address mapping (Configure External Services) |
 | `check-login`           | After  | Raises a task if `start-cli` is not authenticated                                                  |
 | `check-simplex-plugin`  | After  | Brings the SimpleX plugin up to the pinned version                                                 |
 | `server-state-snapshot` | After  | Writes a server inventory (or, when not logged in, a health report) into `MEMORY.md`               |
@@ -148,7 +149,7 @@ All optional, and **each declared only while it is selected**. (Qdrant is bundle
 | vLLM                     | No — only if chosen  | `running` | Local inference backend       |
 | llama.cpp                | No — only if chosen  | `running` | Local inference backend       |
 | SimpleX Websocket Bridge | No — only if enabled | `running` | Exchanging files over SimpleX |
-| Vaultwarden, n8n, Trilium, SearXNG, Crawl4AI, ntfy | No — only while *On this server* | `running` | Configure External Services (Ollama too, besides the AI backend) |
+| Vaultwarden, n8n, Trilium, SearXNG, Crawl4AI, ntfy, Gitea | No — only while *On this server* | `running` | Configure External Services (Ollama too, besides the AI backend) |
 
 **The inference dependency follows the model you are actually using.** The declaration is derived from the primary model and its fallbacks, so selecting a local backend adds it and switching to a cloud provider drops it — including when the switch is made from inside the chat rather than through the action. Each is required to be running _and_ passing its own health check, since an unhealthy model server is the same as an absent one.
 
@@ -221,10 +222,11 @@ Adds, changes or removes the helper agents the main agent can spawn: model (clou
 
 ### Configure External Services
 
-Connects the agent to email and self-hosted tools, each optional and independent: Vaultwarden (through the built-in `rbw` client; other services can then fetch their credentials from it), Email (below), Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI and ntfy. Also: custom host mappings (StartOS never resolves `.local` names inside a service) and a custom CA certificate for internal HTTPS.
+Connects the agent to email and self-hosted tools, each optional and independent: Vaultwarden (through the built-in `rbw` client; other services can then fetch their credentials from it), Email (below), Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy and Gitea. Also: custom host mappings (StartOS never resolves `.local` names inside a service) and a custom CA certificate for internal HTTPS.
 
 - **What it changes:** `external-services.json`; each enabled service loads its skill and gets a health check.
-- **On this server / At an address** (Vaultwarden, Ollama, n8n, Trilium, SearXNG, Crawl4AI, ntfy): *On this server* stores `location: "local"`; at every start `startos/localServices.ts` asks StartOS for the service's bridge address (`sdk.host.getBridgeAddress`, plain HTTP inside the server) from one table of package id, host id and port, and puts it in `url`, so the skill environment, rbw's `base_url` and the health checks need nothing else. The service becomes an optional dependency (`kind: running`) only while chosen. Not installed → the health check says so. Older settings have no `location` and stay *At an address*; the stored URL is kept while *On this server* is chosen. rbw keys its local vault copy by server URL, so a new address simply signs in again. Adding a service = one table row (a `urlSuffix` for a path the URL carries: Trilium's `/etapi`).
+- **On this server / At an address** (Vaultwarden, Ollama, n8n, Trilium, SearXNG, Crawl4AI, ntfy, Gitea): *On this server* stores `location: "local"`; at every start `startos/localServices.ts` asks StartOS for the service's bridge address (`sdk.host.getBridgeAddress`, plain HTTP inside the server) from one table of package id, host id and port, and puts it in `url`, so the skill environment, rbw's `base_url` and the health checks need nothing else. The service becomes an optional dependency (`kind: running`) only while chosen. Not installed → the health check says so. Older settings have no `location` and stay *At an address*; the stored URL is kept while *On this server* is chosen. rbw keys its local vault copy by server URL, so a new address simply signs in again. Adding a service = one table row (a `urlSuffix` for a path the URL carries: Trilium's `/etapi`).
+- **Gitea and git** (`startos/gitea.ts`): besides `GITEA_URL` and the token for the `gitea` skill, the `git-setup` oneshot writes git's *system* config (`/etc/gitconfig` in the container, rewritten at every start, so `~/.gitconfig` stays the user's): `credential.<Gitea URL>.helper` → `/usr/local/bin/git-credential-openclaw`, which asks `getcred GITEA_KEY` at every push/pull (Gitea signs in as the token's owner whatever the username; git never stores it), and, *On this server*, `url.<bridge>.insteadOf` for every address Gitea publishes for its `http` interface (`sdk.host.get` on Gitea's `main` host, `nonLocal` URLs), so remotes and Gitea's own clone URLs reach it over the bridge. `gitea.py check [--fix]` reports the set-up and strips tokens written into Gitea remote URLs.
 - **Cost:** the service restarts.
 - **Email** has one choice with three backends; only one email skill loads:
   - *Gmail (app password)* and *Other IMAP/SMTP provider* use `himalaya` 2.x. The package writes `/data/.openclaw/himalaya/config.toml` at every start (`HIMALAYA_CONFIG`); the password is never in it: himalaya runs `getcred EMAIL_PASS` (manual value, or Vaultwarden item `email`, its login password). Skill: `email`.
@@ -309,7 +311,7 @@ Three, two of them blocking (a SimpleX plugin task may also appear when the bund
 | `ext-<service>` | The service's name       | Reachability every minute, for each enabled external service   |
 | `ext-email`     | "Email (IMAP)" / "Google account" | IMAP server reachable; for Google, a stored sign-in for the address (local, no network) |
 
-The external checks test reachability only; the `health` skill (`/opt/skills/health/health.py`) also tests the n8n and Trilium API keys, the IMAP and SMTP logins, the Google sign-in (Google refreshes the token) and memory search. **None of them says anything about the model**: a wrong API key, a rate limit, or a local backend that is running but not loaded all show green checks and an error in the chat.
+The external checks test reachability only; the `health` skill (`/opt/skills/health/health.py`) also tests the n8n, Trilium and Gitea API keys (Gitea: names the token's account), the IMAP and SMTP logins, the Google sign-in (Google refreshes the token) and memory search. **None of them says anything about the model**: a wrong API key, a rate limit, or a local backend that is running but not loaded all show green checks and an error in the chat.
 
 ## Backups and Restore
 
@@ -363,6 +365,7 @@ helpers_in_container:
   - gateway-env CMD # run CMD with the running gateway's environment, as node
   - refresh-snapshot # rewrite MEMORY.md's server snapshot
   - getcred VAR # print a configured credential (manual value or Vaultwarden via rbw), e.g. getcred NAS_PASS
+  - git-credential-openclaw # git's sign-in to Gitea, named in /etc/gitconfig (git-setup oneshot)
 startos_managed_env_vars:
   - HOME
   - OPENCLAW_STATE_DIR
@@ -379,7 +382,7 @@ dependencies:
   - vllm # same
   - llama-cpp # same
   - simplex-websocket-bridge # optional, only while file exchange is enabled
-  - vaultwarden, n8n, trilium, searxng, crawl4ai, ntfy # optional, only while "On this server" in Configure External Services
+  - vaultwarden, n8n, trilium, searxng, crawl4ai, ntfy, gitea # optional, only while "On this server" in Configure External Services
 interfaces:
   ui: { type: ui, port: 18789 } # gateway password + one-time browser approval (approve-devices)
   webchat: { type: ui, port: 18800 } # only while enabled; per-profile PIN

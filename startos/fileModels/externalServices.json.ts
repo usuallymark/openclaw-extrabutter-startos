@@ -119,6 +119,8 @@ const shape = z.looseObject({
   // `stirling` key in the file is ignored and dropped on the next save.
   crawl4ai: urlWithKeyShape.catch(OFF),
   ntfy: ntfyShape.catch(OFF),
+  // Gitea (since 2026.10.1:5): git push/pull and the gitea skill.
+  gitea: urlWithKeyShape.catch(OFF),
   email: emailShape.catch({ mode: 'disabled' as const }),
 })
 
