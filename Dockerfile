@@ -1,4 +1,6 @@
-FROM node:26-bookworm-slim
+# Node is pinned to an exact release, never a floating tag (UPDATING.md,
+# "The Node base image"). 26.12.1 is the October 2026 security release.
+FROM node:26.12.1-bookworm-slim
 
 ARG START_CLI_VERSION
 ARG GH_VERSION=2.102.0

@@ -1,13 +1,12 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:6',
+  version: '2026.10.1:7',
   releaseNotes: {
-    en_US: `Gitea remotes that never go stale.
+    en_US: `Node.js security update.
 
-- **New Gitea remotes use a placeholder: gitea:OWNER/REPO.git.** At every start the package maps gitea: to Gitea's current address, the way the other services get their address from a setting. Remotes made by the agent keep working after Gitea is reinstalled, gets a new LAN address or domain, or moves to another address. (In 2026.10.1:5, new repositories got the internal address Gitea reports to OpenClaw, which changes when Gitea is reinstalled.)
-- **Links the agent gives you** use an address you can open: a domain if Gitea has one, otherwise its LAN address.
-- **\`gitea.py check\` finds remotes made with the internal address**, and \`check --fix\` changes them to gitea:. Remotes written with Gitea's own addresses keep working as before.`,
+- **Node.js 26.12.1**, the October 2026 security release. It fixes ten vulnerabilities, among them an out-of-bounds write in Brotli decompression (which the agent could reach by fetching Brotli-compressed web content) and three ways around TLS certificate hostname checks. The gateway, the webchat and the JavaScript skills all run on it; 2026.10.1:6 carried 26.12.0.
+- Node is now pinned to an exact release, so each version of this package states which Node it ships.`,
   },
   migrations: {
     up: async () => {},

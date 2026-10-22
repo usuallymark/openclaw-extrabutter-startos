@@ -14,7 +14,7 @@ OpenClaw is installed into the image at build time by the official `openclaw.bot
 
   Pin that value verbatim in `Dockerfile` as `OPENCLAW_VERSION`. Never pin a `beta`/`alpha` dist-tag.
 
-  Two more pins move with it. Upstream drops Node lines between releases, so check the floor against the base image (`FROM node:<major>-bookworm-slim` in `Dockerfile`):
+  Two more pins move with it. Upstream drops Node lines between releases, so check the floor against the base image (`FROM node:<version>-bookworm-slim` in `Dockerfile`):
 
   ```
   npm view openclaw@<version> engines.node
@@ -78,6 +78,18 @@ Re-check that id along with the row.
 Every file-model shape is built with `z.looseObject` at every level. Since start-sdk 3, a `z.object` shape deletes every key it does not declare on the next `merge()`/`write()`, and `openclaw.json` is co-owned with OpenClaw, which writes far more than the package models. Never add a `z.object` (or `z\n  .object`) to `startos/fileModels/`. `npm run check` runs the same gate as the build: TypeScript, the SDK's lint and the SDK's Prettier config (`npm run format` writes).
 
 After editing, confirm with `grep -rn '<OLD_VERSION>' --include='*.ts' --include=Dockerfile` that no stale references remain, then update `releaseNotes` in `startos/versions/current.ts` per the package's versioning conventions.
+
+## The Node base image
+
+`Dockerfile` pins Node to an exact release (`FROM node:26.12.1-bookworm-slim`), not `node:26-bookworm-slim`. With the floating tag, the Node in a release was whatever Docker Hub served on build day, and nobody could tell from the repository whether a release had a given security fix (2026.10.1:6 turned out to carry 26.12.0, one release short of the October 2026 security fixes). The gateway, the webchat and every skill written in JavaScript run on this one Node.
+
+Bump it when Node publishes a security release for the line in use (https://nodejs.org/en/blog/vulnerability), and with each OpenClaw bump (check `engines.node` as above). The tag must exist on Docker Hub before the build, or the build fails at `FROM`. To see which Node a built package carries without installing it:
+
+```
+LC_ALL=C grep -a -o -m1 -E 'NODE_VERSION=[0-9.]+' openclaw-extrabutter_x86_64.s9pk
+```
+
+On a running server: `node --version` inside the container.
 
 ## The baked `start-cli` (`START_CLI_VERSION`)
 
