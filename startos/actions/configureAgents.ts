@@ -25,6 +25,8 @@ const { InputSpec, Value } = sdk
 // Provider, and "Main agent can spawn" on each row sets its spawn list.
 
 const MAIN = 'main'
+// Managed by Configure Email (mailService.ts); not a row here.
+const EMAIL = 'email'
 const HELPER = '/opt/skills/agents/agents.py'
 // What the form showed when it was opened, to tell edits from untouched rows.
 const SNAPSHOT = sdk.volumes.main.subpath('.startos/agents-form.json')
@@ -64,7 +66,7 @@ export function rowsFrom(cfg: any): Row[] {
   const ents = entriesOf(cfg)
   const mainAllow: string[] = ents[MAIN]?.subagents?.allowAgents ?? []
   return Object.keys(ents)
-    .filter((id) => id !== MAIN)
+    .filter((id) => id !== MAIN && id !== EMAIL)
     .sort()
     .map((id) => {
       const e = ents[id] ?? {}

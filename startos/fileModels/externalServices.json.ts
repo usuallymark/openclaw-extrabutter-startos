@@ -72,38 +72,10 @@ const nasShape = z
   })
   .catch({ enabled: false })
 
-// Email (since 2026.10.1:1). `mode` picks the backend:
-// - gmail:  himalaya against Gmail's IMAP/SMTP with an app password
-// - imap:   himalaya against any IMAP/SMTP provider
-// - google: gog with an imported OAuth sign-in (Gmail, Calendar, Drive …).
-//   Its OAuth client and refresh token live in gog's encrypted keyring
-//   under .openclaw/gog, never in this file.
-const mailServerShape = z
-  .looseObject({
-    host: z.string().optional().catch(undefined),
-    port: z.number().optional().catch(undefined),
-    security: z.enum(['tls', 'starttls']).catch('tls'),
-  })
-  .catch({ security: 'tls' as const })
-
+// Email lived here from 2026.10.1:1 to :7 (`email`). It is now Configure
+// Email (emailSettings.json.ts); init moves an old section there and drops
+// it from this file.
 export const emailModes = ['disabled', 'gmail', 'imap', 'google'] as const
-
-const emailShape = z
-  .looseObject({
-    mode: z.enum(emailModes).catch('disabled'),
-    address: z.string().optional().catch(undefined),
-    displayName: z.string().optional().catch(undefined),
-    username: z.string().optional().catch(undefined),
-    imap: mailServerShape.optional().catch(undefined),
-    smtp: mailServerShape.optional().catch(undefined),
-    password: credentialShape.optional().catch(undefined),
-    // google: where the OAuth client + token come from. from-vaultwarden:
-    // fetched at every start (item "google", fields client_json and
-    // token_json) and loaded into gog's keyring; manual: pasted once,
-    // kept only in gog's keyring. `value` is never used here.
-    signIn: credentialShape.optional().catch(undefined),
-  })
-  .catch({ mode: 'disabled' as const })
 
 const shape = z.looseObject({
   hostMappings: z.array(hostMappingShape).catch([]),
@@ -121,7 +93,6 @@ const shape = z.looseObject({
   ntfy: ntfyShape.catch(OFF),
   // Gitea (since 2026.10.1:5): git push/pull and the gitea skill.
   gitea: urlWithKeyShape.catch(OFF),
-  email: emailShape.catch({ mode: 'disabled' as const }),
 })
 
 export const externalServicesJson = FileHelper.json(

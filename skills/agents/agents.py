@@ -45,6 +45,12 @@ AGENTS_DIR = f'{WORKSPACE_ROOT}/workspaces'
 CATALOG_CACHE = f'{DATA}/.startos/model-catalog.json'
 OLLAMA_SERVER_ID = 'ollama-server'
 MAIN = 'main'
+# The email agent is the package's (Configure Email, startos/mailService.ts):
+# it alone has the mail tools. Nobody changes it here, nobody else gets the
+# mail tools, and nobody spawns it (a spawned copy inherits the spawner's
+# denied tools and would have none).
+EMAIL = 'email'
+MAIL_TOOLS = 'mail__*'
 ID_RE = re.compile(r'^[a-z][a-z0-9-]{0,31}$')
 
 CLOUD_ENV = {
@@ -339,6 +345,8 @@ def plan(cfg, ops, ui=False):
             raise AgentError(f'unknown field(s): {", ".join(sorted(unknown))}')
         if not ID_RE.match(aid or ''):
             raise AgentError(f'agent id "{aid}": lowercase letters, digits and "-", starting with a letter, max 32')
+        if aid == EMAIL:
+            raise AgentError('the email agent is managed by StartOS → OpenClaw → Configure Email and cannot be changed here')
         if aid == MAIN and op != 'update':
             raise AgentError('the main agent cannot be created or deleted here')
         if aid == MAIN and not ui:
@@ -391,6 +399,9 @@ def plan(cfg, ops, ui=False):
             tools['profile'] = None if prof == 'inherit' else prof
         if 'extraTools' in f:
             extra = _csv(f['extraTools'])
+            # ('*' and group:plugins stay possible: mail__* is denied anyway.)
+            if any(t.lower().startswith('mail__') for t in extra):
+                raise AgentError('the mail tools belong to the email agent only (Configure Email)')
             bad = sorted(set(extra) & POWERFUL_TOOLS)
             if bad and not ui:
                 raise AgentError(f'{", ".join(bad)}: only a person can switch these on, in StartOS → OpenClaw → Configure Agents')
@@ -398,14 +409,16 @@ def plan(cfg, ops, ui=False):
             # (`allow` and `alsoAllow` cannot both be set).
             key = 'allow' if 'allow' in cur_tools else 'alsoAllow'
             tools[key] = extra or None
-        if 'blockedTools' in f or (op == 'create' and not ui):
+        if 'blockedTools' in f or op == 'create':
             deny = _csv(f.get('blockedTools')) or []
             if not ui:
                 deny += [t for t in ALWAYS_BLOCKED if t not in deny]
+            if MAIL_TOOLS not in deny:
+                deny.append(MAIL_TOOLS)
             tools['deny'] = deny or None
-        elif not ui and op == 'update':
+        elif op == 'update':
             have = list(cur_tools.get('deny') or [])
-            missing = [t for t in ALWAYS_BLOCKED if t not in have]
+            missing = [t for t in (ALWAYS_BLOCKED if not ui else ()) + (MAIL_TOOLS,) if t not in have]
             if missing:
                 tools['deny'] = have + missing
         if tools:
@@ -420,6 +433,8 @@ def plan(cfg, ops, ui=False):
                 out['skills'] = _csv(s)
         if 'canSpawn' in f:
             lst = _csv(f['canSpawn'])
+            if EMAIL in lst:
+                raise AgentError('nobody spawns the email agent: ask it with sessions_send (see the email skill)')
             for target in lst:
                 if target != '*' and target not in final_ids:
                     raise AgentError(f'{aid} can spawn "{target}", but there is no such agent')
@@ -584,6 +599,9 @@ def main(argv):
                 print(json.dumps(rows, indent=2))
             else:
                 for r in rows:
+                    if r['id'] == EMAIL:
+                        print(f"{r['id']:<16} managed by Configure Email: mail tools only; ask it with sessions_send (email skill)")
+                        continue
                     spawn = '' if r['id'] == MAIN else (' main-can-spawn' if r['mainCanSpawn'] else ' NOT-spawnable-by-main')
                     print(f"{r['id']:<16} model={r['model']} profile={r['profile']} skills="
                           f"{r['skills'] if r['skills'] == 'all' else (','.join(r['skills']) or 'none')}"

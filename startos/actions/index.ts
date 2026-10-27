@@ -2,6 +2,7 @@ import { sdk } from '../sdk'
 import { approveDevices } from './approveDevices'
 import { configureAgents } from './configureAgents'
 import { configureApiCredentials } from './configureApiCredentials'
+import { configureEmail } from './configureEmail'
 import { configureExternalServices } from './configureExternalServices'
 import { configureWebchat } from './configureWebchat'
 import { connectTelegram } from './connectTelegram'
@@ -17,6 +18,7 @@ export const actions = sdk.Actions.of()
   .addAction(setPassword)
   .addAction(configureApiCredentials)
   .addAction(configureAgents)
+  .addAction(configureEmail)
   .addAction(configureExternalServices)
   .addAction(configureWebchat)
   .addAction(connectTelegram)

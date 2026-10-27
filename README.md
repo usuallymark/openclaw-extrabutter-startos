@@ -17,7 +17,7 @@
 - **helper agents** the main agent can spawn, managed from an action (Configure Agents) or by the agent itself;
 - a built-in **rbw** vault client (rbw 1.15.0, Bitwarden-compatible, installed for x86_64 and aarch64): point it at your Vaultwarden once and the package logs in and unlocks the vault at every start, keeps it unlocked, and lets the other services fetch their credentials from it instead of storing them in plain config;
 - **Configure External Services**: optional skills for services you already run (Vaultwarden, Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy and Gitea), plus host mappings and a custom CA for internal HTTPS services;
-- **email**: Gmail with an app password or any IMAP/SMTP provider (himalaya 2.2.1), or a Google account with Gmail, Calendar and Drive (gog 0.44.0); every credential can live in Vaultwarden;
+- **email** (Configure Email): Gmail with an app password or any IMAP provider, through an isolated **mail service** and an **email agent** that has the mail tools and nothing else (the main agent never reads mail); or a Google account with Gmail, Calendar and Drive (gog 0.44.0, not yet isolated); every credential can live in Vaultwarden;
 - a **mobile webchat** with one profile per person (optional);
 - a built-in **pdf** skill (text extraction and OCR of scanned pages) and a **health** skill;
 - **memory embeddings** settings and a daily server snapshot in the agent's memory.
@@ -69,14 +69,14 @@ One image, built here.
 
 **The image also installs `start-cli`**, pinned to a version by a build argument. That binary is what lets the agent administer the server when you grant it access, and it is why the container needs StartOS's root certificate. It also carries the skills (`/opt/skills`), the GitHub CLI, `rbw`, Python libraries for the skills (`/opt/python-libs`, hash-pinned in `skills/requirements.txt`) and Tesseract for OCR.
 
-Daemons: `qdrant`, `primary` (the gateway), and `webchat` while it is enabled.
+Daemons: `qdrant`, `primary` (the gateway), `webchat` while it is enabled, and `mail-front` + `mail` (the mail service, below) while Configure Email uses Gmail or IMAP.
 
 Seven oneshots run before the gateway, and three after it:
 
 | Oneshot                 | When   | Purpose                                                                                            |
 | ----------------------- | ------ | -------------------------------------------------------------------------------------------------- |
 | `install-root-ca`       | Before | Installs StartOS's root CA so the container trusts the OS                                          |
-| `chown`                 | Before | Hands `/data` to the unprivileged user the gateway runs as                                         |
+| `chown`                 | Before | Hands `/data` to the unprivileged user the gateway runs as, except `/data/.openclaw-mail`          |
 | `network-setup`         | Before | Writes custom host mappings to `/etc/hosts` and installs a custom CA (Configure External Services) |
 | `state-migrate`         | Before | Once per OpenClaw version: `openclaw doctor --non-interactive` to migrate the agent databases      |
 | `setup-vault`           | Before | Logs `rbw` in to Vaultwarden, unlocks and syncs it; signs in again if Vaultwarden refuses the sync |
@@ -105,6 +105,10 @@ Two volumes.
 | `.openclaw/workspace/`             | Both        | The agent's identity, memory, and files                  |
 | `.openclaw/agents/<id>/`           | OpenClaw    | Per-agent state database (sessions, auth, memory index)  |
 | `.openclaw/external-services.json` | An action   | Configure External Services settings                     |
+| `.openclaw-mail/settings.json`     | An action   | Configure Email settings; root only (0600)               |
+| `.openclaw-mail/state/`            | Mail service| Activity log (no bodies), refused-password fingerprint   |
+| `.openclaw/workspace/mail-inbox/`  | Mail service| Attachments released from trusted, verified senders      |
+| `.openclaw/workspace/workspaces/email/` | Package | The email agent's `AGENTS.md` (rewritten), `SOUL.md`, `IDENTITY.md` |
 | `.openclaw/rbw/`                   | The package | `rbw` config, cache and the saved master password (0600) |
 | `.openclaw/webchat/`               | Both        | Webchat profiles, its state and file hand-offs           |
 | `.startos/auth-profiles.json`      | An action   | Provider API keys                                        |
@@ -119,7 +123,7 @@ Two volumes.
 
 ## File Models
 
-Seven models, each owning a different boundary.
+Eight models, each owning a different boundary.
 
 | File                     | Format | Written by                         |
 | ------------------------ | ------ | ---------------------------------- |
@@ -127,6 +131,7 @@ Seven models, each owning a different boundary.
 | `auth-profiles.json`     | JSON   | Configure AI Provider              |
 | `embeddings.json`        | JSON   | Configure AI Provider              |
 | `external-services.json` | JSON   | Configure External Services        |
+| `.openclaw-mail/settings.json` | JSON | Configure Email; init (moves the old `email` section here) |
 | `webchat/config.json`    | JSON   | Configure Webchat                  |
 | `config.yaml`            | YAML   | `main` and init                    |
 | `simplex.json`           | JSON   | Configure SimpleX                  |
@@ -192,7 +197,7 @@ Once running, the gateway comes up on its interface and two more things happen a
 
 ## Actions
 
-Twelve actions.
+Thirteen actions.
 
 ### Set Gateway Password
 
@@ -222,16 +227,29 @@ Adds, changes or removes the helper agents the main agent can spawn: model (clou
 
 ### Configure External Services
 
-Connects the agent to email and self-hosted tools, each optional and independent: Vaultwarden (through the built-in `rbw` client; other services can then fetch their credentials from it), Email (below), Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy and Gitea. Also: custom host mappings (StartOS never resolves `.local` names inside a service) and a custom CA certificate for internal HTTPS.
+Connects the agent to self-hosted tools, each optional and independent: Vaultwarden (through the built-in `rbw` client; other services can then fetch their credentials from it), Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy and Gitea. Also: custom host mappings (StartOS never resolves `.local` names inside a service) and a custom CA certificate for internal HTTPS.
 
 - **What it changes:** `external-services.json`; each enabled service loads its skill and gets a health check.
 - **On this server / At an address** (Vaultwarden, Ollama, n8n, Trilium, SearXNG, Crawl4AI, ntfy, Gitea): *On this server* stores `location: "local"`; at every start `startos/localServices.ts` asks StartOS for the service's bridge address (`sdk.host.getBridgeAddress`, plain HTTP inside the server) from one table of package id, host id and port, and puts it in `url`, so the skill environment, rbw's `base_url` and the health checks need nothing else. The service becomes an optional dependency (`kind: running`) only while chosen. Not installed → the health check says so. Older settings have no `location` and stay *At an address*; the stored URL is kept while *On this server* is chosen. rbw keys its local vault copy by server URL, so a new address simply signs in again. Adding a service = one table row (a `urlSuffix` for a path the URL carries: Trilium's `/etapi`).
 - **Gitea and git** (`startos/gitea.ts`): besides `GITEA_URL` and the token for the `gitea` skill, the `git-setup` oneshot writes git's *system* config (`/etc/gitconfig` in the container, rewritten at every start, so `~/.gitconfig` stays the user's): `credential.<Gitea URL>.helper` → `/usr/local/bin/git-credential-openclaw`, which asks `getcred GITEA_KEY` at every push/pull (Gitea signs in as the token's owner whatever the username; git never stores it), and, *On this server*, `url.<bridge>.insteadOf` for every address Gitea publishes for its `http` interface (`sdk.host.get` on Gitea's `main` host, `nonLocal` URLs), so remotes using them reach it over the bridge; and, in both modes, `url.<Gitea URL>.insteadOf gitea:`, the placeholder new remotes are written with (`gitea:OWNER/REPO.git`), which always means Gitea's current address. Gitea builds API clone and web URLs from the address a request arrived at (`PUBLIC_URL_DETECTION = auto`), i.e. the bridge, so `gitea.py` never uses them as remotes; for links shown to people the package passes `GITEA_WEB_URL`, the best published address (https, then domain > LAN IPv4 > `.local`). `gitea.py check [--fix]` reports the set-up, strips tokens written into Gitea remote URLs and changes bridge-address remotes to `gitea:`.
 - **Cost:** the service restarts.
-- **Email** has one choice with three backends; only one email skill loads:
-  - *Gmail (app password)* and *Other IMAP/SMTP provider* use `himalaya` 2.x. The package writes `/data/.openclaw/himalaya/config.toml` at every start (`HIMALAYA_CONFIG`); the password is never in it: himalaya runs `getcred EMAIL_PASS` (manual value, or Vaultwarden item `email`, its login password). Skill: `email`.
-  - *Google account (Gmail, Calendar, Drive)* uses `gog`. The OAuth client and the sign-in token (made once with `gog auth add` on a computer with a browser, then `gog auth tokens export`) are either fetched from Vaultwarden item `google` (fields `client_json`, `token_json`) by the `google-sign-in` oneshot at every start, or pasted once. gog keeps them in an encrypted file keyring under `/data/.openclaw/gog`; the keyring password is generated once (`/data/.startos/gog-keyring-password`). The Vaultwarden pointers are not in the agent's environment. Skill: `google`.
-  - OpenClaw's own bundled `himalaya` and `gog` skills are kept disabled (`skills.entries`): the bundled himalaya one documents the 1.x CLI, and both tell the agent to set up credentials itself.
+
+### Configure Email
+
+The mailbox and the email agent (`startos/actions/configureEmail.ts`, `startos/mailService.ts`, `mail/`). Until 2026.10.1:7 the account was the Email section of Configure External Services; init moves it (`initEmailSettings`) and removes it from `external-services.json`, where a manual password was readable by agents.
+
+- **What it changes:** `/data/.openclaw-mail/settings.json` (root, 0600, in a folder the gateway user cannot enter). **Cost:** the service restarts.
+- **Account:** *Gmail (app password)*, *Other IMAP/SMTP provider*, or *Google account*. The password is Vaultwarden item `email` (its login password) or entered in the form.
+- **Email agent:** its model ("Same as the main agent" by default), Trusted Senders, extra instructions.
+- **Gmail and IMAP — the isolated path** (design: mail is attacker-controlled input):
+  - **Mail service**, user `openclaw-mail`, two daemons. `mail-front` (`mail/front.py`) is the MCP endpoint: no settings, no password, never restarted with the mailbox side, because OpenClaw stops using an MCP server for 30 s to 10 min after a failed connection; it answers the handshake and tool list itself and passes tool calls to the worker over a Unix socket in `state/` (only `openclaw-mail` can open it), and while the worker is away a call gets "mail service reloading or starting" as an ordinary tool error. `mail` is the worker: `mail/launch.py` runs as root: checks that `/data/.openclaw-mail` is the package's (owner root or the uid main passes, never node), sets it to `root:openclaw-mail 0710` and `state/` to `openclaw-mail 0700`, runs `rbw sync` and `getcred EMAIL_PASS` as node (or reads the manual password), then drops to `openclaw-mail` and execs `mail/mailservice.py` with settings and password on stdin. No password file, nothing privileged left running; node gets `Permission denied` on the service's `/proc/<pid>/environ` and memory.
+  - MCP (streamable HTTP, JSON responses, Python standard library only, `mail/mcp.py`) on `127.0.0.1:18805/mcp`, registered as `mcp.servers.mail` → tools `mail__*`: `status`, `folders`, `list`, `search`, `read`, `attachments`, `attachment_text`, `save_attachments`, `mark_read`, `flag`, `move`, `archive`, `draft`, `send`. Reading uses `BODY.PEEK` (nothing is marked read) and returns plain text only: HTML is converted with hidden text removed (display:none, visibility, zero size or opacity, text coloured like its background, `hidden`, mso-hide), invisible characters stripped, nothing fetched, size-capped, wrapped in randomly tagged `UNTRUSTED` markers. Each message carries the receiving server's SPF/DKIM/DMARC result (for Gmail only the `mx.google.com` Authentication-Results header counts), `from_verified`, warnings (Reply-To/Return-Path domain, display-name spoofing) and heuristic flags. No delete; moves to Trash/Spam are refused; drafts are appended to Drafts; `send` is refused (Drafts only in this version). Attachment files stay in the mailbox; `attachment_text` extracts text (PDF via pypdfium2, .docx, text, HTML, attached mail); `save_attachments` copies files to `workspace/mail-inbox/<date>-<subject>/` only for a Trusted Sender with a verified sender. Rate limit 120 calls a minute. Activity log (no bodies): `/data/.openclaw-mail/state/activity.jsonl`.
+  - **Password refused:** an IMAP login refused by the server (not a network error) makes the worker record a salted fingerprint of that password and exit; StartOS restarts the `mail` daemon and the launcher fetches the password again. If it is the same one, the service does not log in: it waits (state `refused`), checks Vaultwarden again every 10 minutes, and logs in only with a different password. The health line says so; one StartOS notification and one ntfy message are sent. Vaultwarden unreachable: state `unavailable`, retried every 2 minutes.
+  - **Email agent** `agents.entries.email`, rewritten at every start: `tools.profile: full` + `allow: ["mail__*"]` + a deny list of every other group (runtime, fs, web, memory, sessions, messaging, automation, ui, nodes, media, agents) and `gateway`, `cron`, `openclaw`, `browser`, `transcripts`, `tts`; `codeMode` off; `elevated` off; no skills; spawns nobody. Every other agent gets `mail__*` in its deny list. Workspace `workspace/workspaces/email`: `AGENTS.md` (package rules, report format, trusted senders, extra instructions; rewritten) plus `SOUL.md`/`IDENTITY.md` (created once, the user's). With a second agent the fleet is multi-agent, so `agents.defaults.systemAgent.agentId` and `heartbeat.agentId` are set to `main` and `agents.ownership` to `explicit` where unset.
+  - **The main agent asks the email agent with `sessions_send`** (skill `email`; it first resets `agent:email:main` with the `sessions` tool so every job starts empty), never `sessions_spawn`: OpenClaw passes a spawner's denied tools to the spawned child, so a spawned email agent would have no mail tools. The report comes back as JSON (`messages[{id, from, from_verified, subject, date, summary, suggested_action, flags}]`, `actions_taken`, `notes`) and the skill treats it as data. Configure Agents and the `agents` skill refuse to change the email agent, to give anyone `mail__*`, or to make it spawnable.
+  - The gateway environment has no mail settings and no password pointer (only `EMAIL_MODE`, `EMAIL_ADDRESS`); himalaya is no longer in the image. Known soft spot: the MCP port is reachable from inside the container, so a deliberately misbehaving main agent with a shell could call it; the service applies its rules to every caller.
+- *Google account (Gmail, Calendar, Drive)* uses `gog`, unchanged and **not isolated**: the main agent uses it directly. The OAuth client and the sign-in token (made once with `gog auth add` on a computer with a browser, then `gog auth tokens export`) are either fetched from Vaultwarden item `google` (fields `client_json`, `token_json`) by the `google-sign-in` oneshot at every start, or pasted once. gog keeps them in an encrypted file keyring under `/data/.openclaw/gog`; the keyring password is generated once (`/data/.startos/gog-keyring-password`). Skill: `google`.
+- OpenClaw's own bundled `himalaya` and `gog` skills stay disabled (`skills.entries`), as does its built-in Gmail/IMAP watching (never configured by the package): it would feed mail to an agent outside this design.
 
 ### Configure Webchat
 
@@ -309,9 +327,10 @@ Three, two of them blocking (a SimpleX plugin task may also appear when the bund
 | `webchat`       | "Webchat"                | Its `/healthz`, while enabled                                  |
 | `vault`         | "Vault (rbw)"            | An unlock and a sync every 5 minutes, while Vaultwarden is enabled |
 | `ext-<service>` | The service's name       | Reachability every minute, for each enabled external service   |
-| `ext-email`     | "Email (IMAP)" / "Google account" | IMAP server reachable; for Google, a stored sign-in for the address (local, no network) |
+| `mail`          | "Mail Service"           | The mail service's `/healthz`: signed in, password refused (since when, why), Vaultwarden unavailable, server unreachable |
+| `ext-email`     | "Google account"         | Google account only: a stored sign-in for the address (local, no network) |
 
-The external checks test reachability only; the `health` skill (`/opt/skills/health/health.py`) also tests the n8n, Trilium and Gitea API keys (Gitea: names the token's account), the IMAP and SMTP logins, the Google sign-in (Google refreshes the token) and memory search. **None of them says anything about the model**: a wrong API key, a rate limit, or a local backend that is running but not loaded all show green checks and an error in the chat.
+The external checks test reachability only; the `health` skill (`/opt/skills/health/health.py`) also tests the n8n, Trilium and Gitea API keys (Gitea: names the token's account), the mail service's state plus the isolation in `openclaw.json` (email agent limited to `mail__*`, every other agent denied it), the Google sign-in (Google refreshes the token) and memory search. **None of them says anything about the model**: a wrong API key, a rate limit, or a local backend that is running but not loaded all show green checks and an error in the chat.
 
 ## Backups and Restore
 
@@ -335,6 +354,7 @@ A restored instance comes back configured and remembers what it knew. The `start
 8. **The heartbeat prompt is rewritten on every init**; edits to it do not survive. Put your own heartbeat checklist in the monitor scratch (`openclaw cron scratch`), which is appended to the prompt and left alone.
 9. **Spawned agents' final replies are capped at 4,096 characters** by OpenClaw.
 10. **Separate from the community package**: a different package id, so there is no update path between the two. Moving from one to the other is a fresh install; StartOS backups restore only into the same package id.
+11. **Email isolation covers Gmail (app password) and IMAP only.** The Google account option still gives the main agent direct access. The mail service's port is reachable from inside the container, so a main agent deliberately misusing its shell could call it (the service's own rules still apply), and the Vaultwarden master password in `rbw/.credentials` is readable by agents with a shell (separate hardening item).
 
 ---
 
@@ -342,12 +362,12 @@ A restored instance comes back configured and remembers what it knew. The `start
 
 ```yaml
 package_id: openclaw-extrabutter # title: OpenClaw Extra Butter
-image: built from ./Dockerfile # also installs pinned start-cli, rbw, himalaya and gog binaries
+image: built from ./Dockerfile # also installs pinned start-cli, rbw and gog binaries, and the mail service (/opt/openclaw-mail)
 architectures:
   - x86_64
   - aarch64
 subcontainers:
-  - openclaw-sub # gateway + webchat run as `node` (HOME=/data); oneshots that chown run as root
+  - openclaw-sub # gateway + webchat run as `node` (HOME=/data); the mail service as `openclaw-mail`; oneshots that chown run as root
   - qdrant-sub
 volumes:
   main: /data # HOME and OPENCLAW_STATE_DIR both live here
@@ -360,7 +380,7 @@ file_models:
   - .startos/embeddings.json
   - .startos/config.yaml # start-cli host, rewritten each start
   - simplex.json # whether SimpleX file exchange is enabled
-  - .openclaw/himalaya/config.toml # email (IMAP choices), rewritten each start; no password in it
+  - .openclaw-mail/settings.json # Configure Email; root-only, in a folder node cannot enter
 helpers_in_container:
   - gateway-env CMD # run CMD with the running gateway's environment, as node
   - refresh-snapshot # rewrite MEMORY.md's server snapshot
@@ -375,7 +395,6 @@ startos_managed_env_vars:
   - GEMINI_API_KEY
   - XAI_API_KEY
   - EMAIL_MODE / EMAIL_ADDRESS # while Email is enabled
-  - HIMALAYA_CONFIG, EMAIL_PASS or EMAIL_PASS_FROM_VAULT # IMAP choices
   - GOG_HOME, GOG_KEYRING_BACKEND, GOG_KEYRING_PASSWORD, GOG_ACCOUNT # Google account
 dependencies:
   - ollama # optional, kind: running + primary health check, only while selected
@@ -390,6 +409,7 @@ actions:
   - set-password
   - configure-api-credentials
   - configure-agents
+  - configure-email # mailbox, email agent model, trusted senders
   - configure-external-services
   - configure-webchat
   - connect-telegram
@@ -409,5 +429,6 @@ health_checks:
   - webchat # while enabled
   - vault # while Vaultwarden is enabled
   - ext-* # one per enabled external service, reachability only
-  - ext-email # IMAP server reachable, or a stored Google sign-in for the address
+  - mail # daemon readiness: the mail service's own state (Gmail/IMAP)
+  - ext-email # Google account only: a stored sign-in for the address
 ```

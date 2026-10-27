@@ -86,31 +86,37 @@ RUN ARCH="$(dpkg --print-architecture)" && \
         echo "Unsupported arch: $ARCH" && exit 1; \
     fi
 
-# Email (Configure External Services → Email). Both are static binaries,
-# sha256-pinned per architecture (see UPDATING.md):
-# - himalaya: IMAP/SMTP CLI (Gmail with an app password, or any provider).
-#   Upstream publishes no checksum file; the pins are the release tarballs.
-# - gog: Google Workspace CLI (Gmail, Calendar, Drive …) for the Google
-#   account option; the pins match upstream's checksums.txt.
-ARG HIMALAYA_VERSION=2.2.1
+# Google account email option (Configure Email): gog, the Google Workspace
+# CLI (Gmail, Calendar, Drive …). Static binary, sha256-pinned per
+# architecture; the pins match upstream's checksums.txt (see UPDATING.md).
+# Gmail and IMAP need no client program: the mail service below talks IMAP
+# itself (Python standard library).
 ARG GOG_VERSION=0.44.0
 RUN ARCH="$(dpkg --print-architecture)" && \
     case "$ARCH" in \
-      amd64) HTARGET=x86_64-linux; HSHA=5c5ba2724c162f82d0a0c71b6c03224ed44f8bef7b14ace5da0635d3af2665a0; \
-             GSHA=9e40b7e51be9162e5ab92d255376257e4d594e9e64dc360fffccd85ba4e1c0c0 ;; \
-      arm64) HTARGET=aarch64-linux; HSHA=1dc21c3dd6d948929e22e5cae49b9d0b3b30ff88fafd4493fd4460c6252e9d90; \
-             GSHA=0346149cac6630996c69911ac7366c3c1a36d8835b23e985e90c3f8d25c7ab65 ;; \
+      amd64) GSHA=9e40b7e51be9162e5ab92d255376257e4d594e9e64dc360fffccd85ba4e1c0c0 ;; \
+      arm64) GSHA=0346149cac6630996c69911ac7366c3c1a36d8835b23e985e90c3f8d25c7ab65 ;; \
       *) echo "Unsupported arch: $ARCH" && exit 1 ;; \
     esac && \
-    curl -fsSL "https://github.com/pimalaya/himalaya/releases/download/v${HIMALAYA_VERSION}/himalaya.${HTARGET}.tgz" -o /tmp/himalaya.tgz && \
-    echo "$HSHA  /tmp/himalaya.tgz" | sha256sum -c - && \
-    tar -xzf /tmp/himalaya.tgz -C /usr/local/bin himalaya && \
     curl -fsSL "https://github.com/openclaw/gogcli/releases/download/v${GOG_VERSION}/gogcli_${GOG_VERSION}_linux_${ARCH}.tar.gz" -o /tmp/gog.tgz && \
     echo "$GSHA  /tmp/gog.tgz" | sha256sum -c - && \
     tar -xzf /tmp/gog.tgz -C /usr/local/bin ./gog && \
-    chmod 755 /usr/local/bin/himalaya /usr/local/bin/gog && \
-    rm /tmp/himalaya.tgz /tmp/gog.tgz && \
-    himalaya --version && gog --version
+    chmod 755 /usr/local/bin/gog && \
+    rm /tmp/gog.tgz && \
+    gog --version
+
+# Mail service (Configure Email → Gmail or IMAP): its own user, which the
+# agents (user node) cannot become, and code only root can change. Two
+# daemons start as root and become openclaw-mail: front.py (the MCP
+# endpoint, no secrets) and launch.py → mailservice.py (the mailbox side).
+# See startos/mailService.ts. agent/ holds the email agent's starting
+# instructions.
+RUN useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin openclaw-mail
+COPY mail/launch.py mail/front.py mail/mcp.py mail/mailservice.py mail/imapmail.py mail/message.py mail/sanitize.py mail/extract.py /opt/openclaw-mail/
+COPY mail/agent/AGENTS.md mail/agent/SOUL.md mail/agent/IDENTITY.md /opt/openclaw-mail/agent/
+RUN chmod 755 /opt/openclaw-mail /opt/openclaw-mail/agent && chmod 644 /opt/openclaw-mail/*.py /opt/openclaw-mail/agent/* \
+    && python3 -m compileall -q /opt/openclaw-mail \
+    && cd /tmp && python3 -I -c 'import sys; sys.path.insert(0, "/opt/openclaw-mail"); import mailservice, launch, front'
 
 # Stage skill files (loaded via extraDirs in openclaw.json)
 # start-cli skill (always loaded)

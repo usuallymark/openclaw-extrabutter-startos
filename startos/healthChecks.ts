@@ -1,7 +1,8 @@
-import type { SubContainer } from '@start9labs/start-sdk'
+import type { SubContainer, T } from '@start9labs/start-sdk'
 import { sdk } from './sdk'
 import { RBW_ENV, VAULT_PROBE_SCRIPT } from './vault'
-import { EmailConfig, googleSignInStatus, mailServers } from './email'
+import { EmailConfig, googleSignInStatus, usesMailService } from './email'
+import { MAIL_URL } from './mailService'
 import { LocalKey, notInstalledMessage } from './localServices'
 
 // Health checks for the vault and external services.
@@ -177,7 +178,6 @@ export type ExtConfig =
       crawl4ai?: { enabled?: boolean; url?: string }
       ntfy?: { enabled?: boolean; url?: string }
       gitea?: { enabled?: boolean; url?: string }
-      email?: EmailConfig
     }
   | undefined
   | null
@@ -198,6 +198,7 @@ export type HealthTarget =
   | { key: string; label: string; kind: 'tcp'; host: string; port: number }
   | { key: string; label: string; kind: 'vault' }
   | { key: string; label: string; kind: 'google'; address: string }
+  | { key: string; label: string; kind: 'mail'; url: string }
   | { key: string; label: string; kind: 'missing'; message: string }
 
 // Health path per HTTP service, appended to the configured URL.
@@ -227,6 +228,7 @@ type HttpKey = keyof typeof HTTP_PATHS
 export function externalTargets(
   ext: ExtConfig,
   missing: Partial<Record<LocalKey, string>> = {},
+  email?: EmailConfig,
 ): HealthTarget[] {
   const out: HealthTarget[] = []
   const push = (key: HttpKey) => {
@@ -263,17 +265,15 @@ export function externalTargets(
   push('crawl4ai')
   push('ntfy')
   push('gitea')
-  // Email: the IMAP server for the himalaya choices (reachability only, as
-  // for every other service); the stored sign-in for the Google account.
-  const email = ext?.email
-  const servers = mailServers(email)
-  if (servers) {
+  // Email (Configure Email): the mail service's own state for the Gmail
+  // and IMAP choices (in StartOS it is the "Mail Service" daemon line);
+  // the stored sign-in for the Google account.
+  if (usesMailService(email)) {
     out.push({
       key: 'email',
-      label: 'Email (IMAP)',
-      kind: 'tcp',
-      host: servers.imap.host,
-      port: servers.imap.port,
+      label: 'Mail Service',
+      kind: 'mail',
+      url: `${MAIL_URL}/healthz`,
     })
   } else if (email?.mode === 'google' && email.address) {
     out.push({
@@ -301,6 +301,10 @@ function specFor(t: HealthTarget | undefined): CheckSpec {
   }
   if (t.kind === 'google') {
     return { display: t.label, fn: (sub) => probeGoogle(sub, t.address) }
+  }
+  if (t.kind === 'mail') {
+    // Shown by the mail daemon's own readiness line instead.
+    return { display: null, fn: async () => DISABLED }
   }
   if (t.kind === 'missing') {
     const message = t.message
@@ -330,8 +334,11 @@ async function probeGoogle(sub: Sub, address: string): Promise<Result> {
 export function externalChecks(
   ext: ExtConfig,
   missing: Partial<Record<LocalKey, string>> = {},
+  email?: EmailConfig,
 ) {
-  const byKey = new Map(externalTargets(ext, missing).map((t) => [t.key, t]))
+  const byKey = new Map(
+    externalTargets(ext, missing, email).map((t) => [t.key, t]),
+  )
   return {
     vaultwarden: specFor(byKey.get('vaultwarden')),
     ollama: specFor(byKey.get('ollama')),
@@ -344,4 +351,74 @@ export function externalChecks(
     nas: specFor(byKey.get('nas')),
     email: specFor(byKey.get('email')),
   } satisfies Record<string, CheckSpec>
+}
+
+// ── Mail service ────────────────────────────────────────────────────────────
+
+// The `since` of the last refused-password state already announced, so a
+// refusal is announced once (StartOS notification + ntfy), not every check.
+let announcedRefusal: string | null = null
+
+/**
+ * The mail daemon's readiness/health line: the service's own /healthz
+ * (state, reason). No credentials involved.
+ */
+export async function probeMail(
+  effects: T.Effects,
+  sub: Sub,
+): Promise<Result | { result: 'starting'; message: string }> {
+  let h: any
+  try {
+    const res = await sub.exec(
+      ['curl', '-sS', '--max-time', '5', `${MAIL_URL}/healthz`],
+      { user: 'node', timeout: 15_000 },
+    )
+    if (res.exitCode !== 0) {
+      return { result: 'starting', message: 'Mail service starting' }
+    }
+    h = JSON.parse(String(res.stdout))
+  } catch {
+    return { result: 'starting', message: 'Mail service starting' }
+  }
+  const addr = h.address ? ` (${h.address})` : ''
+  switch (h.state) {
+    case 'ok':
+      announcedRefusal = null
+      return {
+        result: 'success',
+        message: `Signed in${addr}; reading and drafts only, nothing is sent`,
+      }
+    case 'starting':
+    case 'reloading':
+      return {
+        result: 'starting',
+        message: `Mail service ${h.state}${h.reason ? `: ${h.reason}` : ''}`,
+      }
+    case 'refused':
+      if (announcedRefusal !== h.since) {
+        announcedRefusal = h.since
+        await announceRefusal(effects, sub, String(h.reason ?? '')).catch(
+          () => {},
+        )
+      }
+      return { result: 'failure', message: `Mail${addr}: ${h.reason}` }
+    default:
+      return {
+        result: 'failure',
+        message: `Mail${addr}: ${h.reason || h.state}${h.note ? ` (${h.note})` : ''}`,
+      }
+  }
+}
+
+async function announceRefusal(effects: T.Effects, sub: Sub, reason: string) {
+  await sdk.notification.create(effects, {
+    level: 'warning',
+    title: 'Mailbox refused the password',
+    message: `${reason}. The mail service will not try that password again; it checks for a new one every 10 minutes.`,
+  })
+  // ntfy, when configured (notify reads its settings from the gateway).
+  await sub.exec(
+    ['notify', '--title', 'OpenClaw mail', '--tags', 'warning', reason],
+    { user: 'node', env: { HOME: '/data' }, timeout: 30_000 },
+  )
 }

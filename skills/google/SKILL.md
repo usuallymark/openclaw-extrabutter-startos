@@ -5,13 +5,13 @@ description: "Use this skill for the user's Google account through gog: Gmail (r
 
 # google — Gmail, Calendar and Drive (gog)
 
-The Google account is set up in Configure External Services → Email →
-Google account. `gog` is signed in already: the account is `$GOG_ACCOUNT`,
+The Google account is set up in Configure Email → Account → Google
+account. `gog` is signed in already: the account is `$GOG_ACCOUNT`,
 and its sign-in is stored encrypted on this server. You never handle
 tokens or passwords: never run `gog auth add`, `gog auth credentials`,
 `gog auth tokens …` or `gog auth keyring`, and never print the
 environment. If a command says the sign-in is missing or expired, tell the
-user to renew it in Configure External Services (see "If it fails").
+user to renew it in Configure Email (see "If it fails").
 
 What the sign-in may do was chosen when it was made (`--services`, e.g.
 gmail, calendar, drive). `gog auth list` shows which services it covers.
@@ -86,8 +86,8 @@ gog drive upload ./report.pdf --parent <folderId>
 
 - "no token" / "not signed in" / `invalid_grant`: the sign-in is missing,
   expired or was revoked. The user renews it: sign in again on their
-  computer, export the token, and paste it in Configure External Services →
-  Email (the instructions there show the commands). Sign-ins from a Google
+  computer, export the token, and paste it in Configure Email →
+  Account (the instructions there show the commands). Sign-ins from a Google
   Cloud app still in "Testing" expire after 7 days; publishing the app
   ("In production") avoids that.
 - "insufficient scopes" / 403 for one service: the sign-in did not include

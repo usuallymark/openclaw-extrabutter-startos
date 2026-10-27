@@ -6,8 +6,9 @@ vault and every enabled external service, with the same URLs (the package
 passes them in OPENCLAW_HEALTH_TARGETS). Adds disk and memory. Read-only and
 prints no secrets. For services with an API key (n8n, Trilium, Gitea) it also makes
 one authenticated read request to that service, so a wrong or missing key
-shows up here; the key is sent only to that service. Email logs in to the
-IMAP and SMTP servers (himalaya account check); a Google account asks
+shows up here; the key is sent only to that service. Email (Gmail/IMAP)
+reports the mail service's own state (signed in, password refused …) and
+checks that only the email agent has the mail tools; a Google account asks
 Google to refresh its stored sign-in.
 
     python3 /opt/skills/health/health.py          # short text report
@@ -21,6 +22,8 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 ENV_VAR = 'OPENCLAW_HEALTH_TARGETS'
@@ -245,47 +248,60 @@ def _as_node(cmd, env, keys):
     return cmd
 
 
-def check_email_login(t, msg):
-    """IMAP server reachable: also log in to IMAP and SMTP (himalaya account
-    check). himalaya fetches the password through getcred; it is never shown."""
-    keys = ['HIMALAYA_CONFIG', 'EMAIL_PASS', 'EMAIL_PASS_FROM_VAULT',
-            'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR']
-    env = _service_env(keys)
-    env.setdefault('HIMALAYA_CONFIG', '/data/.openclaw/himalaya/config.toml')
+def _boundary():
+    """Problems with the mail isolation in openclaw.json ([] when intact)."""
+    try:
+        with open('/data/.openclaw/openclaw.json') as f:
+            cfg = json.load(f)
+    except (OSError, ValueError) as e:
+        return [f'openclaw.json could not be read ({e.__class__.__name__})']
+    problems = []
+    server = ((cfg.get('mcp') or {}).get('servers') or {}).get('mail') or {}
+    if server.get('enabled') is False:
+        problems.append('the mail MCP server is switched off in openclaw.json')
+    entries = (cfg.get('agents') or {}).get('entries') or {}
+    email = entries.get('email')
+    if not email:
+        problems.append('the email agent is missing from openclaw.json')
+    else:
+        tools = email.get('tools') or {}
+        if tools.get('allow') != ['mail__*']:
+            problems.append(f'the email agent may use {tools.get("allow")}, not only mail__*')
+        for g in ('group:runtime', 'group:fs', 'group:web', 'group:sessions', 'group:messaging'):
+            if g not in (tools.get('deny') or []):
+                problems.append(f'the email agent does not have {g} denied')
+        if (tools.get('codeMode') or {}).get('enabled') is not False:
+            problems.append('code mode is not switched off for the email agent')
+    for aid, e in entries.items():
+        if aid == 'email' or not isinstance(e, dict):
+            continue
+        if 'mail__*' not in ((e.get('tools') or {}).get('deny') or []):
+            problems.append(f'agent {aid} does not have mail__* denied')
+    return problems
 
-    def account_check(extra, timeout):
-        """{'imap': 'OK'|'FAIL (…)', 'smtp': …}, or a string saying why it could not run."""
-        try:
-            r = subprocess.run(_as_node(['himalaya', 'account', 'check'] + extra, env, keys),
-                               env=env, capture_output=True, text=True, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            return f'no answer within {timeout} s'
-        except FileNotFoundError as e:
-            return f'could not run ({e.__class__.__name__})'
-        # `account check` exits 0 even when a backend fails; read its lines.
-        status = {}
-        for line in (r.stdout + r.stderr).splitlines():
-            line = line.strip()
-            for proto in ('imap', 'smtp'):
-                if line.startswith(proto + ':'):
-                    status[proto] = line.split(':', 1)[1].strip()
-        return status or (first_line(r.stderr) or first_line(r.stdout) or f'exit {r.returncode}')
 
-    # IMAP alone first: quick, and a wrong password fails here (both servers
-    # share it). Some SMTP servers keep the connection open after refusing a
-    # login, so SMTP is checked only after IMAP passed, with its own limit.
-    imap = account_check(['-b', 'imap'], 30)
-    if isinstance(imap, str):
-        return False, f'{msg}, but the IMAP login check failed: {imap}'
-    if not imap.get('imap', '').startswith('OK'):
-        return False, f'{msg}, but: IMAP {imap.get("imap", "?")}'
-    full = account_check([], 45)
-    if isinstance(full, str):
-        return False, f'{msg}; IMAP login OK, but the SMTP check failed: {full}'
-    smtp = full.get('smtp', '')
-    if smtp.startswith('OK'):
-        return True, f'{msg}; IMAP and SMTP logins OK'
-    return False, f'{msg}; IMAP login OK, but: SMTP {smtp or "not checked"}'
+def check_mail(t):
+    """The mail service's own state, and the isolation around it."""
+    try:
+        with urllib.request.urlopen(t['url'], timeout=8) as r:
+            h = json.loads(r.read() or b'{}')
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return False, f'the mail service does not answer ({e.__class__.__name__}); it may be starting or restarting'
+    state, reason = h.get('state'), h.get('reason') or ''
+    addr = h.get('address') or ''
+    if state == 'ok':
+        msg = f'signed in as {addr}; reading and drafts only (nothing is sent)'
+        ok = True
+    elif state == 'refused':
+        msg, ok = reason or 'the mailbox refused the password', False
+    else:
+        msg, ok = f'{state}: {reason}' if reason else str(state), False
+    if h.get('note'):
+        msg += f' ({h["note"]})'
+    problems = _boundary()
+    if problems:
+        return False, msg + '; ISOLATION PROBLEM: ' + '; '.join(problems) + ' (a restart of OpenClaw rewrites it)'
+    return ok, msg + '; email agent limited to the mail tools, every other agent denied them'
 
 
 def check_google(t):
@@ -309,13 +325,13 @@ def check_google(t):
     acct = next((a for a in accounts if str(a.get('email', '')).lower() == want), None)
     if not acct:
         return False, (f'not signed in as {t.get("address")}: add the OAuth client and sign-in token in '
-                       'Configure External Services → Email')
+                       'Configure Email')
     services = ', '.join(acct.get('services') or [])
     if acct.get('valid'):
         return True, (f'signed in as {acct["email"]}' + (f' ({services})' if services else '')
                       + ', token accepted by Google')
     return False, (f'the sign-in for {acct["email"]} was refused: {first_line(str(acct.get("error", "")))}. '
-                   'Renew it in Configure External Services → Email')
+                   'Renew it in Configure Email')
 
 
 def check_missing(t):
@@ -324,7 +340,7 @@ def check_missing(t):
 
 
 CHECKS = {'http': check_http, 'tcp': check_tcp, 'vault': check_vault, 'memory': check_memory,
-          'google': check_google, 'missing': check_missing}
+          'google': check_google, 'mail': check_mail, 'missing': check_missing}
 
 
 def run_check(t):
@@ -335,8 +351,6 @@ def run_check(t):
             authed = check_auth(t, msg)
             if authed:
                 ok, msg = authed
-        if ok and t['kind'] == 'tcp' and t['key'] == 'email':
-            ok, msg = check_email_login(t, msg)
     except Exception as e:  # never crash the report over one check
         ok, msg = False, f'check error: {e.__class__.__name__}: {first_line(str(e))}'
     return {'key': t['key'], 'label': t['label'], 'ok': ok, 'message': msg,

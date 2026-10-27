@@ -26,8 +26,12 @@ same addresses, so its answer matches what the user sees there:
   n8n, Trilium, SearXNG, Crawl4AI, ntfy. For **n8n and Trilium** it also
   makes one authenticated read request, so it says whether the API key is
   accepted, rejected or not configured (Trilium also reports its version).
-- **Email (IMAP)**: the IMAP server answers, and the IMAP and SMTP logins
-  work (a wrong or missing password shows here). **Google account**: the
+- **Mail Service** (Gmail or IMAP in Configure Email): whether the mail
+  service is signed in, or why not (password refused since when,
+  Vaultwarden unavailable, server unreachable), and whether the isolation
+  holds (only the email agent has the mail tools). A refused password is
+  fixed in Vaultwarden item "email" or Configure Email; the service picks
+  it up within 10 minutes. **Google account**: the
   stored sign-in is valid (Google is asked to refresh it), and which
   services it covers.
 - **PDF/OCR tools**: Tesseract with English, for the pdf skill

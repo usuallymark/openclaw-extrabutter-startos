@@ -37,12 +37,20 @@ import {
   requestSimplexPluginUpgrade,
 } from './actions/configureSimplex'
 import {
+  EmailConfig,
   GOOGLE_SIGN_IN_SCRIPT,
   emailEnvAndSkill,
   googleFromVault,
   googleSignInEnv,
-  writeHimalayaConfig,
+  usesMailService,
 } from './email'
+import { emailSettingsJson } from './fileModels/emailSettings.json'
+import {
+  MAIL_PORT,
+  applyMailConfig,
+  mailRootOwner,
+  writeEmailAgentWorkspace,
+} from './mailService'
 import {
   RBW_ENV,
   RBW_CONFIG,
@@ -64,6 +72,7 @@ import {
   type HealthTarget,
   externalTrigger,
   probeHttp,
+  probeMail,
   probeVault,
   vaultTrigger,
 } from './healthChecks'
@@ -114,6 +123,16 @@ else
   echo "state-migrate: openclaw doctor failed (exit $?); retrying at the next start"
 fi
 exit 0
+`
+
+// chown -R node:node /data, skipping the mail service's folder.
+const CHOWN_SCRIPT = `
+chown node:node /data
+for p in /data/* /data/.[!.]* /data/..?*; do
+  [ -e "$p" ] || [ -L "$p" ] || continue
+  [ "$p" = /data/.openclaw-mail ] && continue
+  chown -R node:node "$p"
+done
 `
 
 export const main = sdk.setupMain(async ({ effects }) => {
@@ -274,12 +293,22 @@ export const main = sdk.setupMain(async ({ effects }) => {
     giteaGit = { url: ext.gitea.url, aliases: addrs.aliases }
   }
 
-  // Email (Configure External Services → Email): himalaya for the IMAP
-  // choices, gog for the Google account. Only one email skill loads.
-  const email = await emailEnvAndSkill(ext?.email)
+  // Email (Configure Email): the mail service and the email agent for the
+  // Gmail and IMAP choices, gog for the Google account. The main agent gets
+  // one email skill (for the mail service: how to ask the email agent).
+  const mailSettings = await emailSettingsJson.read().const(effects)
+  const emailAcct = (mailSettings?.account ?? undefined) as
+    | EmailConfig
+    | undefined
+  const mailOn = usesMailService(emailAcct)
+  const email = await emailEnvAndSkill(emailAcct)
   Object.assign(externalEnv, email.env)
   if (email.skill) enabledSkills.push(email.skill)
-  await writeHimalayaConfig(ext?.email)
+  // mcp.servers.mail, the email agent, and mail__* denied for every other
+  // agent (mailService.ts). Rewritten at every start.
+  await applyMailConfig(effects, mailSettings)
+  if (mailOn && mailSettings) await writeEmailAgentWorkspace(mailSettings)
+  const mailOwner = mailOn ? await mailRootOwner() : null
 
   // Webchat (Configure Webchat). Reactive: main re-runs when it changes.
   const webchatEnabled =
@@ -359,7 +388,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
             : { key: 'vault', label: 'Vault (rbw)', kind: 'vault' as const },
         ]
       : []),
-    ...externalTargets(ext, missingLocal),
+    ...externalTargets(ext, missingLocal, emailAcct),
   ]
 
   // Load only the skills for enabled services. OpenClaw's own bundled
@@ -421,7 +450,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
     'qdrant-sub',
   )
 
-  const extChecks = externalChecks(ext, missingLocal)
+  const extChecks = externalChecks(ext, missingLocal, emailAcct)
   const vaultMissing = missingLocal.vaultwarden
   const vaultCheck = vw?.enabled
     ? vaultMissing
@@ -473,10 +502,12 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: [],
     })
+    // Everything in /data belongs to the gateway user, except the mail
+    // service's folder (/data/.openclaw-mail: root and openclaw-mail only).
     .addOneshot('chown', {
       subcontainer: openclawSub,
       exec: {
-        command: ['chown', '-R', 'node:node', '/data'],
+        command: ['sh', '-c', CHOWN_SCRIPT],
         user: 'root',
       },
       requires: [],
@@ -676,16 +707,16 @@ export const main = sdk.setupMain(async ({ effects }) => {
     .addOneshot('google-sign-in', {
       subcontainer: openclawSub,
       exec: {
-        command: googleFromVault(ext?.email)
+        command: googleFromVault(emailAcct)
           ? ['sh', '-c', GOOGLE_SIGN_IN_SCRIPT]
           : ['true'],
         user: 'node',
         env: {
           ...RBW_ENV, // includes HOME=/data and a PATH with getcred and gog
-          ...(googleFromVault(ext?.email)
+          ...(googleFromVault(emailAcct)
             ? {
                 ...email.env,
-                ...googleSignInEnv(ext!.email!.address!),
+                ...googleSignInEnv(emailAcct!.address!),
               }
             : {}),
         },
@@ -905,9 +936,54 @@ export const main = sdk.setupMain(async ({ effects }) => {
       requires: ['network-setup'],
     })
 
-  if (!webchatEnabled) return daemons
+  // The mail service (mailService.ts, mail/). Two daemons, independent of
+  // the gateway (neither waits for the other):
+  // - mail-front: the MCP endpoint OpenClaw connects to. No settings, no
+  //   password, never restarted with the mailbox side: OpenClaw stops using
+  //   an MCP server for up to 10 minutes after a failed connection.
+  // - mail: launch.py fetches the password and becomes the worker; it exits
+  //   (and StartOS restarts it) when the mailbox refuses the password.
+  const withMail = mailOn
+    ? daemons
+        .addDaemon('mail-front', {
+          subcontainer: openclawSub,
+          exec: {
+            command: ['python3', '-I', '/opt/openclaw-mail/front.py'],
+            user: 'root',
+            env: { MAIL_PORT: String(MAIL_PORT) },
+          },
+          ready: {
+            display: null,
+            fn: () =>
+              sdk.healthCheck.checkPortListening(effects, MAIL_PORT, {
+                successMessage: 'Mail endpoint listening',
+                errorMessage: 'Mail endpoint not listening',
+              }),
+            gracePeriod: 30_000,
+          },
+          requires: ['chown'],
+        })
+        .addDaemon('mail', {
+          subcontainer: openclawSub,
+          exec: {
+            command: ['python3', '-I', '/opt/openclaw-mail/launch.py'],
+            user: 'root',
+            env: {
+              MAIL_ROOT_UID: mailOwner === null ? '' : String(mailOwner),
+            },
+          },
+          ready: {
+            display: 'Mail Service',
+            fn: () => probeMail(effects, openclawSub),
+            gracePeriod: 180_000,
+          },
+          requires: ['chown', 'network-setup', 'setup-vault', 'mail-front'],
+        })
+    : daemons
 
-  return daemons.addDaemon('webchat', {
+  if (!webchatEnabled) return withMail
+
+  return (withMail as typeof daemons).addDaemon('webchat', {
     subcontainer: openclawSub,
     exec: {
       command: ['node', '/opt/webchat/server.mjs'],

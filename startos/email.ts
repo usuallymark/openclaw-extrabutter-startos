@@ -5,12 +5,13 @@ import { dirname } from 'node:path'
 import { sdk } from './sdk'
 import { inOpenclawContainer } from './gatewayContainer'
 
-// Email, configured under Configure External Services → Email.
+// Email, configured in Configure Email (since 2026.10.1:8; before that, in
+// Configure External Services → Email).
 //
-// - "gmail" and "imap" use himalaya (IMAP/SMTP). Its config is written by
-//   main at every start from external-services.json; the password is never in
-//   it: himalaya runs `getcred EMAIL_PASS`, which reads a manual value from
-//   the environment or fetches Vaultwarden item "email", field "password".
+// - "gmail" and "imap" go through the mail service (mail/ in this repo,
+//   startos/mailService.ts): its own Linux user, the only process that
+//   talks to the mailbox, reached by the email agent as MCP server "mail".
+//   The gateway has neither the mail settings nor the password pointer.
 // - "google" uses gog with an OAuth sign-in made on another computer
 //   (OAuth client JSON + exported token). Either kept in Vaultwarden (item
 //   "google", fields client_json and token_json; fetched and loaded into
@@ -71,11 +72,6 @@ export function googleSignInEnv(address: string) {
   }
 }
 
-export const HIMALAYA_CONFIG = '/data/.openclaw/himalaya/config.toml'
-const himalayaConfigPath = sdk.volumes.main.subpath(
-  '.openclaw/himalaya/config.toml',
-)
-
 export const GOG_HOME = '/data/.openclaw/gog'
 const gogKeyringPasswordPath = sdk.volumes.main.subpath(
   '.startos/gog-keyring-password',
@@ -89,7 +85,7 @@ export const GMAIL_SERVERS = {
   smtp: { host: 'smtp.gmail.com', port: 465, security: 'tls' as const },
 }
 
-/** IMAP/SMTP servers in effect for a himalaya mode, or null. */
+/** IMAP/SMTP servers in effect for the gmail/imap modes, or null. */
 export function mailServers(email: EmailConfig | undefined) {
   if (email?.mode === 'gmail') return GMAIL_SERVERS
   if (email?.mode === 'imap' && email.imap?.host && email.smtp?.host) {
@@ -109,81 +105,9 @@ export function mailServers(email: EmailConfig | undefined) {
   return null
 }
 
-// TOML basic strings share JSON's escapes (\" \\ \n \uXXXX), so JSON.stringify
-// yields a valid TOML string for any input.
-const tomlString = (s: string) => JSON.stringify(s)
-
-function serverEntries(
-  proto: 'imap' | 'smtp',
-  server: { host: string; port: number; security: 'tls' | 'starttls' },
-): string[] {
-  // A bare `host:port` means implicit TLS (imaps/smtps); `imap://` and
-  // `smtp://` are cleartext upgraded with STARTTLS.
-  if (server.security === 'tls') {
-    return [`${proto}.server = ${tomlString(`${server.host}:${server.port}`)}`]
-  }
-  return [
-    `${proto}.server = ${tomlString(`${proto}://${server.host}:${server.port}`)}`,
-    `${proto}.starttls = true`,
-  ]
-}
-
-/** himalaya 2.x config for the gmail/imap modes, or null for other modes. */
-export function renderHimalayaConfig(
-  email: EmailConfig | undefined,
-): string | null {
-  const servers = mailServers(email)
-  if (!servers || !email?.address) return null
-  const login = email.username?.trim() || email.address
-  const lines = [
-    '# Written by OpenClaw Extra Butter at every start from',
-    '# Configure External Services → Email. Edits here are overwritten.',
-    '[accounts.default]',
-    'default = true',
-    `email = ${tomlString(email.address)}`,
-  ]
-  if (email.displayName?.trim()) {
-    lines.push(`display-name = ${tomlString(email.displayName.trim())}`)
-  }
-  // Google shows an app password as four groups of four letters; the spaces
-  // are display only. For Gmail, drop any that were copied with it. A
-  // getcred failure still fails the command (and shows its message).
-  const passwordCommand =
-    email.mode === 'gmail'
-      ? `p=$(getcred EMAIL_PASS) && printf '%s' "$p" | tr -d ' '`
-      : 'getcred EMAIL_PASS'
-  for (const proto of ['imap', 'smtp'] as const) {
-    lines.push(
-      ...serverEntries(proto, servers[proto]),
-      `${proto}.sasl.plain.username = ${tomlString(login)}`,
-      `${proto}.sasl.plain.password.command = ${tomlString(passwordCommand)}`,
-    )
-  }
-  if (email.mode === 'gmail') {
-    // Gmail files sent mail itself; these give the roles IMAP does not report.
-    lines.push(
-      'mailbox.alias.sent = "[Gmail]/Sent Mail"',
-      'mailbox.alias.drafts = "[Gmail]/Drafts"',
-      'mailbox.alias.trash = "[Gmail]/Trash"',
-      'mailbox.alias.junk = "[Gmail]/Spam"',
-      'mailbox.alias.archive = "[Gmail]/All Mail"',
-    )
-  }
-  return lines.join('\n') + '\n'
-}
-
-/** Write (or remove) himalaya's config. Called by main at every start. */
-export async function writeHimalayaConfig(email: EmailConfig | undefined) {
-  const toml = renderHimalayaConfig(email)
-  await mkdir(dirname(himalayaConfigPath), { recursive: true })
-  await writeFile(
-    himalayaConfigPath,
-    toml ?? '# Email (IMAP) is not enabled.\n',
-    {
-      mode: 0o600,
-    },
-  )
-}
+/** True when the mail service (and the email agent) run: gmail or imap. */
+export const usesMailService = (email: EmailConfig | undefined) =>
+  !!email?.address && !!mailServers(email)
 
 /** gog's keyring password: created once, then reused. */
 export async function gogKeyringPassword(): Promise<string> {
@@ -207,22 +131,17 @@ export function gogEnv(address: string | undefined, keyringPassword: string) {
 }
 
 /**
- * Gateway environment and skill dir for the configured email mode. Secrets
- * are not resolved here, except gog's keyring password (as for provider keys).
+ * Gateway environment and skill dir for the configured email mode. For the
+ * mail-service modes the gateway gets no mail settings or password pointer
+ * at all: only the address, for the main agent's skill. Secrets are not
+ * resolved here, except gog's keyring password (as for provider keys).
  */
 export async function emailEnvAndSkill(email: EmailConfig | undefined) {
   const env: Record<string, string> = {}
   let skill: string | null = null
-  if (email?.mode === 'gmail' || email?.mode === 'imap') {
-    if (!renderHimalayaConfig(email)) return { env, skill }
-    env['EMAIL_MODE'] = email.mode
-    env['EMAIL_ADDRESS'] = email.address ?? ''
-    env['HIMALAYA_CONFIG'] = HIMALAYA_CONFIG
-    const p = email.password
-    if (p?.source === 'manual' && p.value) env['EMAIL_PASS'] = p.value
-    else if (p?.source === 'from-vaultwarden') {
-      env['EMAIL_PASS_FROM_VAULT'] = EMAIL_VAULT_POINTER
-    }
+  if (usesMailService(email)) {
+    env['EMAIL_MODE'] = email!.mode!
+    env['EMAIL_ADDRESS'] = email!.address ?? ''
     skill = '/opt/skills/email'
   } else if (email?.mode === 'google' && email.address) {
     env['EMAIL_MODE'] = 'google'
@@ -352,7 +271,7 @@ export async function googleSignInStatus(
   if (!a) {
     return {
       ok: false,
-      message: `Not signed in as ${address}. Add the OAuth client and sign-in token in Configure External Services → Email (pasted, or in Vaultwarden item "${GOOGLE_VAULT.item}", fields ${GOOGLE_VAULT.clientField} and ${GOOGLE_VAULT.tokenField}).`,
+      message: `Not signed in as ${address}. Add the OAuth client and sign-in token in Configure Email (pasted, or in Vaultwarden item "${GOOGLE_VAULT.item}", fields ${GOOGLE_VAULT.clientField} and ${GOOGLE_VAULT.tokenField}).`,
     }
   }
   if (a.error) {
