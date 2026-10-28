@@ -302,6 +302,8 @@ class Tools:
             raise ToolError(str(e)) from None
         except imaplib.IMAP4.error as e:
             raise ToolError(f'the mail server answered: {clean_line(str(e), 200)}') from None
+        except OSError as e:
+            raise ToolError(f'{name} failed: {e.strerror or type(e).__name__}') from None
 
     def _unavailable(self):
         s = self.svc
@@ -531,7 +533,7 @@ class Tools:
         atts = M.attachments(msg)
         if not atts:
             return {'id': uid, 'saved': [], 'note': 'the message has no attachments'}
-        saved = _release(self.svc.cfg['inboxDir'], h, atts)
+        saved = _release(self.svc.cfg.get('inboxDir') or '', self.svc.cfg.get('inboxFd', -1), h, atts)
         self.svc.log({'event': 'released', 'folder': f['name'], 'id': uid, 'files': len(saved)})
         return {'id': uid, 'saved': saved, 'note': why}
 
@@ -722,34 +724,31 @@ class Tools:
         if not isinstance(names, list) or len(names) > MAX_ATTACH_FILES:
             raise ToolError(f'attachments: a list of up to {MAX_ATTACH_FILES} file names in mail-outbox')
         base = self.svc.cfg.get('outboxDir') or ''
-        if not base:
+        bfd = self.svc.cfg.get('outboxFd', -1)
+        if not base or not isinstance(bfd, int) or bfd < 0:
             raise ToolError('the workspace folder mail-outbox is not available, so nothing can be attached')
         out, total = [], 0
-        bfd = os.open(base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            for n in names:
-                n = str(n).strip()
-                if n.startswith(base + '/'):
-                    n = n[len(base) + 1:]
-                if not n or '/' in n or '\x00' in n or n.startswith('.') or len(n) > 200:
-                    raise ToolError(f'attachments: "{clean_line(n, 80)}" must be a file name directly in mail-outbox')
-                try:
-                    fd = os.open(n, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=bfd)
-                except OSError as e:
-                    raise ToolError(f'attachments: cannot open "{clean_line(n, 80)}" in mail-outbox ({e.strerror})') from None
-                try:
-                    st = os.fstat(fd)
-                    if not (st.st_mode & 0o170000 == 0o100000):
-                        raise ToolError(f'attachments: "{clean_line(n, 80)}" is not a regular file')
-                    total += st.st_size
-                    if total > MAX_ATTACH_BYTES:
-                        raise ToolError(f'attachments: more than {MAX_ATTACH_BYTES // (1024 * 1024)} MB in total')
-                    with os.fdopen(os.dup(fd), 'rb') as f:
-                        out.append((clean_line(n, 200), f.read(MAX_ATTACH_BYTES + 1)))
-                finally:
-                    os.close(fd)
-        finally:
-            os.close(bfd)
+        for n in names:
+            n = str(n).strip()
+            if n.startswith(base + '/'):
+                n = n[len(base) + 1:]
+            if not n or '/' in n or '\x00' in n or n.startswith('.') or len(n) > 200:
+                raise ToolError(f'attachments: "{clean_line(n, 80)}" must be a file name directly in mail-outbox')
+            try:
+                fd = os.open(n, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=bfd)
+            except OSError as e:
+                raise ToolError(f'attachments: cannot open "{clean_line(n, 80)}" in mail-outbox ({e.strerror})') from None
+            try:
+                st = os.fstat(fd)
+                if not (st.st_mode & 0o170000 == 0o100000):
+                    raise ToolError(f'attachments: "{clean_line(n, 80)}" is not a regular file')
+                total += st.st_size
+                if total > MAX_ATTACH_BYTES:
+                    raise ToolError(f'attachments: more than {MAX_ATTACH_BYTES // (1024 * 1024)} MB in total')
+                with os.fdopen(os.dup(fd), 'rb') as f:
+                    out.append((clean_line(n, 200), f.read(MAX_ATTACH_BYTES + 1)))
+            finally:
+                os.close(fd)
         return out
 
     # sending
@@ -851,51 +850,47 @@ def _slug(s):
     return s[:50] or 'message'
 
 
-def _release(base, h, atts):
-    """Write attachment files into a new folder under base, without
-    following any link the folder's owner may have put there."""
-    try:
-        base_fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    except OSError as e:
-        raise ToolError(f'the workspace folder mail-inbox is not available: {e.strerror}') from None
-    try:
-        stem = f'{datetime.now().strftime("%Y-%m-%d")}-{_slug(h["subject"])}'
-        name = stem
-        for n in range(2, 100):
-            try:
-                os.mkdir(name, 0o755, dir_fd=base_fd)
-                break
-            except FileExistsError:
-                name = f'{stem}-{n}'
-        else:
-            raise ToolError('could not create a folder in mail-inbox')
-        dfd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=base_fd)
+def _release(base, base_fd, h, atts):
+    """Write attachment files into a new folder in mail-inbox (base_fd, the
+    folder opened by the launcher), without following any link the
+    folder's owner may have put there."""
+    if not base or not isinstance(base_fd, int) or base_fd < 0:
+        raise ToolError('the workspace folder mail-inbox is not available, so attachments cannot be released')
+    stem = f'{datetime.now().strftime("%Y-%m-%d")}-{_slug(h["subject"])}'
+    name = stem
+    for n in range(2, 100):
         try:
-            # Released files are the agents' to keep: the workspace user may
-            # move or delete them (they become its own at the next start).
-            os.fchmod(dfd, 0o2777)
-            saved, used = [], set()
-            for att in atts:
-                fname = att['filename']
-                stem2, dot, ext = fname.rpartition('.')
-                k = 2
-                while fname.lower() in used:
-                    fname = f'{stem2 or ext}-{k}{dot}{ext if stem2 else ""}'
-                    k += 1
-                used.add(fname.lower())
-                data = att['_part'].get_payload(decode=True) or b''
-                fd = os.open(fname, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
-                try:
-                    os.fchmod(fd, 0o666)
-                    _write_all(fd, data)
-                finally:
-                    os.close(fd)
-                saved.append(f'{base}/{name}/{fname}')
-            return saved
-        finally:
-            os.close(dfd)
+            os.mkdir(name, 0o755, dir_fd=base_fd)
+            break
+        except FileExistsError:
+            name = f'{stem}-{n}'
+    else:
+        raise ToolError('could not create a folder in mail-inbox')
+    dfd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=base_fd)
+    try:
+        # Released files are the agents' to keep: the workspace user may
+        # move or delete them (they become its own at the next start).
+        os.fchmod(dfd, 0o2777)
+        saved, used = [], set()
+        for att in atts:
+            fname = att['filename']
+            stem2, dot, ext = fname.rpartition('.')
+            k = 2
+            while fname.lower() in used:
+                fname = f'{stem2 or ext}-{k}{dot}{ext if stem2 else ""}'
+                k += 1
+            used.add(fname.lower())
+            data = att['_part'].get_payload(decode=True) or b''
+            fd = os.open(fname, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+            try:
+                os.fchmod(fd, 0o666)
+                _write_all(fd, data)
+            finally:
+                os.close(fd)
+            saved.append(f'{base}/{name}/{fname}')
+        return saved
     finally:
-        os.close(base_fd)
+        os.close(dfd)
 
 
 # ── Worker endpoint (Unix socket, for front.py) ─────────────────────────────

@@ -67,6 +67,27 @@ def own_dir(path, uid, gid, mode):
     os.chmod(path, mode)
 
 
+def open_dir_fd(path, uid, gid):
+    """Open a workspace folder for the service, as root, following no link
+    on the way, and hand it over as an open descriptor. The service user
+    cannot pass through the gateway's private folders (/data/.openclaw is
+    node's, 0700), so it never uses the path itself."""
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in path.strip('/').split('/'):
+            nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        st = os.fstat(fd)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid or st.st_gid != gid:
+            raise OSError(f'{path} does not have the expected owner')
+    except BaseException:
+        os.close(fd)
+        raise
+    os.set_inheritable(fd, True)
+    return fd
+
+
 def first_line(s):
     return next((ln.strip() for ln in (s or '').splitlines() if ln.strip()), '')
 
@@ -158,16 +179,16 @@ def main():
     smtp = GMAIL['smtp'] if mode == 'gmail' else acct.get('smtp') or {}
 
     # Where released attachments go: a workspace folder the agents can read.
-    inbox_ok = False
+    inbox_fd = -1
     try:
         if os.path.isdir(WORKSPACE) and not os.path.islink(WORKSPACE):
             own_dir(INBOX, node.pw_uid, mail.pw_gid, 0o2775)
-            inbox_ok = True
+            inbox_fd = open_dir_fd(INBOX, node.pw_uid, mail.pw_gid)
     except (OSError, SystemExit) as e:
         say(f'the workspace folder mail-inbox could not be prepared ({e}); attachments cannot be released')
     # Files the main agent wants attached to a draft. The service only reads
     # them (group openclaw-mail; new files inherit the group).
-    outbox_ok = False
+    outbox_fd = -1
     try:
         if os.path.isdir(WORKSPACE) and not os.path.islink(WORKSPACE):
             own_dir(OUTBOX, node.pw_uid, mail.pw_gid, 0o2770)
@@ -177,7 +198,7 @@ def main():
                 if stat.S_ISREG(st2.st_mode):
                     os.chown(p, st2.st_uid, mail.pw_gid, follow_symlinks=False)
                     os.chmod(p, (st2.st_mode & 0o7777) | 0o040)
-            outbox_ok = True
+            outbox_fd = open_dir_fd(OUTBOX, node.pw_uid, mail.pw_gid)
     except (OSError, SystemExit) as e:
         say(f'the workspace folder mail-outbox could not be prepared ({e}); drafts cannot have attachments')
 
@@ -211,8 +232,12 @@ def main():
         'trustedSenders': [str(t).strip().lower() for t in agent.get('trustedSenders') or [] if str(t).strip()],
         'stateDir': STATE,
         'socket': f'{STATE}/worker.sock',
-        'inboxDir': INBOX if inbox_ok else '',
-        'outboxDir': OUTBOX if outbox_ok else '',
+        # Paths for messages; the service reaches them through the open
+        # descriptors only.
+        'inboxDir': INBOX if inbox_fd >= 0 else '',
+        'inboxFd': inbox_fd,
+        'outboxDir': OUTBOX if outbox_fd >= 0 else '',
+        'outboxFd': outbox_fd,
         'rulesPath': RULES,
         'decisionsDir': DECISIONS,
         'passwordSource': source,

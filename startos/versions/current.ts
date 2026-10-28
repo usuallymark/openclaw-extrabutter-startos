@@ -1,12 +1,13 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:11',
+  version: '2026.10.1:12',
   releaseNotes: {
-    en_US: `Fix for 2026.10.1:10.
+    en_US: `Fix for email attachments.
 
-- **A restart no longer hangs, and no longer holds up a server reboot.** In 2026.10.1:10 the Mail Service check also raised the approval task, sent the alerts and cleared the email agent's idle conversation. StartOS waits for a running check before it stops a service, and a restart that began during one of those jobs waited for good; a server reboot then waited behind it. The check now only reads the mail service's state; the rest runs separately, with time limits, and never holds up a stop.
-- **Configure Email → Sending → Send Automatically to Trusted Senders** (on by default): your Trusted Senders also count as Send Automatically To, so your own and your family's addresses need not be entered twice. Send Automatically To is for any other addresses.`,
+- **Attachments on outgoing mail work.** Drafts with a file from the workspace folder mail-outbox failed with "Permission denied": the mail service runs as its own user, which cannot pass through OpenClaw's private folder (/data/.openclaw). The mail service now gets the two mail folders handed over when it starts, so OpenClaw's folder stays private.
+- The same applies to copying attachments from trusted senders into mail-inbox.
+- File errors are reported to the email agent in plain words instead of a bare error name.`,
   },
   migrations: {
     up: async () => {},
