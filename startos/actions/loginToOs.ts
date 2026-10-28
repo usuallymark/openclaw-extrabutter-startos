@@ -58,10 +58,20 @@ export const loginToOs = sdk.Action.withInput(
       'start-cli-login',
       async (subc) => {
         await installRootCA(effects, subc)
-        return subc.exec(['start-cli', 'auth', 'login'], {
-          user: 'node',
-          env: { HOME: '/data', PASSWORD: input.masterPassword },
-        })
+        // The password goes in on stdin: an environment variable here would
+        // be on a command line every user on the server can read.
+        return subc.exec(
+          [
+            'sh',
+            '-c',
+            'IFS= read -r PASSWORD; export PASSWORD; exec start-cli auth login',
+          ],
+          {
+            user: 'node',
+            env: { HOME: '/data' },
+            input: `${input.masterPassword}\n`,
+          },
+        )
       },
     )
 

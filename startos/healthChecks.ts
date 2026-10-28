@@ -3,6 +3,10 @@ import { sdk } from './sdk'
 import { RBW_ENV, VAULT_PROBE_SCRIPT } from './vault'
 import { EmailConfig, googleSignInStatus, usesMailService } from './email'
 import { MAIL_URL } from './mailService'
+import {
+  MAIL_QUEUE_TASK,
+  reviewOutgoingMail,
+} from './actions/reviewOutgoingMail'
 import { LocalKey, notInstalledMessage } from './localServices'
 
 // Health checks for the vault and external services.
@@ -359,35 +363,119 @@ export function externalChecks(
 // refusal is announced once (StartOS notification + ntfy), not every check.
 let announcedRefusal: string | null = null
 
-/**
- * The mail daemon's readiness/health line: the service's own /healthz
- * (state, reason). No credentials involved.
- */
-export async function probeMail(
-  effects: T.Effects,
-  sub: Sub,
-): Promise<Result | { result: 'starting'; message: string }> {
-  let h: any
+async function mailHealthz(sub: Sub): Promise<any | null> {
   try {
     const res = await sub.exec(
       ['curl', '-sS', '--max-time', '5', `${MAIL_URL}/healthz`],
       { user: 'node', timeout: 15_000 },
     )
-    if (res.exitCode !== 0) {
-      return { result: 'starting', message: 'Mail service starting' }
-    }
-    h = JSON.parse(String(res.stdout))
+    if (res.exitCode !== 0) return null
+    return JSON.parse(String(res.stdout))
   } catch {
-    return { result: 'starting', message: 'Mail service starting' }
+    return null
   }
+}
+
+/**
+ * The mail daemon's readiness: the service answers (in any state). Its
+ * state is the separate "Mail Service" check (probeMail), so a refused
+ * password shows at once instead of "starting" for the grace period.
+ */
+export async function mailAnswers(
+  sub: Sub,
+): Promise<Result | { result: 'starting'; message: string }> {
+  return (await mailHealthz(sub))
+    ? { result: 'success', message: 'Mail service answering' }
+    : { result: 'starting', message: 'Mail service starting' }
+}
+
+function sendingText(h: any): string {
+  const q = Array.isArray(h.queue) ? h.queue.length : 0
+  const waiting = q
+    ? `; ${q} message${q > 1 ? 's' : ''} waiting for your approval (Review Outgoing Mail)`
+    : ''
+  switch (h.sending) {
+    case 'off':
+      return 'read only, no drafts'
+    case 'rules':
+      return (
+        (h.others === 'auto'
+          ? 'sending by rules. Warning: Anyone Else is set to Send automatically, so mail can go to any address without asking you'
+          : h.others === 'block'
+            ? 'sending by rules (only to your automatic list)'
+            : 'sending by rules (others wait for your approval)') + waiting
+      )
+    default:
+      return 'drafts only, nothing is sent' + waiting
+  }
+}
+
+// Queue items already announced (StartOS notification + ntfy), and the
+// last queue the StartOS task was set for.
+const announcedQueue = new Set<string>()
+let taskFor: string | null = null
+
+async function syncQueueTask(effects: T.Effects, sub: Sub, h: any) {
+  const queue = (Array.isArray(h.queue) ? h.queue : []) as {
+    id: string
+    to?: string
+    subject?: string
+    rule?: string
+  }[]
+  const key = queue.map((q) => q.id).join(',')
+  if (key !== taskFor) {
+    if (queue.length) {
+      await sdk.action.createOwnTask(effects, reviewOutgoingMail, 'important', {
+        reason: `${queue.length} outgoing message${queue.length > 1 ? 's' : ''} waiting for your approval`,
+        replayId: MAIL_QUEUE_TASK,
+      })
+    } else {
+      await sdk.action.clearTask(effects, MAIL_QUEUE_TASK)
+    }
+    taskFor = key
+  }
+  for (const q of queue) {
+    if (announcedQueue.has(q.id)) continue
+    announcedQueue.add(q.id)
+    const text = `Mail waiting for approval: to ${q.to || '?'}, "${q.subject || ''}" (${q.rule || 'rules'}). Open Actions → Review Outgoing Mail.`
+    await sdk.notification
+      .create(effects, {
+        level: 'info',
+        title: 'Outgoing mail needs approval',
+        message: text,
+      })
+      .catch(() => {})
+    await sub
+      .exec(['notify', '--title', 'OpenClaw mail', '--tags', 'email', text], {
+        user: 'node',
+        env: { HOME: '/data' },
+        timeout: 30_000,
+      })
+      .catch(() => {})
+  }
+}
+
+/**
+ * The "Mail Service" line: the service's own /healthz (state, reason,
+ * sending level, approval queue). No credentials involved.
+ */
+export async function probeMail(
+  effects: T.Effects,
+  sub: Sub,
+): Promise<Result | { result: 'starting'; message: string }> {
+  const h = await mailHealthz(sub)
+  if (!h) return { result: 'starting', message: 'Mail service starting' }
   const addr = h.address ? ` (${h.address})` : ''
+  await syncQueueTask(effects, sub, h).catch((e) =>
+    console.warn(`mail queue task: ${(e as Error)?.message}`),
+  )
   switch (h.state) {
     case 'ok':
       announcedRefusal = null
       await resetIdleEmailSession(sub).catch(() => {})
       return {
         result: 'success',
-        message: `Signed in${addr}; reading and drafts only, nothing is sent`,
+        message: `Signed in${addr}; ${sendingText(h)}`,
       }
     case 'starting':
     case 'reloading':

@@ -3,6 +3,8 @@
 
 1. Check the mail folder is the package's own (owned by root, not a link),
    and set the owners and modes the service relies on.
+   The package writes the sending rules (rules.json) and the owner's
+   approvals (decisions/) here; the service can read them, not write them.
 2. Get the password: the manual one from the settings, or from Vaultwarden
    through the gateway user's rbw (sync first, so a password changed in
    Vaultwarden is seen), exactly as getcred does for the skills.
@@ -27,6 +29,9 @@ SETTINGS = f'{MAIL_ROOT}/settings.json'
 STATE = f'{MAIL_ROOT}/state'
 WORKSPACE = '/data/.openclaw/workspace'
 INBOX = f'{WORKSPACE}/mail-inbox'
+OUTBOX = f'{WORKSPACE}/mail-outbox'
+RULES = f'{MAIL_ROOT}/rules.json'
+DECISIONS = f'{MAIL_ROOT}/decisions'
 SERVICE = '/opt/openclaw-mail/mailservice.py'
 MAIL_USER = 'openclaw-mail'
 RBW_ENV = {
@@ -36,7 +41,8 @@ RBW_ENV = {
     'HOME': '/data',
     'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
 }
-GMAIL = {'imap': {'host': 'imap.gmail.com', 'port': 993, 'security': 'tls'}}
+GMAIL = {'imap': {'host': 'imap.gmail.com', 'port': 993, 'security': 'tls'},
+         'smtp': {'host': 'smtp.gmail.com', 'port': 465, 'security': 'tls'}}
 
 
 def say(msg):
@@ -116,6 +122,19 @@ def main():
     os.chown(MAIL_ROOT, owner, mail.pw_gid)
     os.chmod(MAIL_ROOT, 0o710)
     own_dir(STATE, mail.pw_uid, mail.pw_gid, 0o700)
+    # Sending rules and the owner's approvals: written by the package (as
+    # root), readable by the service, never writable by it.
+    own_dir(DECISIONS, owner, mail.pw_gid, 0o750)
+    try:
+        rst = os.lstat(RULES)
+        if stat.S_ISREG(rst.st_mode) and rst.st_uid == owner:
+            os.chown(RULES, owner, mail.pw_gid, follow_symlinks=False)
+            os.chmod(RULES, 0o640)
+        else:
+            say(f'{RULES} is not the package\'s own file; sending stays at Drafts only')
+            os.unlink(RULES)
+    except FileNotFoundError:
+        pass
 
     try:
         sst = os.lstat(SETTINGS)
@@ -136,6 +155,7 @@ def main():
     imap = GMAIL['imap'] if mode == 'gmail' else acct.get('imap') or {}
     if not imap.get('host'):
         fail('no IMAP server is set in Configure Email')
+    smtp = GMAIL['smtp'] if mode == 'gmail' else acct.get('smtp') or {}
 
     # Where released attachments go: a workspace folder the agents can read.
     inbox_ok = False
@@ -145,6 +165,21 @@ def main():
             inbox_ok = True
     except (OSError, SystemExit) as e:
         say(f'the workspace folder mail-inbox could not be prepared ({e}); attachments cannot be released')
+    # Files the main agent wants attached to a draft. The service only reads
+    # them (group openclaw-mail; new files inherit the group).
+    outbox_ok = False
+    try:
+        if os.path.isdir(WORKSPACE) and not os.path.islink(WORKSPACE):
+            own_dir(OUTBOX, node.pw_uid, mail.pw_gid, 0o2770)
+            for n in os.listdir(OUTBOX):
+                p = os.path.join(OUTBOX, n)
+                st2 = os.lstat(p)
+                if stat.S_ISREG(st2.st_mode):
+                    os.chown(p, st2.st_uid, mail.pw_gid, follow_symlinks=False)
+                    os.chmod(p, (st2.st_mode & 0o7777) | 0o040)
+            outbox_ok = True
+    except (OSError, SystemExit) as e:
+        say(f'the workspace folder mail-outbox could not be prepared ({e}); drafts cannot have attachments')
 
     pw = acct.get('password') or {}
     note = ''
@@ -170,11 +205,16 @@ def main():
         'displayName': acct.get('displayName') or '',
         'login': (acct.get('username') or '').strip() or acct['address'],
         'imap': {'host': imap['host'], 'port': int(imap.get('port') or 993), 'security': imap.get('security') or 'tls'},
+        'smtp': ({'host': smtp['host'], 'port': int(smtp.get('port') or 465), 'security': smtp.get('security') or 'tls'}
+                 if smtp.get('host') else None),
         'authservId': 'mx.google.com' if mode == 'gmail' else '',
         'trustedSenders': [str(t).strip().lower() for t in agent.get('trustedSenders') or [] if str(t).strip()],
         'stateDir': STATE,
         'socket': f'{STATE}/worker.sock',
         'inboxDir': INBOX if inbox_ok else '',
+        'outboxDir': OUTBOX if outbox_ok else '',
+        'rulesPath': RULES,
+        'decisionsDir': DECISIONS,
         'passwordSource': source,
         'password': password,
         'passwordError': error,

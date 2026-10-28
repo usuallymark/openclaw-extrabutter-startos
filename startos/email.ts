@@ -109,6 +109,38 @@ export function mailServers(email: EmailConfig | undefined) {
 export const usesMailService = (email: EmailConfig | undefined) =>
   !!email?.address && !!mailServers(email)
 
+/**
+ * Run gog with its keyring password passed on stdin (first line), never in
+ * the environment of the command StartOS starts: that environment is on a
+ * command line every user on the server can read. The rest of `input`
+ * stays on gog's stdin.
+ */
+export async function execGog(
+  sub: { exec: (cmd: string[], opts: any) => Promise<any> },
+  address: string | undefined,
+  args: string[],
+  input = '',
+  timeout = 60_000,
+) {
+  const pw = await gogKeyringPassword()
+  const { GOG_KEYRING_PASSWORD: _secret, ...env } = gogEnv(address, pw)
+  return sub.exec(
+    [
+      'sh',
+      '-c',
+      'IFS= read -r GOG_KEYRING_PASSWORD; export GOG_KEYRING_PASSWORD; exec gog "$@"',
+      'gog',
+      ...args,
+    ],
+    {
+      user: 'node',
+      env: { HOME: '/data', ...env },
+      input: `${pw}\n${input}`,
+      timeout,
+    },
+  )
+}
+
 /** gog's keyring password: created once, then reused. */
 export async function gogKeyringPassword(): Promise<string> {
   const existing = await readFile(gogKeyringPasswordPath, 'utf8').catch(
@@ -210,16 +242,10 @@ export async function importGoogleSignIn(
   clientJson: string | null,
   tokenJson: string | null,
 ) {
-  const env = gogEnv(address, await gogKeyringPassword())
   await mkdir(sdk.volumes.main.subpath('.openclaw/gog'), { recursive: true })
   await inOpenclawContainer(effects, 'google-sign-in', async (subc) => {
     const run = async (args: string[], input: string, what: string) => {
-      const r = (await subc.exec(['gog', ...args], {
-        user: 'node',
-        env: { HOME: '/data', ...env },
-        input,
-        timeout: 60_000,
-      })) as GogResult
+      const r = (await execGog(subc, address, args, input)) as GogResult
       if (r.exitCode !== 0) {
         throw new Error(
           `${what} failed: ${firstLine(String(r.stderr)) || firstLine(String(r.stdout)) || `exit ${r.exitCode}`}`,
@@ -251,11 +277,13 @@ export async function googleSignInStatus(
   sub: { exec: (cmd: string[], opts: any) => Promise<any> },
   address: string,
 ): Promise<{ ok: boolean; message: string }> {
-  const r = await sub.exec(['gog', 'auth', 'list', '--json', '--no-input'], {
-    user: 'node',
-    env: { HOME: '/data', ...gogEnv(address, await gogKeyringPassword()) },
-    timeout: 20_000,
-  })
+  const r = await execGog(
+    sub,
+    address,
+    ['auth', 'list', '--json', '--no-input'],
+    '',
+    20_000,
+  )
   let accounts: any[] = []
   try {
     accounts = JSON.parse(String(r.stdout)).accounts ?? []

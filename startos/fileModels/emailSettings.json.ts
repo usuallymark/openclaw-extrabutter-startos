@@ -50,9 +50,36 @@ const agentShape = z
   })
   .catch({ model: 'default', trustedSenders: [] })
 
+// Sending (since 2026.10.1:10). The mail service reads these as rules.json
+// (mailService.ts writes it next to this file, readable by the service).
+export const sendingLevels = ['off', 'drafts', 'rules'] as const
+export const sendingOthers = ['ask', 'block', 'auto'] as const
+export const SENDING_DEFAULTS = {
+  level: 'drafts' as const,
+  autoTo: [] as string[],
+  neverTo: [] as string[],
+  others: 'ask' as const,
+  perHour: 10,
+  perDay: 30,
+  maxRecipients: 10,
+}
+
+const sendingShape = z
+  .looseObject({
+    level: z.enum(sendingLevels).catch('drafts'),
+    autoTo: z.array(z.string()).catch([]),
+    neverTo: z.array(z.string()).catch([]),
+    others: z.enum(sendingOthers).catch('ask'),
+    perHour: z.number().int().min(1).catch(10),
+    perDay: z.number().int().min(1).catch(30),
+    maxRecipients: z.number().int().min(1).catch(10),
+  })
+  .catch(SENDING_DEFAULTS)
+
 const shape = z.looseObject({
   account: accountShape,
   agent: agentShape,
+  sending: sendingShape.optional().catch(undefined),
 })
 
 export type EmailSettings = z.infer<typeof shape>

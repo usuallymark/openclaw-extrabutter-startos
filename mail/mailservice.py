@@ -14,7 +14,9 @@ folder. The rules below are enforced here, for every caller.
   released to the workspace only for a trusted sender with passing checks.
 - Organising: mark read, flag, move, archive. Never delete, never move to
   Trash or Spam.
-- Drafts are saved to the Drafts folder. Sending is off in this version.
+- Drafts are saved to the Drafts folder. Sending follows the owner's rules
+  (outbox.py): refused, sent, or held until the owner approves it in
+  StartOS. Only drafts made by this service can be sent.
 - The password lives in this process's memory only. When the mailbox
   refuses it, the service exits so the launcher fetches it again; a
   password already refused is never tried twice (lockout guard).
@@ -24,7 +26,10 @@ import sys
 
 sys.path.insert(0, '/opt/openclaw-mail')
 
+import email  # noqa: E402
 import hashlib  # noqa: E402
+import mimetypes  # noqa: E402
+import smtplib  # noqa: E402
 import imaplib  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
@@ -33,6 +38,7 @@ import secrets  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
+from email import policy  # noqa: E402
 from email.message import EmailMessage  # noqa: E402
 from email.utils import formataddr, getaddresses, make_msgid, formatdate  # noqa: E402
 import socketserver  # noqa: E402
@@ -42,6 +48,7 @@ import message as M  # noqa: E402
 from mcp import TOOLS, MAX_LIST, MAX_UIDS  # noqa: E402
 from extract import attachment_text  # noqa: E402
 from imapmail import AuthRefused, MailError, Mailbox  # noqa: E402
+from outbox import Outbox, SmtpRefused, recipients  # noqa: E402
 from sanitize import clean_line, clean_text, wrap_untrusted  # noqa: E402
 
 VERSION = mcp.VERSION
@@ -51,6 +58,9 @@ WAIT_UNAVAILABLE_S = 120  # password could not be fetched: retry sooner
 MAX_FETCH_BYTES = 30 * 1024 * 1024
 CALLS_PER_MINUTE = 120
 LOG_MAX_BYTES = 5 * 1024 * 1024
+MAX_ATTACH_FILES = 10
+MAX_ATTACH_BYTES = 18 * 1024 * 1024   # stays under 25 MB once encoded
+QUEUE_POLL_S = 10
 
 
 # ── State ───────────────────────────────────────────────────────────────────
@@ -64,6 +74,7 @@ class Service:
         self.since = _now()
         self.trusted = [t.lower() for t in cfg.get('trustedSenders') or []]
         self.box = Mailbox(cfg, password) if password else None
+        self.outbox = Outbox(self, cfg, password) if password else None
         self._fp = self._fingerprint(password) if password else None
         self._calls = []
         self._calls_lock = threading.Lock()
@@ -170,13 +181,22 @@ class Service:
             return True
 
     def health(self):
-        return {
+        h = {
             'state': self.state, 'since': self.since, 'reason': self.reason,
-            'address': self.cfg.get('address'), 'sending': 'drafts',
+            'address': self.cfg.get('address'), 'sending': 'drafts', 'others': 'ask',
             'passwordSource': self.cfg.get('passwordSource'),
             'trustedSenders': len(self.trusted), 'version': VERSION,
             'note': self.cfg.get('note') or '',
+            'queue': [],
         }
+        if self.outbox:
+            r = self.outbox.rules()
+            h['sending'], h['others'] = r['level'], r['others']
+            # Summary only (no message text): the package raises a StartOS
+            # task and a phone alert from it.
+            h['queue'] = [{'id': q['id'], 'to': q.get('to', ''), 'subject': q.get('subject', ''),
+                           'rule': q.get('rule', '')} for q in self.outbox.pending()]
+        return h
 
 
 def _now():
@@ -297,7 +317,21 @@ class Tools:
 
     def t_status(self, a):
         h = self.svc.health()
-        h['sending'] = 'Drafts only: drafts are saved, nothing is sent'
+        ob = self.svc.outbox
+        if ob:
+            r = ob.rules()
+            h['sending'] = {
+                'off': 'Off: read only, no drafts are sent',
+                'drafts': 'Drafts only: drafts are saved, nothing is sent',
+                'rules': ('Send by rules: send to the automatic list; '
+                          + {'ask': 'anyone else waits for the owner\'s approval',
+                             'block': 'anyone else is refused',
+                             'auto': 'anyone else is sent too'}[r['others']]
+                          + '; forwards and attachments always wait for approval'),
+            }[r['level']]
+            h['waiting_for_approval'] = h.pop('queue')
+            h['recent_outcomes'] = [{k: x.get(k) for k in ('id', 'outcome', 'to', 'subject', 'detail')}
+                                    for x in ob.results(10)]
         return h
 
     def _role(self, f):
@@ -579,6 +613,8 @@ class Tools:
         return out
 
     def t_draft(self, a):
+        if self.svc.outbox and self.svc.outbox.rules()['level'] == 'off':
+            raise ToolError('writing mail is Off (read only) in Configure Email; no draft was saved')
         kind = a.get('kind')
         if kind not in ('new', 'reply', 'reply_all', 'forward'):
             raise ToolError('kind: new, reply, reply_all or forward')
@@ -587,6 +623,8 @@ class Tools:
             raise ToolError('body: too long')
         to = self._addrs(a.get('to'), 'to')
         cc = self._addrs(a.get('cc'), 'cc')
+        bcc = self._addrs(a.get('bcc'), 'bcc')
+        files = self._outbox_files(a.get('attachments'))
         subject = clean_line(str(a.get('subject') or ''), 250)
         cfg = self.svc.cfg
         me = cfg['address'].lower()
@@ -640,30 +678,172 @@ class Tools:
             m['To'] = ', '.join(to)
             if cc:
                 m['Cc'] = ', '.join(cc)
+            if bcc:
+                m['Bcc'] = ', '.join(bcc)
             m.set_content(text)
-            drafts = self.box.special('\\drafts')
-            if drafts is None:
-                for c in self.box.folders():
-                    if c['name'].lower() in ('drafts', 'draft', '[gmail]/drafts'):
-                        drafts = c
-                        break
-            if drafts is None:
-                raise ToolError('this mailbox has no Drafts folder')
+            for fname, data in files:
+                ctype = mimetypes.guess_type(fname)[0] or 'application/octet-stream'
+                maintype, _, subtype = ctype.partition('/')
+                m.add_attachment(data, maintype=maintype, subtype=subtype, filename=fname)
+            if self.svc.outbox:
+                self.svc.outbox.mark(m, kind)
+            drafts = self._drafts()
             new_uid = self.box.append(drafts, '(\\Draft \\Seen)', m.as_bytes())
             return drafts['name'], new_uid, m
         folder, new_uid, m = self.box.run(go)
-        self.svc.log({'event': 'draft', 'kind': kind, 'to': m['To'], 'cc': m['Cc'] or '', 'subject': clean_line(str(m['Subject']), 120),
-                      'draft_id': new_uid})
-        preview = clean_text(m.get_content())
+        self.svc.log({'event': 'draft', 'kind': kind, 'to': m['To'], 'cc': m['Cc'] or '', 'bcc': m['Bcc'] or '',
+                      'subject': clean_line(str(m['Subject']), 120), 'draft_id': new_uid,
+                      'attachments': [f for f, _ in files]})
+        body_part = m.get_body(preferencelist=('plain',))
+        preview = clean_text(body_part.get_content() if body_part is not None else '')
         return {'saved': True, 'folder': folder, 'draft_id': new_uid,
-                'to': str(m['To']), 'cc': str(m['Cc'] or ''), 'subject': str(m['Subject']),
+                'to': str(m['To']), 'cc': str(m['Cc'] or ''), 'bcc': str(m['Bcc'] or ''), 'subject': str(m['Subject']),
+                'attachments': [f for f, _ in files],
                 'preview': preview[:3000] + ('\n[…]' if len(preview) > 3000 else ''),
-                'note': 'saved in Drafts; nothing was sent'}
+                'note': 'saved in Drafts; nothing was sent'
+                        + ('' if new_uid else ' (the server did not return the draft id, so it cannot be sent from here)')}
+
+    def _drafts(self):
+        drafts = self.box.special('\\drafts')
+        if drafts is None:
+            for c in self.box.folders():
+                if c['name'].lower() in ('drafts', 'draft', '[gmail]/drafts'):
+                    return c
+            raise ToolError('this mailbox has no Drafts folder')
+        return drafts
+
+    def _outbox_files(self, names):
+        """Files to attach, by name, from the workspace folder mail-outbox
+        (put there by the main agent). Read without following links."""
+        if not names:
+            return []
+        if isinstance(names, str):
+            names = [names]
+        if not isinstance(names, list) or len(names) > MAX_ATTACH_FILES:
+            raise ToolError(f'attachments: a list of up to {MAX_ATTACH_FILES} file names in mail-outbox')
+        base = self.svc.cfg.get('outboxDir') or ''
+        if not base:
+            raise ToolError('the workspace folder mail-outbox is not available, so nothing can be attached')
+        out, total = [], 0
+        bfd = os.open(base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            for n in names:
+                n = str(n).strip()
+                if n.startswith(base + '/'):
+                    n = n[len(base) + 1:]
+                if not n or '/' in n or '\x00' in n or n.startswith('.') or len(n) > 200:
+                    raise ToolError(f'attachments: "{clean_line(n, 80)}" must be a file name directly in mail-outbox')
+                try:
+                    fd = os.open(n, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=bfd)
+                except OSError as e:
+                    raise ToolError(f'attachments: cannot open "{clean_line(n, 80)}" in mail-outbox ({e.strerror})') from None
+                try:
+                    st = os.fstat(fd)
+                    if not (st.st_mode & 0o170000 == 0o100000):
+                        raise ToolError(f'attachments: "{clean_line(n, 80)}" is not a regular file')
+                    total += st.st_size
+                    if total > MAX_ATTACH_BYTES:
+                        raise ToolError(f'attachments: more than {MAX_ATTACH_BYTES // (1024 * 1024)} MB in total')
+                    with os.fdopen(os.dup(fd), 'rb') as f:
+                        out.append((clean_line(n, 200), f.read(MAX_ATTACH_BYTES + 1)))
+                finally:
+                    os.close(fd)
+        finally:
+            os.close(bfd)
+        return out
+
+    # sending
 
     def t_send(self, a):
-        self.svc.log({'event': 'send_refused', 'draft_id': a.get('draft_id'), 'rule': 'drafts only'})
-        return {'result': 'refused (rule: Drafts only)',
-                'detail': 'Sending is off in this version. The draft stays in Drafts; the user can send it from their mail app.'}
+        did = a.get('draft_id')
+        if not isinstance(did, int) or isinstance(did, bool) or did <= 0:
+            raise ToolError('draft_id: the id the draft tool returned')
+        ob = self.svc.outbox
+
+        def load():
+            drafts = self._drafts()
+            self.box.select(drafts)
+            rec = self.box.fetch([did], '(UID BODY.PEEK[])').get(did)
+            if not rec or not rec.get('data'):
+                raise ToolError(f'no draft with id {did} in {drafts["name"]} (it may have been sent, edited or deleted in the mail app)')
+            return drafts, rec['data']
+        if not self.svc.cfg.get('smtp'):
+            return {'result': 'refused', 'rule': 'no outgoing (SMTP) server is set in Configure Email',
+                    'detail': 'Nothing was sent. The draft stays in Drafts.'}
+        drafts, raw = self.box.run(load)
+        if len(raw) > MAX_FETCH_BYTES:
+            raise ToolError('the draft is too large to send from here')
+        msg = email.message_from_bytes(raw, policy=policy.SMTP)
+        kind = ob.marked_kind(msg)
+        if kind is None:
+            self.svc.log({'event': 'send_refused', 'draft_id': did, 'rule': 'not made by the draft tool'})
+            return {'result': 'refused', 'rule': 'only drafts made with the draft tool can be sent',
+                    'detail': 'The draft stays in Drafts; the user can send it from their mail app.'}
+        rcpts = recipients(msg)
+        atts = [clean_line(p.get_filename() or 'attachment', 120) for p in msg.iter_attachments()]
+        mid = str(msg['Message-ID'] or '').strip()
+        base = {'draft_id': did, 'to': str(msg['To'] or ''), 'cc': str(msg['Cc'] or ''),
+                'bcc': str(msg['Bcc'] or ''), 'subject': clean_line(str(msg['Subject'] or ''), 120)}
+        with ob.lock:
+            for q in ob.pending():
+                if mid and q.get('messageId') == mid:
+                    return {'result': 'already waiting for approval', 'queue_id': q['id'], 'rule': q.get('rule'),
+                            'detail': 'Do not send it again; the owner decides in StartOS (Review Outgoing Mail).'}
+            decision, rule = ob.judge(rcpts, kind, len(atts))
+            if decision == 'refuse':
+                self.svc.log({'event': 'send_refused', **base, 'rule': rule})
+                return {'result': 'refused', 'rule': rule,
+                        'detail': 'Nothing was sent. The draft stays in Drafts; the user can send it from their mail app.'}
+            if decision == 'queue':
+                qid = ob.enqueue(raw, msg, kind, rule, did, drafts['name'], atts)
+                self.svc.log({'event': 'send_queued', **base, 'queue_id': qid, 'rule': rule})
+                return {'result': 'waiting for approval', 'queue_id': qid, 'rule': rule,
+                        'detail': ('Not sent yet. The owner approves or rejects it in StartOS (Review Outgoing Mail); '
+                                   'without a decision it expires in 3 days. Do not send it again; '
+                                   'the status tool shows the outcome.')}
+            try:
+                sent = ob.smtp_send(raw)
+            except SmtpRefused as e:
+                self.svc.log({'event': 'send_failed', **base, 'detail': f'password refused for sending: {e}'})
+                raise ToolError('the mail server refused the password for sending; nothing was sent') from None
+            except (OSError, smtplib.SMTPException) as e:
+                self.svc.log({'event': 'send_failed', **base, 'detail': clean_line(str(e), 200)})
+                raise ToolError(f'sending failed, nothing was sent: {clean_line(str(e), 200)}') from None
+            self.svc.log({'event': 'send_sent', **base, 'rule': rule})
+        cleanup = ''
+        try:
+            self.after_send({'draftUid': did, 'draftFolder': drafts['name'], 'messageId': mid}, sent)
+        except Exception as e:
+            cleanup = f' (it could not be removed from Drafts: {clean_line(str(e), 120)})'
+        return {'result': 'sent', 'rule': rule, 'to': base['to'], 'cc': base['cc'], 'bcc': base['bcc'],
+                'subject': base['subject'], 'detail': 'Sent; the draft was removed from Drafts' + cleanup}
+
+    # queue hooks (outbox.process)
+
+    def draft_present(self, item):
+        def go():
+            f = self.box.resolve(item.get('draftFolder'))
+            self.box.select(f)
+            return self.box.message_id_of(int(item['draftUid'])) == item.get('messageId')
+        return bool(item.get('messageId')) and self.box.run(go)
+
+    def after_send(self, item, sent):
+        """Remove the sent draft; for mailboxes other than Gmail (which files
+        mail sent through its server by itself) put a copy in Sent."""
+        def go():
+            f = self.box.resolve(item.get('draftFolder'))
+            removed = self.box.remove_sent_draft(f, int(item['draftUid']), item.get('messageId'))
+            if self.svc.cfg.get('mode') != 'gmail':
+                sent_folder = self.box.special('\\sent')
+                if sent_folder is None:
+                    for c in self.box.folders():
+                        if c['name'].lower() in ('sent', 'sent items', 'sent messages'):
+                            sent_folder = c
+                            break
+                if sent_folder is not None:
+                    self.box.append(sent_folder, '(\\Seen)', sent.as_bytes())
+            return removed
+        return self.box.run(go)
 
 
 def _slug(s):
@@ -739,6 +919,25 @@ def serve_worker(svc, tools, path):
     return srv
 
 
+# ── Approval queue ──────────────────────────────────────────────────────────
+
+def _queue_loop(svc, tools):
+    """Act on the owner's decisions (written by the package) and expire
+    old requests."""
+    while True:
+        time.sleep(QUEUE_POLL_S)
+        if svc.state not in ('ok', 'unreachable'):
+            continue
+        try:
+            svc.outbox.process(tools)
+        except (MailError, imaplib.IMAP4.error, OSError) as e:
+            svc.log({'event': 'queue_error', 'detail': clean_line(str(e), 200)})
+        except AuthRefused:
+            pass  # the next tool call notices and reloads
+        except Exception as e:
+            svc.log({'event': 'queue_error', 'type': type(e).__name__, 'detail': clean_line(str(e), 200)})
+
+
 # ── Start ───────────────────────────────────────────────────────────────────
 
 def main():
@@ -762,6 +961,8 @@ def main():
         print('mail service: the mailbox refused the password; exiting so it is fetched again', flush=True)
         return EXIT_RELOAD
     srv = serve_worker(svc, tools, cfg.get('socket') or os.path.join(cfg['stateDir'], 'worker.sock'))
+    if svc.outbox and not exit_after:
+        threading.Thread(target=_queue_loop, args=(svc, tools), daemon=True).start()
     if exit_after:
         _schedule_exit(0, exit_after)
         print(f'mail service: {svc.state}: {svc.reason}; checking again in {exit_after // 60} min', flush=True)

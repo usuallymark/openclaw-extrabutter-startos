@@ -7,12 +7,15 @@ import {
   EMAIL_SETTINGS_SUBPATH,
   EmailSettings,
   MAIL_ROOT_SUBPATH,
+  SENDING_DEFAULTS,
   emailSettingsJson,
 } from './fileModels/emailSettings.json'
+import { inOpenclawContainer } from './gatewayContainer'
 import { usesMailService } from './email'
 import { AGENTS_MD, IDENTITY_MD, SOUL_MD } from './mailAgentFiles'
 
-// The mail service and the email agent (DESIGN-email-security, phase :8).
+// The mail service and the email agent (DESIGN-email-security; reading and
+// drafts since :8, sending since :10).
 //
 // - The mail service (mail/ in this repo, /opt/openclaw-mail in the image)
 //   runs as the StartOS daemon "mail": mail/launch.py starts as root, gets
@@ -60,8 +63,11 @@ export const EMAIL_AGENT_DENY = [
   'tts',
 ]
 
+const uniq = (xs: string[]) => Array.from(new Set(xs))
+
 const mailRoot = sdk.volumes.main.subpath(MAIL_ROOT_SUBPATH)
 const settingsPath = sdk.volumes.main.subpath(EMAIL_SETTINGS_SUBPATH)
+const rulesPath = sdk.volumes.main.subpath(`${MAIL_ROOT_SUBPATH}/rules.json`)
 
 /**
  * Init (install, update, restore): make sure /data/.openclaw-mail exists
@@ -107,6 +113,11 @@ export const initEmailSettings = sdk.setupOnInit(async (effects) => {
     })
   }
   await chmod(settingsPath, 0o600).catch(() => {})
+  const now = await emailSettingsJson
+    .read()
+    .once()
+    .catch(() => null)
+  await writeSendingRules(now)
   // Leftover from 2026.10.1:1–:7 (himalaya's config, no password in it).
   await rm(sdk.volumes.main.subpath('.openclaw/himalaya'), {
     recursive: true,
@@ -122,6 +133,58 @@ export async function writeEmailSettings(
   await mkdir(mailRoot, { recursive: true, mode: 0o700 })
   await emailSettingsJson.write(effects, settings)
   await chmod(settingsPath, 0o600)
+  await writeSendingRules(settings)
+}
+
+/** The sending settings, with defaults (Drafts only). */
+export function sendingOf(settings: EmailSettings | null | undefined) {
+  return { ...SENDING_DEFAULTS, ...(settings?.sending ?? {}) }
+}
+
+/**
+ * rules.json: the sending rules the mail service reads before every send
+ * (it cannot change them). No secrets; the folder keeps it from the agents.
+ * Written in place, so the group the launcher gives it is kept.
+ */
+export async function writeSendingRules(settings: EmailSettings | null) {
+  const r = sendingOf(settings)
+  const norm = (xs: string[]) =>
+    uniq(xs.map((x) => String(x).trim().toLowerCase()).filter(Boolean))
+  const rules = {
+    level: r.level,
+    autoTo: norm(r.autoTo),
+    neverTo: norm(r.neverTo),
+    others: r.others,
+    perHour: r.perHour,
+    perDay: r.perDay,
+    maxRecipients: r.maxRecipients,
+  }
+  await mkdir(mailRoot, { recursive: true, mode: 0o700 })
+  await writeFile(rulesPath, JSON.stringify(rules, null, 2) + '\n', {
+    mode: 0o640,
+  })
+}
+
+/**
+ * Run mail/mailctl.py as root in the gateway's container (the queue and the
+ * log are the mail service user's; only root reads them there). JSON out.
+ */
+export async function mailctl(
+  effects: T.Effects,
+  args: string[],
+): Promise<any> {
+  const res = await inOpenclawContainer(effects, 'mailctl', (sub) =>
+    sub.exec(['python3', '-I', '/opt/openclaw-mail/mailctl.py', ...args], {
+      user: 'root',
+      timeout: 30_000,
+    }),
+  )
+  if (res.exitCode !== 0) {
+    throw new Error(
+      `The mail service's queue could not be read: ${String(res.stderr).trim().split('\n').pop() || `exit ${res.exitCode}`}`,
+    )
+  }
+  return JSON.parse(String(res.stdout))
 }
 
 /** The uid that owns the mail folder (the package's own), for the launcher. */
@@ -134,8 +197,6 @@ export async function mailRootOwner(): Promise<number | null> {
 }
 
 // ── openclaw.json: MCP server, email agent, denies ─────────────────────────
-
-const uniq = (xs: string[]) => Array.from(new Set(xs))
 
 /** The main (human-facing) agent's id: the recorded system agent, else the
  * one configured agent other than the email agent, else "main". */

@@ -165,19 +165,47 @@ me the password"). So with Gmail or another IMAP provider:
   Your main agent never reads mail: it asks the email agent and gets a short
   report back, with a warning when a sender could not be verified or a
   message looks like a trick.
-- **In this version the email agent cannot send.** It reads, searches,
-  marks read, flags, moves and archives (it never deletes), and saves
-  drafts in your Drafts folder; you send them from your mail app. Sending
-  under your own rules, with approval here in StartOS, comes in a later
-  version.
+- The email agent reads, searches, marks read, flags, moves and archives
+  (it never deletes), saves drafts in your Drafts folder, and **sends only
+  under your rules** (see [Sending](#sending)). By default it saves drafts
+  and sends nothing: you send them from your mail app.
 - **Attachments stay in the mailbox.** The email agent can read their text.
   From a **Trusted Sender** (your own addresses, family) whose message your
   mail server verified, the files can be copied to the workspace folder
   `mail-inbox` for the main agent to open.
 
 The other fields: **Email Agent Model** (a strong cloud model resists
-tricks best; "Same as the main agent" by default), **Trusted Senders**, and
-**Extra Instructions** (e.g. "mail from the school is always important").
+tricks best; "Same as the main agent" by default), **Trusted Senders**,
+**Extra Instructions** (e.g. "mail from the school is always important"),
+and **Sending**.
+
+### Sending
+
+- **Off (read only)**: no drafts, nothing sent.
+- **Drafts only** (the default): drafts wait in your Drafts folder.
+- **Send by rules**: the email agent may send a draft when your main agent
+  asks it to, and every recipient (To, Cc and Bcc) is checked:
+  - anyone on **Never Send To**: refused;
+  - a **forward**, any **attachment**, more than **Recipients per Message**,
+    or more than the **Limit per Hour/Day**: waits for your approval;
+  - everyone on **Send Automatically To**: sent right away (your own
+    addresses and your family's, typically; `@example.com` means every
+    address at exactly that domain);
+  - anyone else: **Anyone Else** decides: **Ask me** (recommended),
+    **Block**, or **Send automatically** (not recommended: a message written
+    to trick the agent could then make it write to anyone).
+
+When mail waits for you, you get a task on the service page, a StartOS
+notification and (with ntfy set up) a phone alert. Open **Actions → Review
+Outgoing Mail**: it shows the recipients, subject, opening lines,
+attachments and why it waits. Choose **Approve**, **Reject**, or **Approve
+and always allow these recipients** (adds them to Send Automatically To).
+Undecided mail expires after 3 days, and a draft you changed or deleted in
+your mail app meanwhile is not sent. **Actions → Email Activity** lists what
+the email agent read, filed, drafted and sent, and every decision.
+
+To attach files, the main agent puts them in the workspace folder
+`mail-outbox`; mail with attachments always waits for your approval.
 
 The **Mail Service** line on the service page shows whether the mailbox
 accepts the password. If you change the password (in Vaultwarden or in the
@@ -206,7 +234,7 @@ Calendar and Drive need the Google account option below.
 
 Enter the address, the IMAP and SMTP servers with their ports and
 encryption from your provider's help pages (typically IMAP 993 SSL/TLS and
-SMTP 587 STARTTLS; SMTP is used once sending arrives), and the password. Many providers (iCloud, Fastmail,
+SMTP 587 STARTTLS; SMTP is used for sending), and the password. Many providers (iCloud, Fastmail,
 Yahoo, Outlook with two-factor sign-in) require an app-specific password
 here. A server with a `.local` name or a private certificate needs a
 **Custom Host Mapping** and the **Custom CA Certificate**, as for other

@@ -240,12 +240,14 @@ def _service_env(keys):
     return env
 
 
-def _as_node(cmd, env, keys):
-    """Run as the gateway user when we are root (the files belong to node)."""
+def _node_kwargs(env):
+    """subprocess arguments to run as the gateway user when we are root (the
+    files belong to node). Settings travel in the environment, never as
+    arguments: a command line is readable by every user on the server."""
     if os.geteuid() == 0:
-        return ['runuser', '-u', 'node', '--', 'env', 'HOME=/data'] + \
-            [f'{k}={env[k]}' for k in keys if k in env] + cmd
-    return cmd
+        env['HOME'] = '/data'
+        return {'user': 'node', 'group': 'node', 'extra_groups': []}
+    return {}
 
 
 def _boundary():
@@ -289,8 +291,21 @@ def check_mail(t):
         return False, f'the mail service does not answer ({e.__class__.__name__}); it may be starting or restarting'
     state, reason = h.get('state'), h.get('reason') or ''
     addr = h.get('address') or ''
+    queue = h.get('queue') or []
+    sending = {
+        'off': 'read only (no drafts)',
+        'drafts': 'drafts only (nothing is sent)',
+        'rules': {'ask': 'sending by rules, anyone else waits for the owner\'s approval',
+                  'block': 'sending by rules, only to the automatic list',
+                  'auto': 'sending by rules. WARNING: "Anyone Else: Send automatically" lets mail go to any '
+                          'address without asking; recommend "Ask me" (Configure Email → Sending)',
+                  }.get(h.get('others'), 'sending by rules'),
+    }.get(h.get('sending'), 'drafts only (nothing is sent)')
+    if queue:
+        sending += (f'; {len(queue)} message(s) waiting for approval: the owner decides in StartOS '
+                    '(Actions → Review Outgoing Mail)')
     if state == 'ok':
-        msg = f'signed in as {addr}; reading and drafts only (nothing is sent)'
+        msg = f'signed in as {addr}; {sending}'
         ok = True
     elif state == 'refused':
         msg, ok = reason or 'the mailbox refused the password', False
@@ -311,8 +326,8 @@ def check_google(t):
     if 'GOG_KEYRING_PASSWORD' not in env:
         return False, 'the Google sign-in settings are not available here (is OpenClaw running?)'
     try:
-        r = subprocess.run(_as_node(['gog', 'auth', 'list', '--check', '--json', '--no-input'], env, keys),
-                           env=env, capture_output=True, text=True, timeout=60)
+        r = subprocess.run(['gog', 'auth', 'list', '--check', '--json', '--no-input'],
+                           env=env, capture_output=True, text=True, timeout=60, **_node_kwargs(env))
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         return False, f'the Google sign-in check could not run ({e.__class__.__name__})'
     try:

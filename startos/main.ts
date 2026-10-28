@@ -45,6 +45,7 @@ import {
   usesMailService,
 } from './email'
 import { emailSettingsJson } from './fileModels/emailSettings.json'
+import { withGatewaySecrets, writeGatewaySecrets } from './secretEnv'
 import {
   MAIL_PORT,
   applyMailConfig,
@@ -73,6 +74,7 @@ import {
   externalTrigger,
   probeHttp,
   probeMail,
+  mailAnswers,
   probeVault,
   vaultTrigger,
 } from './healthChecks'
@@ -296,7 +298,10 @@ export const main = sdk.setupMain(async ({ effects }) => {
   // Email (Configure Email): the mail service and the email agent for the
   // Gmail and IMAP choices, gog for the Google account. The main agent gets
   // one email skill (for the mail service: how to ask the email agent).
-  const mailSettings = await emailSettingsJson.read().const(effects)
+  // Read once: Configure Email restarts the service itself, and Review
+  // Outgoing Mail's "always allow" changes the rules without a restart (the
+  // mail service reads them before every send).
+  const mailSettings = await emailSettingsJson.read().once()
   const emailAcct = (mailSettings?.account ?? undefined) as
     | EmailConfig
     | undefined
@@ -317,6 +322,10 @@ export const main = sdk.setupMain(async ({ effects }) => {
     externalEnv['WEBCHAT_UPLOAD_URL'] = `http://127.0.0.1:${webchatUploadPort}`
     enabledSkills.push('/opt/skills/webchat-present')
   }
+
+  // Everything that may hold a secret goes to the gateway through a file
+  // only it can read, not the daemon's command line (secretEnv.ts).
+  await writeGatewaySecrets({ ...providerKeyEnv, ...externalEnv })
 
   const osIp = await sdk.getOsIp(effects)
 
@@ -707,17 +716,15 @@ export const main = sdk.setupMain(async ({ effects }) => {
     .addOneshot('google-sign-in', {
       subcontainer: openclawSub,
       exec: {
+        // gog's settings and keyring password come from the secrets file.
         command: googleFromVault(emailAcct)
-          ? ['sh', '-c', GOOGLE_SIGN_IN_SCRIPT]
+          ? withGatewaySecrets(['sh', '-c', GOOGLE_SIGN_IN_SCRIPT])
           : ['true'],
         user: 'node',
         env: {
           ...RBW_ENV, // includes HOME=/data and a PATH with getcred and gog
           ...(googleFromVault(emailAcct)
-            ? {
-                ...email.env,
-                ...googleSignInEnv(emailAcct!.address!),
-              }
+            ? googleSignInEnv(emailAcct!.address!)
             : {}),
         },
       },
@@ -744,7 +751,9 @@ export const main = sdk.setupMain(async ({ effects }) => {
     .addDaemon('primary', {
       subcontainer: openclawSub,
       exec: {
-        command: [
+        // Provider keys and service settings come from the secrets file
+        // (secretEnv.ts), not from this command line.
+        command: withGatewaySecrets([
           'openclaw',
           'gateway',
           '--port',
@@ -752,7 +761,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
           '--bind',
           'lan',
           '--allow-unconfigured',
-        ],
+        ]),
         user: 'node',
         env: {
           HOME: '/data',
@@ -764,8 +773,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
           XDG_CONFIG_HOME: '/data/.openclaw/rbw/config',
           XDG_CACHE_HOME: '/data/.openclaw/rbw/cache',
           XDG_RUNTIME_DIR: '/data/.openclaw/rbw/runtime',
-          ...providerKeyEnv,
-          ...externalEnv,
         },
       },
       ready: {
@@ -973,11 +980,20 @@ export const main = sdk.setupMain(async ({ effects }) => {
             },
           },
           ready: {
-            display: 'Mail Service',
-            fn: () => probeMail(effects, openclawSub),
+            display: null,
+            fn: () => mailAnswers(openclawSub),
             gracePeriod: 180_000,
           },
           requires: ['chown', 'network-setup', 'setup-vault', 'mail-front'],
+        })
+        .addHealthCheck('mail-status', {
+          ready: {
+            display: 'Mail Service',
+            fn: () => probeMail(effects, openclawSub),
+            trigger: externalTrigger,
+            gracePeriod: 0,
+          },
+          requires: ['mail'],
         })
     : daemons
 

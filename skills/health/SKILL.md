@@ -28,8 +28,10 @@ same addresses, so its answer matches what the user sees there:
   accepted, rejected or not configured (Trilium also reports its version).
 - **Mail Service** (Gmail or IMAP in Configure Email): whether the mail
   service is signed in, or why not (password refused since when,
-  Vaultwarden unavailable, server unreachable), and whether the isolation
-  holds (only the email agent has the mail tools). A refused password is
+  Vaultwarden unavailable, server unreachable), the sending level (and a
+  warning when Anyone Else is set to Send automatically), how many messages
+  wait for the owner's approval, and whether the isolation holds (only the
+  email agent has the mail tools). A refused password is
   fixed in Vaultwarden item "email" or Configure Email; the service picks
   it up within 10 minutes. **Google account**: the
   stored sign-in is valid (Google is asked to refresh it), and which

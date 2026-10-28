@@ -1,9 +1,10 @@
 """The mailbox connection: one IMAP session, used under a lock.
 
 Only what the mail tools need: list folders, search, fetch (always PEEK, so
-reading never marks mail as read), set flags, move, and append drafts.
-There is no EXPUNGE of anything but the exact UIDs just moved, and no
-delete.
+reading never marks mail as read), set flags, move, append drafts and sent
+copies. There is no EXPUNGE of anything but the exact UIDs just moved, or
+the one draft just sent (in the Drafts folder, checked by its Message-ID),
+and no other delete.
 """
 
 import base64
@@ -319,8 +320,33 @@ class Mailbox:
         self.conn.literal = imaplib.MapCRLF.sub(imaplib.CRLF, raw)
         typ, data = self._cmd('APPEND', quote(folder['raw']), flags, imaplib.Time2Internaldate(time.time()))
         if typ != 'OK':
-            raise MailError(f'saving the draft failed: {data[0].decode(errors="replace") if data and data[0] else ""}')
+            raise MailError(f'saving the message in {folder["name"]} failed: {data[0].decode(errors="replace") if data and data[0] else ""}')
         resp = (data[0] or b'').decode('utf-8', 'replace') if data else ''
         m = re.search(r'APPENDUID \d+ (\d+)', resp)
         self.selected = None
         return int(m.group(1)) if m else None
+
+    def message_id_of(self, uid):
+        """The Message-ID of uid in the selected folder, or None if it is gone."""
+        rec = self.fetch([uid], '(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])').get(uid)
+        if not rec:
+            return None
+        m = re.search(rb'(?im)^message-id:\s*(<[^>\r\n]*>)', rec.get('data') or b'')
+        return m.group(1).decode('utf-8', 'replace') if m else ''
+
+    def remove_sent_draft(self, folder, uid, message_id):
+        """Remove a draft that has just been sent: only in the Drafts folder,
+        only that UID, and only when it still carries the same Message-ID.
+        Without UIDPLUS it is only marked deleted (the mail app clears it)."""
+        if '\\drafts' not in folder['flags'] and folder['name'].lower() not in ('drafts', 'draft'):
+            raise MailError('refusing to remove a message outside the Drafts folder')
+        self.select(folder, readonly=False)
+        if not message_id or self.message_id_of(uid) != message_id:
+            return False
+        self.store([uid], '+FLAGS.SILENT', '\\Deleted')
+        if 'UIDPLUS' in self.capabilities:
+            typ, _ = self._cmd('UID', 'EXPUNGE', str(uid))
+            if typ != 'OK':
+                raise MailError('the sent draft could not be removed from Drafts')
+        self.selected = None
+        return True

@@ -10,7 +10,7 @@ import {
   parseClientJson,
   parseTokenJson,
 } from '../email'
-import { writeEmailSettings } from '../mailService'
+import { sendingOf, writeEmailSettings } from '../mailService'
 import { agentModelChoices, OLLAMA_SERVER_ID } from '../modelCatalog'
 import {
   ANTHROPIC_MODELS,
@@ -27,10 +27,10 @@ import {
 const { InputSpec, Value, Variants } = sdk
 
 // Configure Email (since 2026.10.1:8): the account (moved here from
-// Configure External Services), and the email agent. Settings are stored
-// in /data/.openclaw-mail/settings.json, a root-only file the agents
-// cannot read (mailService.ts). Sending rules come in a later version;
-// until then the mail service saves drafts and sends nothing.
+// Configure External Services), the email agent, and (since :10) the
+// sending rules. Settings are stored in /data/.openclaw-mail/settings.json,
+// a root-only file the agents cannot read; the rules also go to rules.json
+// beside it, which the mail service reads before every send (mailService.ts).
 
 // ── Email ───────────────────────────────────────────────────────────────────
 // One choice, three backends. The two IMAP choices stay plain password forms;
@@ -100,7 +100,7 @@ const hostField = (label: string, placeholder: string) =>
 const emailService = Value.union({
   name: 'Account',
   description:
-    'The mailbox the email agent uses.\n\n• Gmail (app password): the simplest way to use a Gmail address.\n• Other IMAP/SMTP provider: any mail service that offers IMAP and SMTP (Fastmail, iCloud, your own server…).\n\nWith these two, mail is handled by a separate mail service and a separate email agent: the agent that reads mail has no shell, no passwords and no way to send, and your main agent never reads mail itself (it asks the email agent).\n\n• Google account: Gmail plus Google Calendar, Drive and other Google services, through a one-time sign-in you make on a computer with a browser. Not yet isolated: the main agent uses this account directly, as before.',
+    'The mailbox the email agent uses.\n\n• Gmail (app password): the simplest way to use a Gmail address.\n• Other IMAP/SMTP provider: any mail service that offers IMAP and SMTP (Fastmail, iCloud, your own server…).\n\nWith these two, mail is handled by a separate mail service and a separate email agent: the agent that reads mail has no shell and no passwords, it sends only under your rules (Sending, below), and your main agent never reads mail itself (it asks the email agent).\n\n• Google account: Gmail plus Google Calendar, Drive and other Google services, through a one-time sign-in you make on a computer with a browser. Not yet isolated: the main agent uses this account directly, as before.',
   default: 'disabled',
   variants: Variants.of({
     disabled: { name: 'Disabled', spec: InputSpec.of({}) },
@@ -386,14 +386,117 @@ const extraInstructions = Value.textarea({
   placeholder: 'Mail from the school is always important.',
 })
 
+// ── Sending ─────────────────────────────────────────────────────────────────
+
+const ADDR_OR_DOMAIN_RE =
+  '^([^@\\s]+@[^@\\s]+\\.[^@\\s]+|@[^@\\s]+\\.[^@\\s]+)$'
+
+const addressList = (name: string, description: string) =>
+  Value.list(
+    sdk.List.text(
+      { name, description, default: [], maxLength: 100 },
+      {
+        placeholder: 'sam@example.com or @example.com',
+        inputmode: 'email',
+        patterns: [
+          {
+            regex: ADDR_OR_DOMAIN_RE,
+            description:
+              'An address (sam@example.com) or a whole domain (@example.com)',
+          },
+        ],
+      },
+    ),
+  )
+
+const limit = (name: string, description: string, dflt: number, max: number) =>
+  Value.number({
+    name,
+    description,
+    required: true,
+    default: dflt,
+    min: 1,
+    max,
+    integer: true,
+    placeholder: String(dflt),
+  })
+
+const sending = Value.object(
+  {
+    name: 'Sending',
+    description:
+      'What happens when the email agent is asked to send a draft (Gmail and IMAP only). Every recipient (To, Cc and Bcc) is checked: anyone on Never Send To → refused; a forward, any attachment, or a limit reached → waits for your approval; everyone on Send Automatically To → sent; otherwise Anyone Else decides. Mail waiting for approval appears as a task and under Actions → Review Outgoing Mail; it expires after 3 days.',
+  },
+  InputSpec.of({
+    level: Value.select({
+      name: 'Sending',
+      description:
+        'Off: the email agent reads and files mail only (no drafts). Drafts only: it saves drafts and you send them from your mail app. Send by rules: it can send, following the rules below.',
+      default: 'drafts',
+      values: {
+        off: 'Off (read only)',
+        drafts: 'Drafts only',
+        rules: 'Send by rules',
+      },
+    }),
+    autoTo: addressList(
+      'Send Automatically To',
+      "Addresses (or whole domains, written @example.com) the email agent may send to without asking you, e.g. your own addresses and your family's. A domain means that domain only, not its subdomains.",
+    ),
+    neverTo: addressList(
+      'Never Send To',
+      'Addresses or domains the email agent must never send to. A message with any of these among its recipients is refused, even if you would approve it.',
+    ),
+    others: Value.select({
+      name: 'Anyone Else',
+      description:
+        'Recipients on neither list. Ask me: the message waits for your approval (recommended). Block: refused. Send automatically: sent without asking. Not recommended: mail is written by strangers and may trick the agent into writing to someone; with this setting nothing stops it.',
+      default: 'ask',
+      values: {
+        ask: 'Ask me',
+        block: 'Block',
+        auto: 'Send automatically (not recommended)',
+      },
+    }),
+    perHour: limit(
+      'Limit per Hour',
+      'Messages sent in the last hour beyond this wait for your approval.',
+      10,
+      500,
+    ),
+    perDay: limit(
+      'Limit per Day',
+      'Messages sent in the last 24 hours beyond this wait for your approval.',
+      30,
+      2000,
+    ),
+    maxRecipients: limit(
+      'Recipients per Message',
+      'A message to more recipients than this (To, Cc and Bcc together) waits for your approval.',
+      10,
+      100,
+    ),
+  }),
+)
+
 const inputSpec = InputSpec.of({
   account: emailService,
   agentModel,
   trustedSenders,
   extraInstructions,
+  sending,
 })
 
 // ── Action ──────────────────────────────────────────────────────────────────
+
+const cleanList = (xs: unknown): string[] =>
+  Array.from(
+    new Set(
+      ((xs ?? []) as string[])
+        .map((x) => String(x).trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  )
 
 export const configureEmail = sdk.Action.withInput(
   'configure-email',
@@ -401,7 +504,7 @@ export const configureEmail = sdk.Action.withInput(
   async () => ({
     name: 'Configure Email',
     description:
-      'Connect a mailbox and set up the email agent: the only agent that reads mail. It has no shell, no passwords and cannot send; your main agent asks it about your mail. In this version the agent can read, search, organise (mark read, flag, move, archive; never delete) and write drafts. Sending comes in a later version. Saving restarts OpenClaw.',
+      'Connect a mailbox and set up the email agent: the only agent that reads mail. It has no shell and no passwords; your main agent asks it about your mail. It can read, search, organise (mark read, flag, move, archive; never delete), write drafts, and send under the rules you set here. Saving restarts OpenClaw.',
     warning: null,
     allowedStatuses: 'any',
     group: null,
@@ -420,6 +523,7 @@ export const configureEmail = sdk.Action.withInput(
       agentModel: s?.agent?.model || 'default',
       trustedSenders: s?.agent?.trustedSenders ?? [],
       extraInstructions: s?.agent?.extraInstructions || null,
+      sending: sendingOf(s),
     } as any
   },
 
@@ -456,6 +560,15 @@ export const configureEmail = sdk.Action.withInput(
         extraInstructions:
           String(i.extraInstructions ?? '').trim() || undefined,
       },
+      sending: {
+        level: i.sending?.level ?? 'drafts',
+        autoTo: cleanList(i.sending?.autoTo),
+        neverTo: cleanList(i.sending?.neverTo),
+        others: i.sending?.others ?? 'ask',
+        perHour: Number(i.sending?.perHour ?? 10),
+        perDay: Number(i.sending?.perDay ?? 30),
+        maxRecipients: Number(i.sending?.maxRecipients ?? 10),
+      },
     } as EmailSettings
     await writeEmailSettings(effects, settings)
     await effects.restart()
@@ -463,7 +576,10 @@ export const configureEmail = sdk.Action.withInput(
       version: '1' as const,
       title: 'Email Configured',
       message:
-        'Settings saved. OpenClaw is restarting. With Gmail or IMAP, the mail service starts on its own; its state is shown as "Mail Service" on the service page.',
+        'Settings saved. OpenClaw is restarting. With Gmail or IMAP, the mail service starts on its own; its state is shown as "Mail Service" on the service page.' +
+        (i.sending?.others === 'auto' && i.sending?.level === 'rules'
+          ? ' Note: Anyone Else is set to Send automatically, so the email agent can send to any address without asking you.'
+          : ''),
       result: null,
     }
   },

@@ -56,28 +56,32 @@ TOOLS = [
                      'required': ['uids', 'to']}},
     {'name': 'archive', 'description': 'Archive messages (Gmail: remove from the inbox, kept in All Mail).',
      'inputSchema': {'type': 'object', 'properties': {'uids': UIDS, 'folder': FOLDER}, 'required': ['uids']}},
-    {'name': 'draft', 'description': 'Save a draft in the Drafts folder: a new message, a reply, or a forward (text only). Returns its id and a preview. Nothing is sent.',
+    {'name': 'draft', 'description': 'Save a draft in the Drafts folder: a new message, a reply, or a forward (text, plus files from the workspace folder mail-outbox). Returns its id and a preview. Nothing is sent.',
      'inputSchema': {'type': 'object', 'properties': {
          'kind': {'type': 'string', 'enum': ['new', 'reply', 'reply_all', 'forward']},
          'uid': {'type': 'integer', 'description': 'For reply/forward: the original message id.'},
          'folder': {'type': 'string', 'description': 'For reply/forward: the folder of the original. Default INBOX.'},
          'to': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Addresses. Reply: default is the sender.'},
          'cc': {'type': 'array', 'items': {'type': 'string'}},
+         'bcc': {'type': 'array', 'items': {'type': 'string'}},
+         'attachments': {'type': 'array', 'items': {'type': 'string'},
+                         'description': 'File names in the workspace folder mail-outbox (put there by the main agent). A draft with attachments always needs the owner\'s approval to send.'},
          'subject': {'type': 'string', 'description': 'New messages. Reply/forward: default from the original.'},
          'body': {'type': 'string'}},
          'required': ['kind', 'body']}},
-    {'name': 'send', 'description': 'Send a draft by id. In this version sending is off: every request is refused and the draft stays in Drafts.',
+    {'name': 'send', 'description': "Send a draft made with the draft tool, by its id. The owner's rules decide: sent, refused, or waiting for the owner's approval in StartOS (forwards and attachments always wait). Never retry a refused or waiting draft; the status tool shows outcomes.",
      'inputSchema': {'type': 'object', 'properties': {'draft_id': {'type': 'integer'}}, 'required': ['draft_id']}},
 ]
 
-# MCP tool annotations: hints for clients (no tool deletes anything).
+# MCP tool annotations: hints for clients (no tool deletes mail; send reaches
+# the outside world, under the owner's rules).
 _READ_ONLY = {'status', 'folders', 'list', 'search', 'read', 'attachments', 'attachment_text'}
 for _t in TOOLS:
     _t['annotations'] = {
         'readOnlyHint': _t['name'] in _READ_ONLY,
         'destructiveHint': False,
         'idempotentHint': _t['name'] in _READ_ONLY | {'mark_read', 'flag'},
-        'openWorldHint': False,
+        'openWorldHint': _t['name'] == 'send',
     }
 
 
