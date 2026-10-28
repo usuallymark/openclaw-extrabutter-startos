@@ -263,7 +263,7 @@ Approve or reject mail the rules hold for the owner (`startos/actions/reviewOutg
 
 ### Email Activity
 
-The mail service's activity log, newest first, sending outcomes on top (`mailctl.py activity`). No message bodies are logged.
+The mail service's activity log, newest first, sending outcomes on top (`mailctl.py activity`), as a multi-line result with copy and download (`email-activity.txt`). No message bodies are logged.
 
 - **Cost:** none.
 

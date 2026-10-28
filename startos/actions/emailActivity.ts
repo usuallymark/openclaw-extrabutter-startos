@@ -90,13 +90,12 @@ export const emailActivity = sdk.Action.withoutInput(
       title: 'Email Activity',
       message: null,
       result: {
-        type: 'single' as const,
+        type: 'multiline' as const,
         name: 'Log',
         description: null,
         value: text,
         copyable: true,
-        qr: false,
-        masked: false,
+        filename: 'email-activity.txt',
       },
     }
   },

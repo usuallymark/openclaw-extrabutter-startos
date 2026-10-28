@@ -1,13 +1,11 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:12',
+  version: '2026.10.1:13',
   releaseNotes: {
-    en_US: `Fix for email attachments.
+    en_US: `Small fix.
 
-- **Attachments on outgoing mail work.** Drafts with a file from the workspace folder mail-outbox failed with "Permission denied": the mail service runs as its own user, which cannot pass through OpenClaw's private folder (/data/.openclaw). The mail service now gets the two mail folders handed over when it starts, so OpenClaw's folder stays private.
-- The same applies to copying attachments from trusted senders into mail-inbox.
-- File errors are reported to the email agent in plain words instead of a bare error name.`,
+- **Email Activity shows the whole log**, line by line, with a copy button and a download (email-activity.txt). It showed everything squeezed into a single line before.`,
   },
   migrations: {
     up: async () => {},
