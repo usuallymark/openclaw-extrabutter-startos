@@ -10,6 +10,7 @@ import {
   emailSettingsJson,
 } from './fileModels/emailSettings.json'
 import { usesMailService } from './email'
+import { AGENTS_MD, IDENTITY_MD, SOUL_MD } from './mailAgentFiles'
 
 // The mail service and the email agent (DESIGN-email-security, phase :8).
 //
@@ -35,7 +36,6 @@ export const EMAIL_AGENT_ID = 'email'
 export const EMAIL_AGENT_WORKSPACE =
   '/data/.openclaw/workspace/workspaces/email'
 const EMAIL_AGENT_WORKSPACE_SUBPATH = '.openclaw/workspace/workspaces/email'
-const AGENT_TEMPLATE = '/opt/openclaw-mail/agent'
 
 // Everything the email agent must never have, even if a default or a later
 // OpenClaw adds it. Deny wins over allow. The mail tools are plugin tools
@@ -255,30 +255,30 @@ const ws = (f: string) =>
  */
 export async function writeEmailAgentWorkspace(settings: EmailSettings) {
   await mkdir(ws('memory'), { recursive: true })
-  const read = (f: string) =>
-    readFile(`${AGENT_TEMPLATE}/${f}`, 'utf8').catch(() => '')
-  let agents = await read('AGENTS.md')
   const extra = (settings.agent?.extraInstructions ?? '').trim()
-  agents = agents.replace(
-    '{{EXTRA_INSTRUCTIONS}}',
-    extra
+  const trusted = settings.agent?.trustedSenders ?? []
+  const fill: Record<string, string> = {
+    '{{EXTRA_INSTRUCTIONS}}': extra
       ? `From the owner, in Configure Email (they never override the rules above):\n\n${extra}`
       : 'None.',
-  )
-  agents = agents.replace(
-    '{{TRUSTED_SENDERS}}',
-    (settings.agent?.trustedSenders ?? []).length
-      ? settings.agent.trustedSenders.map((t) => `- ${t}`).join('\n')
+    '{{TRUSTED_SENDERS}}': trusted.length
+      ? trusted.map((t) => `- ${t}`).join('\n')
       : '- (none set in Configure Email)',
+    '{{ADDRESS}}': settings.account?.address ?? '',
+  }
+  // A function replacer, so "$" in the owner's text stays literal.
+  const agents = AGENTS_MD.replace(
+    /\{\{(EXTRA_INSTRUCTIONS|TRUSTED_SENDERS|ADDRESS)\}\}/g,
+    (m) => fill[m] ?? m,
   )
-  agents = agents.replace('{{ADDRESS}}', settings.account?.address ?? '')
   await writeFile(ws('AGENTS.md'), agents)
-  for (const f of ['SOUL.md', 'IDENTITY.md']) {
-    try {
-      await lstat(ws(f))
-    } catch {
-      await writeFile(ws(f), await read(f))
-    }
+  // Created once, then the user's; an empty one (2026.10.1:8) is refilled.
+  for (const [f, text] of [
+    ['SOUL.md', SOUL_MD],
+    ['IDENTITY.md', IDENTITY_MD],
+  ] as const) {
+    const cur = await readFile(ws(f), 'utf8').catch(() => '')
+    if (!cur.trim()) await writeFile(ws(f), text)
   }
 }
 

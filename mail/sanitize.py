@@ -303,7 +303,7 @@ _INJECTION = re.compile(
     r'|\b(system prompt|developer message|you are (now )?(an? )?(ai|assistant|agent|language model)'
     r'|as an ai\b|new instructions|assistant:|<\|im_start\|>|\[inst\]'
     r'|run (this|the following) (command|code|script)|execute (this|the following)'
-    r'|\bgetcred\b|\brbw\b|\bcurl\s+-|base64 -d|/data/\.openclaw|openclaw\.json'
+    r'|\bgetcred\b|\brbw (get|unlock|login)\b|\bcurl\s+-|base64 -d|/data/\.openclaw|openclaw\.json'
     r'|reply with (the|your) (output|password|key|token|secret)'
     r'|do not (tell|inform|mention)( this)? to (the )?(user|owner))',
     re.I | re.S)

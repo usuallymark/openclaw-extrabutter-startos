@@ -384,6 +384,7 @@ export async function probeMail(
   switch (h.state) {
     case 'ok':
       announcedRefusal = null
+      await resetIdleEmailSession(sub).catch(() => {})
       return {
         result: 'success',
         message: `Signed in${addr}; reading and drafts only, nothing is sent`,
@@ -421,4 +422,54 @@ async function announceRefusal(effects: T.Effects, sub: Sub, reason: string) {
     ['notify', '--title', 'OpenClaw mail', '--tags', 'warning', reason],
     { user: 'node', env: { HOME: '/data' }, timeout: 30_000 },
   )
+}
+
+// ── Email agent conversation ────────────────────────────────────────────────
+
+// The email agent works in one conversation (agent:email:main), reached by
+// the main agent with sessions_send. The main agent cannot reset it when the
+// request comes from webchat or a channel (OpenClaw gives non-owners only
+// `assign_owner` in the sessions tool), so the package clears it here: after
+// 15 minutes without a request, so follow-ups in one chat keep their
+// context but old mail does not pile up. Checked at most every 5 minutes.
+const EMAIL_SESSION = 'agent:email:main'
+const IDLE_MS = 15 * 60_000
+let lastSessionCheck = 0
+
+const CLI_ENV = { HOME: '/data', OPENCLAW_STATE_DIR: '/data/.openclaw' }
+
+async function gatewayCall(sub: Sub, method: string, params: object) {
+  const r = await sub.exec(
+    [
+      'openclaw',
+      'gateway',
+      'call',
+      method,
+      '--json',
+      '--params',
+      JSON.stringify(params),
+    ],
+    { user: 'node', env: CLI_ENV, timeout: 60_000 },
+  )
+  if (r.exitCode !== 0) return null
+  const out = String(r.stdout)
+  const i = out.indexOf('{')
+  return i < 0 ? null : JSON.parse(out.slice(i))
+}
+
+export async function resetIdleEmailSession(sub: Sub, now = Date.now()) {
+  if (now - lastSessionCheck < 5 * 60_000) return
+  lastSessionCheck = now
+  const list = await gatewayCall(sub, 'sessions.list', {
+    agentId: 'email',
+    limit: 20,
+  })
+  const s = (list?.sessions ?? []).find((x: any) => x?.key === EMAIL_SESSION)
+  if (!s || s.hasActiveRun || !(Number(s.totalTokens) > 0)) return
+  const last = Number(s.lastInteractionAt ?? s.updatedAt ?? 0)
+  if (!last || now - last < IDLE_MS) return
+  const res = await gatewayCall(sub, 'sessions.reset', { key: EMAIL_SESSION })
+  if (res?.ok) {
+    console.info('Email agent: conversation cleared after 15 minutes idle')
+  }
 }

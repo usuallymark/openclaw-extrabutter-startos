@@ -20,21 +20,20 @@ tools at all.
 
 ## How to ask
 
-Two tool calls per job:
-
-1. Start the email agent's conversation fresh (old mail should not pile up
-   in it):
-   `sessions` with `{"action": "reset", "sessionKey": "agent:email:main"}`.
-   If that is refused, carry on with step 2 anyway.
-2. **sessions_send** with `agentId: "email"`, a wait, and the job:
+**sessions_send** with `agentId: "email"`, a wait, and the job:
 
 ```json
 {"agentId": "email", "timeoutSeconds": 180,
  "message": "Summarise unread mail in the inbox from the last 2 days. Important only."}
 ```
 
-(With Tool Search, call them through `tool_call`, e.g.
+(With Tool Search, call it through `tool_call`:
 `{"id": "sessions_send", "args": {...}}`.)
+
+The email agent keeps one conversation. Follow-ups within a few minutes
+can refer to the last report ("archive messages 412 and 415"); after 15
+minutes without requests the package clears it, so a new topic starts
+fresh. Do not try to reset it yourself.
 
 One request = one job. Say exactly what you want: which folder, which
 sender or subject, what to file where, and for drafts the recipients and
