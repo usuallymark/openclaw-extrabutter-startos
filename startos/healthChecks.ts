@@ -415,7 +415,12 @@ function sendingText(h: any): string {
 const announcedQueue = new Set<string>()
 let taskFor: string | null = null
 
-async function syncQueueTask(effects: T.Effects, sub: Sub, h: any) {
+async function syncQueueTask(
+  effects: T.Effects,
+  sub: Sub,
+  h: any,
+  live: () => boolean,
+) {
   const queue = (Array.isArray(h.queue) ? h.queue : []) as {
     id: string
     to?: string
@@ -425,26 +430,37 @@ async function syncQueueTask(effects: T.Effects, sub: Sub, h: any) {
   const key = queue.map((q) => q.id).join(',')
   if (key !== taskFor) {
     if (queue.length) {
-      await sdk.action.createOwnTask(effects, reviewOutgoingMail, 'important', {
-        reason: `${queue.length} outgoing message${queue.length > 1 ? 's' : ''} waiting for your approval`,
-        replayId: MAIL_QUEUE_TASK,
-      })
+      await within(
+        20_000,
+        sdk.action.createOwnTask(effects, reviewOutgoingMail, 'important', {
+          reason: `${queue.length} outgoing message${queue.length > 1 ? 's' : ''} waiting for your approval`,
+          replayId: MAIL_QUEUE_TASK,
+        }),
+        'approval task',
+      )
     } else {
-      await sdk.action.clearTask(effects, MAIL_QUEUE_TASK)
+      await within(
+        20_000,
+        sdk.action.clearTask(effects, MAIL_QUEUE_TASK),
+        'clear approval task',
+      )
     }
     taskFor = key
   }
   for (const q of queue) {
+    if (!live()) return
     if (announcedQueue.has(q.id)) continue
     announcedQueue.add(q.id)
     const text = `Mail waiting for approval: to ${q.to || '?'}, "${q.subject || ''}" (${q.rule || 'rules'}). Open Actions → Review Outgoing Mail.`
-    await sdk.notification
-      .create(effects, {
+    await within(
+      20_000,
+      sdk.notification.create(effects, {
         level: 'info',
         title: 'Outgoing mail needs approval',
         message: text,
-      })
-      .catch(() => {})
+      }),
+      'notification',
+    ).catch(() => {})
     await sub
       .exec(['notify', '--title', 'OpenClaw mail', '--tags', 'email', text], {
         user: 'node',
@@ -455,9 +471,71 @@ async function syncQueueTask(effects: T.Effects, sub: Sub, h: any) {
   }
 }
 
+// ── Side jobs, never awaited by the check ──────────────────────────────────
+//
+// StartOS stops a service only after every health check finishes the run it
+// is in (HealthDaemon.stopSession awaits it). 2026.10.1:10 did the approval
+// task, the alerts and the idle-conversation reset inside the Mail Service
+// check; a restart that began during one of those runs waited on it for
+// good (a task created from the context being torn down never answers), and
+// a reboot queued behind it. Now the check only reads /healthz and returns;
+// the rest runs here, one job at a time, every step with a time limit, and
+// nothing starts once the context is being left.
+
+const left = new WeakSet<T.Effects>()
+const watched = new WeakSet<T.Effects>()
+let sideJob: Promise<void> | null = null
+
+function within<R>(ms: number, p: Promise<R>, what: string): Promise<R> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<R>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${what}: no answer in ${ms / 1000} s`)),
+      ms,
+    )
+  })
+  return Promise.race([p, late]).finally(() => clearTimeout(timer))
+}
+
+function mailSideJobs(effects: T.Effects, sub: Sub, h: any) {
+  if (!watched.has(effects)) {
+    watched.add(effects)
+    effects.onLeaveContext(() => {
+      left.add(effects)
+    })
+  }
+  if (sideJob || left.has(effects)) return
+  sideJob = (async () => {
+    const live = () => !left.has(effects)
+    try {
+      if (live()) await syncQueueTask(effects, sub, h, live)
+    } catch (e) {
+      console.warn(`mail queue task: ${(e as Error)?.message}`)
+    }
+    try {
+      if (live() && h.state === 'refused' && announcedRefusal !== h.since) {
+        announcedRefusal = h.since
+        await announceRefusal(effects, sub, String(h.reason ?? ''))
+      }
+    } catch (e) {
+      console.warn(`mail refusal notice: ${(e as Error)?.message}`)
+    }
+    try {
+      if (live() && h.state === 'ok') {
+        await within(150_000, resetIdleEmailSession(sub), 'email session reset')
+      }
+    } catch (e) {
+      console.warn(`email session reset: ${(e as Error)?.message}`)
+    }
+  })().finally(() => {
+    sideJob = null
+  })
+}
+
 /**
  * The "Mail Service" line: the service's own /healthz (state, reason,
- * sending level, approval queue). No credentials involved.
+ * sending level, approval queue). Returns as soon as that is read; the
+ * task, alerts and session reset run as side jobs (above).
  */
 export async function probeMail(
   effects: T.Effects,
@@ -466,13 +544,10 @@ export async function probeMail(
   const h = await mailHealthz(sub)
   if (!h) return { result: 'starting', message: 'Mail service starting' }
   const addr = h.address ? ` (${h.address})` : ''
-  await syncQueueTask(effects, sub, h).catch((e) =>
-    console.warn(`mail queue task: ${(e as Error)?.message}`),
-  )
+  mailSideJobs(effects, sub, h)
   switch (h.state) {
     case 'ok':
       announcedRefusal = null
-      await resetIdleEmailSession(sub).catch(() => {})
       return {
         result: 'success',
         message: `Signed in${addr}; ${sendingText(h)}`,
@@ -484,12 +559,6 @@ export async function probeMail(
         message: `Mail service ${h.state}${h.reason ? `: ${h.reason}` : ''}`,
       }
     case 'refused':
-      if (announcedRefusal !== h.since) {
-        announcedRefusal = h.since
-        await announceRefusal(effects, sub, String(h.reason ?? '')).catch(
-          () => {},
-        )
-      }
       return { result: 'failure', message: `Mail${addr}: ${h.reason}` }
     default:
       return {
@@ -500,11 +569,15 @@ export async function probeMail(
 }
 
 async function announceRefusal(effects: T.Effects, sub: Sub, reason: string) {
-  await sdk.notification.create(effects, {
-    level: 'warning',
-    title: 'Mailbox refused the password',
-    message: `${reason}. The mail service will not try that password again; it checks for a new one every 10 minutes.`,
-  })
+  await within(
+    20_000,
+    sdk.notification.create(effects, {
+      level: 'warning',
+      title: 'Mailbox refused the password',
+      message: `${reason}. The mail service will not try that password again; it checks for a new one every 10 minutes.`,
+    }),
+    'notification',
+  )
   // ntfy, when configured (notify reads its settings from the gateway).
   await sub.exec(
     ['notify', '--title', 'OpenClaw mail', '--tags', 'warning', reason],

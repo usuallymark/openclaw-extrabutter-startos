@@ -425,7 +425,7 @@ const sending = Value.object(
   {
     name: 'Sending',
     description:
-      'What happens when the email agent is asked to send a draft (Gmail and IMAP only). Every recipient (To, Cc and Bcc) is checked: anyone on Never Send To → refused; a forward, any attachment, or a limit reached → waits for your approval; everyone on Send Automatically To → sent; otherwise Anyone Else decides. Mail waiting for approval appears as a task and under Actions → Review Outgoing Mail; it expires after 3 days.',
+      'What happens when the email agent is asked to send a draft (Gmail and IMAP only). Every recipient (To, Cc and Bcc) is checked: anyone on Never Send To → refused; a forward, any attachment, or a limit reached → waits for your approval; everyone on Send Automatically To (or a Trusted Sender, when that switch is on) → sent; otherwise Anyone Else decides. Mail waiting for approval appears as a task and under Actions → Review Outgoing Mail; it expires after 3 days.',
   },
   InputSpec.of({
     level: Value.select({
@@ -439,9 +439,15 @@ const sending = Value.object(
         rules: 'Send by rules',
       },
     }),
+    includeTrusted: Value.toggle({
+      name: 'Send Automatically to Trusted Senders',
+      description:
+        "The Trusted Senders above also count as Send Automatically To, so you don't list your own and your family's addresses twice. Turn off to keep the two lists separate.",
+      default: true,
+    }),
     autoTo: addressList(
       'Send Automatically To',
-      "Addresses (or whole domains, written @example.com) the email agent may send to without asking you, e.g. your own addresses and your family's. A domain means that domain only, not its subdomains.",
+      'More addresses (or whole domains, written @example.com) the email agent may send to without asking you. A domain means that domain only, not its subdomains.',
     ),
     neverTo: addressList(
       'Never Send To',
@@ -563,6 +569,7 @@ export const configureEmail = sdk.Action.withInput(
       sending: {
         level: i.sending?.level ?? 'drafts',
         autoTo: cleanList(i.sending?.autoTo),
+        includeTrusted: i.sending?.includeTrusted !== false,
         neverTo: cleanList(i.sending?.neverTo),
         others: i.sending?.others ?? 'ask',
         perHour: Number(i.sending?.perHour ?? 10),

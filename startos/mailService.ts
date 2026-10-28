@@ -150,9 +150,12 @@ export async function writeSendingRules(settings: EmailSettings | null) {
   const r = sendingOf(settings)
   const norm = (xs: string[]) =>
     uniq(xs.map((x) => String(x).trim().toLowerCase()).filter(Boolean))
+  const trusted = r.includeTrusted
+    ? (settings?.agent?.trustedSenders ?? [])
+    : []
   const rules = {
     level: r.level,
-    autoTo: norm(r.autoTo),
+    autoTo: norm([...r.autoTo, ...trusted]),
     neverTo: norm(r.neverTo),
     others: r.others,
     perHour: r.perHour,

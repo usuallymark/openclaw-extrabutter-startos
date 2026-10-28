@@ -151,7 +151,12 @@ export const reviewOutgoingMail = sdk.Action.withInput(
         .catch(() => null)
       if (s) {
         const sending = sendingOf(s)
-        const have = new Set(sending.autoTo.map((x) => x.toLowerCase()))
+        const have = new Set(
+          [
+            ...sending.autoTo,
+            ...(sending.includeTrusted ? (s.agent?.trustedSenders ?? []) : []),
+          ].map((x) => x.toLowerCase()),
+        )
         const never = sending.neverTo.map((x) => x.toLowerCase())
         added = (q.recipients ?? []).filter(
           (r) =>

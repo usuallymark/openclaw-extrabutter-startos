@@ -13,10 +13,12 @@ import { v2026_10_1_6 } from './v2026_10_1_6'
 import { v2026_10_1_7 } from './v2026_10_1_7'
 import { v2026_10_1_8 } from './v2026_10_1_8'
 import { v2026_10_1_9 } from './v2026_10_1_9'
+import { v2026_10_1_10 } from './v2026_10_1_10'
 
 export const versionGraph = VersionGraph.of({
   current,
   other: [
+    v2026_10_1_10,
     v2026_10_1_9,
     v2026_10_1_8,
     v2026_10_1_7,

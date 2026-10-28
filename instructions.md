@@ -188,8 +188,10 @@ and **Sending**.
   - anyone on **Never Send To**: refused;
   - a **forward**, any **attachment**, more than **Recipients per Message**,
     or more than the **Limit per Hour/Day**: waits for your approval;
-  - everyone on **Send Automatically To**: sent right away (your own
-    addresses and your family's, typically; `@example.com` means every
+  - everyone on **Send Automatically To**: sent right away. With **Send
+    Automatically to Trusted Senders** on (the default), your Trusted
+    Senders count too, so your own and your family's addresses need not be
+    listed twice; add other addresses here (`@example.com` means every
     address at exactly that domain);
   - anyone else: **Anyone Else** decides: **Ask me** (recommended),
     **Block**, or **Send automatically** (not recommended: a message written

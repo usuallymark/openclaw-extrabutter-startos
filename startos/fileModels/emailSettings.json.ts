@@ -57,6 +57,8 @@ export const sendingOthers = ['ask', 'block', 'auto'] as const
 export const SENDING_DEFAULTS = {
   level: 'drafts' as const,
   autoTo: [] as string[],
+  // Since :11: Trusted Senders also count as Send Automatically To.
+  includeTrusted: true,
   neverTo: [] as string[],
   others: 'ask' as const,
   perHour: 10,
@@ -68,6 +70,7 @@ const sendingShape = z
   .looseObject({
     level: z.enum(sendingLevels).catch('drafts'),
     autoTo: z.array(z.string()).catch([]),
+    includeTrusted: z.boolean().catch(true),
     neverTo: z.array(z.string()).catch([]),
     others: z.enum(sendingOthers).catch('ask'),
     perHour: z.number().int().min(1).catch(10),
