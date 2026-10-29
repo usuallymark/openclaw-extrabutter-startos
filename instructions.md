@@ -318,7 +318,15 @@ assistant's account:
    enable the **Google Calendar API**.
 3. Set up the [OAuth consent screen](https://console.cloud.google.com/auth/branding):
    "External", your own email address.
-4. Under [Audience](https://console.cloud.google.com/auth/audience), click
+4. On **Branding**, fill in: App name `OpenClaw`, the user support and
+   developer contact email (the assistant's address), **Application home
+   page** `https://github.com/usuallymark/openclaw-extrabutter-startos`,
+   **Application privacy policy link**
+   `https://github.com/usuallymark/openclaw-extrabutter-startos/blob/master/PRIVACY.md`,
+   and under **Authorized domains** `github.com`. Do not upload a logo (a
+   logo makes Google require verification). Save. Since autumn 2026 Google
+   will not publish an app without the home page and privacy policy links.
+   Then, under [Audience](https://console.cloud.google.com/auth/audience), click
    **Publish app** → **Confirm**, so it says **In production**. In
    "Testing", Google ends every sign-in after 7 days and the calendar
    stops working each week. A personal app needs no verification from
