@@ -1,14 +1,13 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:16',
+  version: '2026.10.1:17',
   releaseNotes: {
-    en_US: `Calendar: the assistant can keep a calendar of its own.
+    en_US: `Small Calendar fixes.
 
-- **New mode in Configure Calendar: Read + write on its own calendar.** The calendar agent can add, move and cancel events on one calendar of its own (you name it), and invite you and your family. It still cannot change your calendars or answer invitations; Google itself refuses that.
-- **Your approval for anything with guests.** Before Google emails anyone, the request waits in Review Agent Actions (a task appears), showing the event, the guests and why it waits. Optionally hold every new event, with or without guests. Only addresses on your trusted lists can be invited.
-- **Trusted Organizers can reuse Email's Trusted Senders** (on by default), so the family's addresses are typed once.
-- Write mode needs a new sign-in with one more permission; Instructions → Calendar Setup has the command.`,
+- **No false "someone else added this" warning** on events on the agent's own calendar.
+- **The agent reports the exact saved times**, with the time zone, after adding, changing or cancelling an event (or when it waits for your approval).
+- **Own Calendar Name now shows its default ("Assistant") as a real value** you can change, and explains how to rename the calendar later.`,
   },
   migrations: {
     up: async () => {},

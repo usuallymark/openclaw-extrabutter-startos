@@ -324,6 +324,7 @@ class Writer:
                 self.svc.log({'event': 'write_queued', 'request_id': qid, 'action': what, 'guests': guests,
                               'rule': hold})
                 return {'result': 'waiting for approval', 'request_id': qid, 'rule': hold,
+                        **_times(req.get('body') or {}, when),
                         'detail': ('Not done yet. The owner approves or rejects it in StartOS (Review Agent Actions); '
                                    'do not ask again. The status tool shows the outcome.')}
             ev = self._apply(req)
@@ -331,6 +332,7 @@ class Writer:
             out = {'result': 'done', 'action': what, 'calendar': self.name}
             if ev.get('id'):
                 out['event_id'] = ev['id']
+            out.update(_times(ev if ev.get('start') else (req.get('body') or {}), when))
             return out
 
     def _apply(self, req):
@@ -403,6 +405,21 @@ class Writer:
                 'waiting_for_approval': self.pending_summary(),
                 'recent_outcomes': [{k: r.get(k) for k in ('id', 'outcome', 'summary', 'detail')}
                                     for r in self.q.results(10)]}
+
+
+def _times(ev, when=''):
+    """The saved (or requested) start and end, with the time zone, so the
+    agent can report them exactly."""
+    s, e = ev.get('start') or {}, ev.get('end') or {}
+    out = {}
+    if s.get('dateTime'):
+        out.update(start=s['dateTime'], end=e.get('dateTime'), time_zone=s.get('timeZone') or '')
+    elif s.get('date'):
+        last = (date.fromisoformat(e['date']) - timedelta(days=1)).isoformat() if e.get('date') else s['date']
+        out.update(start=s['date'], end=last, all_day=True)
+    elif when:
+        out['when'] = when
+    return out
 
 
 def _started(start):

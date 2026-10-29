@@ -372,7 +372,13 @@ class Tools:
             # Made outside Google and sent as an emailed invitation: the
             # organizer address is only what the invitation claims.
             flags.append('organizer_unverifiable')
-        if creator.get('email') and _addr(creator) != addr and not creator.get('self'):
+        # Someone else put it there. Not for events whose organizer is the
+        # calendar itself (the agent's own calendar names itself as the
+        # organizer and the account as the creator), nor when the creator
+        # is this account.
+        cre = _addr(creator)
+        if (cre and cre != addr and not creator.get('self') and not org.get('self')
+                and cre != (self.svc.account or '').lower()):
             flags.append('creator_differs')
         name = clean_line(org.get('displayName') or '', 80)
         return (f'{name} <{addr}>' if name and addr else addr or name or 'unknown'), flags

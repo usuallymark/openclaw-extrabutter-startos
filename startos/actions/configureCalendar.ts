@@ -146,9 +146,9 @@ const inputSpec = InputSpec.of({
   calendarName: Value.text({
     name: 'Own Calendar Name',
     description:
-      "Write mode: the name of the calendar the agent writes to, created in the Google account the first time (for example your assistant's name). Changing it later renames nothing: the calendar made first stays the agent's.",
+      "Write mode: the name of the calendar the agent writes to, created in the Google account on the first start (for example your assistant's name). It is also how the agent refers to it. To rename it later, rename the calendar in Google Calendar and change it here too: the agent keeps the calendar it made first, whatever it is called.",
     required: false,
-    default: null,
+    default: 'Assistant',
     masked: false,
     placeholder: 'Assistant',
   }),
@@ -202,7 +202,7 @@ export const configureCalendar = sdk.Action.withInput(
           : { selection: 'from-vaultwarden', value: {} },
       trustedOrganizers: s?.trustedOrganizers ?? [],
       includeEmailTrusted: s?.includeEmailTrusted ?? true,
-      calendarName: s?.calendarName || null,
+      calendarName: s?.calendarName || 'Assistant',
       holdAll: s?.holdAll ?? false,
       agentModel: s?.agent?.model || 'default',
       extraInstructions: s?.agent?.extraInstructions || null,
