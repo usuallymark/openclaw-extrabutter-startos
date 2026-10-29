@@ -10,7 +10,6 @@ import {
   SENDING_DEFAULTS,
   emailSettingsJson,
 } from './fileModels/emailSettings.json'
-import { inOpenclawContainer } from './gatewayContainer'
 import { usesMailService } from './email'
 import { AGENTS_MD, IDENTITY_MD, SOUL_MD } from './mailAgentFiles'
 
@@ -166,28 +165,6 @@ export async function writeSendingRules(settings: EmailSettings | null) {
   await writeFile(rulesPath, JSON.stringify(rules, null, 2) + '\n', {
     mode: 0o640,
   })
-}
-
-/**
- * Run mail/mailctl.py as root in the gateway's container (the queue and the
- * log are the mail service user's; only root reads them there). JSON out.
- */
-export async function mailctl(
-  effects: T.Effects,
-  args: string[],
-): Promise<any> {
-  const res = await inOpenclawContainer(effects, 'mailctl', (sub) =>
-    sub.exec(['python3', '-I', '/opt/openclaw-mail/mailctl.py', ...args], {
-      user: 'root',
-      timeout: 30_000,
-    }),
-  )
-  if (res.exitCode !== 0) {
-    throw new Error(
-      `The mail service's queue could not be read: ${String(res.stderr).trim().split('\n').pop() || `exit ${res.exitCode}`}`,
-    )
-  }
-  return JSON.parse(String(res.stdout))
 }
 
 /** The uid that owns the mail folder (the package's own), for the launcher. */

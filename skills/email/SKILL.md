@@ -83,7 +83,7 @@ Sending) then decide, and the email agent reports one of:
 
 - **sent**: say so.
 - **waiting for approval**: not sent yet. The owner approves or rejects it
-  in StartOS (a task appears; Actions → Review Outgoing Mail). Tell the
+  in StartOS (a task appears; Actions → Review Agent Actions). Tell the
   user exactly that. Forwards, attachments, recipients outside the
   automatic list, and mail over the hourly/daily limits wait like this.
 - **refused**: say why (the rule). Do not try again, rephrase, split the

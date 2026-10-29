@@ -11,10 +11,11 @@ as root; this service can read it, not change it):
 - every recipient on "Send automatically to": sent.
 - anyone else: per "Anyone else" (ask: held; block: refused; auto: sent).
 
-Held messages wait in state/queue/ (only this user can write there) with
-the exact bytes that will be sent. The owner decides in StartOS (Review
-Outgoing Mail); the package writes the decision into decisions/, which only
-root can write. Undecided messages expire after 3 days.
+Held messages wait in the service's approval queue (approvals.py, shared
+with the package's other services: state/queue/, which only this user can
+write) with the exact bytes that will be sent. The owner decides in StartOS
+(Review Agent Actions); the package writes the decision into decisions/,
+which only root can write. Undecided messages expire after 3 days.
 """
 
 import base64
@@ -32,6 +33,7 @@ import time
 from email import policy
 from email.utils import getaddresses
 
+from approvals import ApprovalQueue
 from sanitize import clean_line, clean_text
 
 EXPIRE_S = 3 * 24 * 3600
@@ -66,6 +68,11 @@ def matches(addr, entries):
     return False
 
 
+def _short(s, n):
+    t = ' '.join(str(s or '').split())
+    return t[:n - 1] + '…' if len(t) > n else t
+
+
 def recipients(msg):
     vals = []
     for h in ('To', 'Cc', 'Bcc'):
@@ -79,12 +86,9 @@ class Outbox:
         self.cfg = cfg
         self._password = password
         st = cfg['stateDir']
-        self.queue_dir = os.path.join(st, 'queue')
         self.sent_path = os.path.join(st, 'sent.jsonl')
-        self.results_path = os.path.join(st, 'results.jsonl')
         self.rules_path = cfg.get('rulesPath') or ''
-        self.decisions_dir = cfg.get('decisionsDir') or ''
-        os.makedirs(self.queue_dir, mode=0o700, exist_ok=True)
+        self.q = ApprovalQueue(st, cfg.get('decisionsDir'), EXPIRE_S)
         self._key = self._draft_key()
         self.lock = threading.RLock()
         self._failures = {}
@@ -247,83 +251,54 @@ class Outbox:
     # ── queue ───────────────────────────────────────────────────────────────
 
     def enqueue(self, raw, msg, kind, rule, draft_uid, draft_folder, attachment_names):
-        qid = time.strftime('%Y%m%d%H%M%S') + '-' + secrets.token_hex(3)
+        qid = self.q.new_id()
         body = ''
         try:
             part = msg.get_body(preferencelist=('plain',))
             body = part.get_content() if part is not None else ''
         except Exception:
             pass
+        to, cc, bcc = (str(msg[h] or '') for h in ('To', 'Cc', 'Bcc'))
+        subject = clean_line(str(msg['Subject'] or ''), 200)
+        opening = clean_text(body)[:600]
+        rcpts = sorted(set(recipients(msg)))
         item = {
-            'id': qid, 'created': time.time(), 'expires': time.time() + EXPIRE_S,
-            'kind': kind, 'rule': rule, 'draftUid': draft_uid, 'draftFolder': draft_folder,
+            'id': qid, 'action': 'send', 'rule': rule, 'requester': 'email agent',
+            # What Review Agent Actions shows.
+            'summary': f'Email to {_short(", ".join(rcpts) or to, 60)}: {_short(subject, 50) or "(no subject)"}',
+            'details': [
+                f'To: {to or "—"}',
+                *([f'Cc: {cc}'] if cc else []),
+                *([f'Bcc: {bcc}'] if bcc else []),
+                f'Subject: {subject or "(none)"}',
+                f'Kind: {"forward" if kind == "forward" else "reply" if kind.startswith("reply") else "new message"}',
+                f'Attachments: {", ".join(attachment_names) if attachment_names else "none"}',
+                f'Opening lines: {_short(opening, 400) or "(empty)"}',
+            ],
+            'recipients': rcpts,
+            # The mail service's own.
+            'kind': kind, 'draftUid': draft_uid, 'draftFolder': draft_folder,
             'messageId': str(msg['Message-ID'] or '').strip(),
-            'from': str(msg['From'] or ''),
-            'to': str(msg['To'] or ''), 'cc': str(msg['Cc'] or ''), 'bcc': str(msg['Bcc'] or ''),
-            'subject': clean_line(str(msg['Subject'] or ''), 200),
-            'opening': clean_text(body)[:600],
-            'attachments': attachment_names, 'requester': 'email agent',
+            'from': str(msg['From'] or ''), 'to': to, 'cc': cc, 'bcc': bcc,
+            'subject': subject, 'opening': opening, 'attachments': attachment_names,
             'raw': base64.b64encode(raw).decode(),
         }
-        tmp = os.path.join(self.queue_dir, f'.{qid}.tmp')
-        with open(tmp, 'w') as f:
-            json.dump(item, f)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, os.path.join(self.queue_dir, f'{qid}.json'))
-        return qid
+        return self.q.add(item)
 
     def pending(self):
-        out = []
-        try:
-            names = sorted(os.listdir(self.queue_dir))
-        except OSError:
-            return out
-        for n in names:
-            if not n.endswith('.json'):
-                continue
-            try:
-                with open(os.path.join(self.queue_dir, n)) as f:
-                    out.append(json.load(f))
-            except (OSError, ValueError):
-                continue
-        return out
+        return self.q.pending()
 
     def _result(self, item, outcome, detail=''):
-        rec = {'id': item['id'], 'outcome': outcome, 'to': item.get('to'), 'subject': item.get('subject'),
-               'detail': detail, 'ts': time.time()}
-        with open(self.results_path, 'a') as f:
-            f.write(json.dumps(rec) + '\n')
-        try:
-            os.unlink(os.path.join(self.queue_dir, f'{item["id"]}.json'))
-        except OSError:
-            pass
+        self.q.resolve(item, outcome, detail, to=item.get('to'), subject=item.get('subject'))
         self.svc.log({'event': f'send_{outcome}', 'queue_id': item['id'], 'to': item.get('to'),
                       'cc': item.get('cc'), 'bcc': item.get('bcc'), 'subject': item.get('subject'),
                       'detail': detail})
 
     def results(self, limit=10):
-        try:
-            with open(self.results_path) as f:
-                lines = f.readlines()[-limit:]
-        except OSError:
-            return []
-        out = []
-        for ln in lines:
-            try:
-                out.append(json.loads(ln))
-            except ValueError:
-                pass
-        return out
+        return self.q.results(limit)
 
     def decision(self, qid):
-        if not self.decisions_dir or not re.fullmatch(r'[0-9]{14}-[0-9a-f]{6}', qid):
-            return None
-        try:
-            with open(os.path.join(self.decisions_dir, f'{qid}.json')) as f:
-                d = json.load(f)
-        except (OSError, ValueError):
-            return None
-        return d.get('decision') if d.get('decision') in ('approve', 'reject') else None
+        return self.q.decision(qid)
 
     def process(self, hooks):
         """Act on owner decisions and expire old items. hooks.draft_present(item)
@@ -334,7 +309,7 @@ class Outbox:
             for item in self.pending():
                 d = self.decision(item['id'])
                 if d == 'reject':
-                    self._result(item, 'rejected', 'rejected in Review Outgoing Mail')
+                    self._result(item, 'rejected', 'rejected in Review Agent Actions')
                 elif d == 'approve':
                     self._approved(item, hooks, now)
                 elif now > item.get('expires', 0):
@@ -367,7 +342,7 @@ class Outbox:
                 self.svc.log({'event': 'send_retry', 'queue_id': qid, 'detail': detail})
             return
         self._failures.pop(qid, None)
-        self._result(item, 'sent', 'approved in Review Outgoing Mail')
+        self._result(item, 'sent', 'approved in Review Agent Actions')
         try:
             hooks.after_send(item, msg)
         except Exception as e:

@@ -199,7 +199,8 @@ and **Sending**.
 
 When mail waits for you, you get a task on the service page, a StartOS
 notification and (with ntfy set up) a phone alert. Open **Actions → Review
-Outgoing Mail**: it shows the recipients, subject, opening lines,
+Agent Actions** (called Review Outgoing Mail before 2026.10.1:14; it is
+the one place you approve whatever your agents want to do): it shows the recipients, subject, opening lines,
 attachments and why it waits. Choose **Approve**, **Reject**, or **Approve
 and always allow these recipients** (adds them to Send Automatically To).
 Undecided mail expires after 3 days, and a draft you changed or deleted in

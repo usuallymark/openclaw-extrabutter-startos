@@ -1,5 +1,5 @@
 import { sdk } from '../sdk'
-import { mailctl } from '../mailService'
+import { agentctl } from '../agentActions'
 
 // Email Activity (since 2026.10.1:10): the mail service's log, newest
 // first: what the email agent read, filed, drafted and sent, what the rules
@@ -72,7 +72,7 @@ export const emailActivity = sdk.Action.withoutInput(
   }),
 
   async ({ effects }) => {
-    const out = await mailctl(effects, ['activity', '300'])
+    const out = await agentctl(effects, ['activity', 'mail', '300'])
     const entries = ((out?.activity ?? []) as Entry[]).reverse()
     const sends = entries.filter((e) =>
       String(e.event ?? '').startsWith('send_'),

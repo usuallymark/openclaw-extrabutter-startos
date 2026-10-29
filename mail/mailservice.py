@@ -37,13 +37,13 @@ import re  # noqa: E402
 import secrets  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
-from datetime import datetime, timezone  # noqa: E402
+from datetime import datetime  # noqa: E402
 from email import policy  # noqa: E402
 from email.message import EmailMessage  # noqa: E402
 from email.utils import formataddr, getaddresses, make_msgid, formatdate  # noqa: E402
-import socketserver  # noqa: E402
 
 import mcp  # noqa: E402
+import svcutil  # noqa: E402
 import message as M  # noqa: E402
 from mcp import TOOLS, MAX_LIST, MAX_UIDS  # noqa: E402
 from extract import attachment_text  # noqa: E402
@@ -78,7 +78,7 @@ class Service:
         self._fp = self._fingerprint(password) if password else None
         self._calls = []
         self._calls_lock = threading.Lock()
-        self._log_lock = threading.Lock()
+        self._log = svcutil.ActivityLog(os.path.join(self.state_dir, 'activity.jsonl'), LOG_MAX_BYTES)
         if not password:
             self.set_state('unavailable', reason or 'no password was available')
 
@@ -156,20 +156,7 @@ class Service:
     # activity log (no message bodies)
 
     def log(self, entry):
-        p = os.path.join(self.state_dir, 'activity.jsonl')
-        entry = {'ts': _now(), **entry}
-        line = (json.dumps(entry, ensure_ascii=False) + '\n').encode()
-        with self._log_lock:
-            try:
-                if os.path.exists(p) and os.path.getsize(p) > LOG_MAX_BYTES:
-                    os.replace(p, p + '.1')
-                fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-                try:
-                    _write_all(fd, line)
-                finally:
-                    os.close(fd)
-            except OSError:
-                pass
+        self._log(entry)
 
     def rate_ok(self):
         now = time.time()
@@ -199,35 +186,10 @@ class Service:
         return h
 
 
-def _now():
-    return datetime.now(timezone.utc).astimezone().strftime('%Y-%m-%d %H:%M %Z')
-
-
-def _write_all(fd, data):
-    view = memoryview(data)
-    while view:
-        n = os.write(fd, view)
-        view = view[n:]
-
-
-def _write_private(path, data):
-    tmp = f'{path}.tmp{os.getpid()}'
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    try:
-        _write_all(fd, data)
-    finally:
-        os.close(fd)
-    os.replace(tmp, path)
-
-
-def _schedule_exit(code, delay):
-    def go():
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(code)
-    t = threading.Timer(delay, go)
-    t.daemon = True
-    t.start()
+_now = svcutil.now_text
+_write_all = svcutil.write_all
+_write_private = svcutil.write_private
+_schedule_exit = svcutil.schedule_exit
 
 
 # ── Tools ───────────────────────────────────────────────────────────────────
@@ -787,7 +749,7 @@ class Tools:
             for q in ob.pending():
                 if mid and q.get('messageId') == mid:
                     return {'result': 'already waiting for approval', 'queue_id': q['id'], 'rule': q.get('rule'),
-                            'detail': 'Do not send it again; the owner decides in StartOS (Review Outgoing Mail).'}
+                            'detail': 'Do not send it again; the owner decides in StartOS (Review Agent Actions).'}
             decision, rule = ob.judge(rcpts, kind, len(atts))
             if decision == 'refuse':
                 self.svc.log({'event': 'send_refused', **base, 'rule': rule})
@@ -797,7 +759,7 @@ class Tools:
                 qid = ob.enqueue(raw, msg, kind, rule, did, drafts['name'], atts)
                 self.svc.log({'event': 'send_queued', **base, 'queue_id': qid, 'rule': rule})
                 return {'result': 'waiting for approval', 'queue_id': qid, 'rule': rule,
-                        'detail': ('Not sent yet. The owner approves or rejects it in StartOS (Review Outgoing Mail); '
+                        'detail': ('Not sent yet. The owner approves or rejects it in StartOS (Review Agent Actions); '
                                    'without a decision it expires in 3 days. Do not send it again; '
                                    'the status tool shows the outcome.')}
             try:
@@ -895,23 +857,12 @@ def _release(base, base_fd, h, atts):
 
 # ── Worker endpoint (Unix socket, for front.py) ─────────────────────────────
 
-class _UnixServer(socketserver.ThreadingUnixStreamServer):
-    daemon_threads = True
-
-
 def serve_worker(svc, tools, path):
     """Serve tool calls and /healthz to the front door over a Unix socket in
     the state folder (only openclaw-mail can open it)."""
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
-
     def call_tool(rid, params):
         return mcp.run_tool(rid, params, tools.call, svc.log)
-    srv = _UnixServer(path, mcp.make_handler(call_tool, svc.health))
-    os.chmod(path, 0o600)
-    return srv
+    return svcutil.serve_unix(path, mcp.make_handler(call_tool, svc.health))
 
 
 # ── Approval queue ──────────────────────────────────────────────────────────

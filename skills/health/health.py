@@ -303,7 +303,7 @@ def check_mail(t):
     }.get(h.get('sending'), 'drafts only (nothing is sent)')
     if queue:
         sending += (f'; {len(queue)} message(s) waiting for approval: the owner decides in StartOS '
-                    '(Actions → Review Outgoing Mail)')
+                    '(Actions → Review Agent Actions)')
     if state == 'ok':
         msg = f'signed in as {addr}; {sending}'
         ok = True

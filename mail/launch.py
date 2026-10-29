@@ -17,12 +17,17 @@ The service exits when the mailbox refuses the password (and every few
 minutes while it waits for a new one); StartOS then runs this again.
 """
 
-import json
-import os
-import pwd
-import stat
-import subprocess
 import sys
+
+sys.path.insert(0, '/opt/openclaw-mail')
+
+import json  # noqa: E402
+import os  # noqa: E402
+import pwd  # noqa: E402
+import stat  # noqa: E402
+import subprocess  # noqa: E402
+
+from launcher import Launcher  # noqa: E402
 
 MAIL_ROOT = '/data/.openclaw-mail'
 SETTINGS = f'{MAIL_ROOT}/settings.json'
@@ -45,47 +50,8 @@ GMAIL = {'imap': {'host': 'imap.gmail.com', 'port': 993, 'security': 'tls'},
          'smtp': {'host': 'smtp.gmail.com', 'port': 465, 'security': 'tls'}}
 
 
-def say(msg):
-    print(f'mail launcher: {msg}', flush=True)
-
-
-def fail(msg):
-    say(msg)
-    sys.exit(1)
-
-
-def own_dir(path, uid, gid, mode):
-    """Make path a real directory with this owner and mode (never a link)."""
-    try:
-        st = os.lstat(path)
-    except FileNotFoundError:
-        os.mkdir(path, mode)
-        st = os.lstat(path)
-    if not stat.S_ISDIR(st.st_mode):
-        fail(f'{path} is not a directory (a link or file is in its place); refusing to start')
-    os.chown(path, uid, gid, follow_symlinks=False)
-    os.chmod(path, mode)
-
-
-def open_dir_fd(path, uid, gid):
-    """Open a workspace folder for the service, as root, following no link
-    on the way, and hand it over as an open descriptor. The service user
-    cannot pass through the gateway's private folders (/data/.openclaw is
-    node's, 0700), so it never uses the path itself."""
-    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        for part in path.strip('/').split('/'):
-            nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
-            os.close(fd)
-            fd = nfd
-        st = os.fstat(fd)
-        if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid or st.st_gid != gid:
-            raise OSError(f'{path} does not have the expected owner')
-    except BaseException:
-        os.close(fd)
-        raise
-    os.set_inheritable(fd, True)
-    return fd
+L = Launcher('mail launcher')
+say, fail, own_dir, open_dir_fd = L.say, L.fail, L.own_dir, L.open_dir_fd
 
 
 def first_line(s):
@@ -125,21 +91,10 @@ def main():
         fail(f'user {e} is missing from the image')
 
     # The folder is created by the package (as root). Anything else in its
-    # place was not, and is not trusted.
-    try:
-        st = os.lstat(MAIL_ROOT)
-    except FileNotFoundError:
-        fail(f'{MAIL_ROOT} does not exist; open Configure Email and save')
-    # The package creates it as root; main passes the owner it saw (in case
-    # the package runtime is not uid 0 here). The gateway user never counts.
-    expected = {0}
-    if (os.environ.get('MAIL_ROOT_UID') or '').isdigit():
-        expected.add(int(os.environ['MAIL_ROOT_UID']))
-    expected.discard(node.pw_uid)
-    if not stat.S_ISDIR(st.st_mode) or st.st_uid not in expected:
-        fail(f'{MAIL_ROOT} is not the package\'s own folder (owner uid {st.st_uid}); refusing to start. '
-             'Remove it and save Configure Email again.')
-    owner = st.st_uid
+    # place was not, and is not trusted. main passes the owner it saw (in
+    # case the package runtime is not uid 0 here).
+    owner = L.package_root(MAIL_ROOT, node.pw_uid, 'MAIL_ROOT_UID', 'open Configure Email and save',
+                           'Remove it and save Configure Email again.')
     os.chown(MAIL_ROOT, owner, mail.pw_gid)
     os.chmod(MAIL_ROOT, 0o710)
     own_dir(STATE, mail.pw_uid, mail.pw_gid, 0o700)
@@ -245,26 +200,8 @@ def main():
         'passwordError': error,
         'note': note,
     }
-    data = json.dumps(payload).encode()
-    del password, payload
-    r, w = os.pipe()
-    if len(data) > 60000:
-        fail('the email settings are too large')
-    os.write(w, data)
-    os.close(w)
-    del data
-    os.dup2(r, 0)
-    os.close(r)
-
-    os.setgroups([])
-    os.setgid(mail.pw_gid)
-    os.setuid(mail.pw_uid)
-    if os.getuid() == 0 or os.geteuid() == 0:
-        fail('could not drop root')
-    env = {'PATH': '/usr/bin:/bin', 'HOME': STATE, 'LANG': 'C.UTF-8', 'PYTHONDONTWRITEBYTECODE': '1'}
-    os.chdir(STATE)
-    os.execve('/usr/bin/python3', ['python3', '-I', SERVICE], env)
-
+    del password
+    L.exec_service(mail, SERVICE, payload, STATE, 'the email settings are too large')
 
 if __name__ == '__main__':
     main()

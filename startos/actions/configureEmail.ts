@@ -425,7 +425,7 @@ const sending = Value.object(
   {
     name: 'Sending',
     description:
-      'What happens when the email agent is asked to send a draft (Gmail and IMAP only). Every recipient (To, Cc and Bcc) is checked: anyone on Never Send To → refused; a forward, any attachment, or a limit reached → waits for your approval; everyone on Send Automatically To (or a Trusted Sender, when that switch is on) → sent; otherwise Anyone Else decides. Mail waiting for approval appears as a task and under Actions → Review Outgoing Mail; it expires after 3 days.',
+      'What happens when the email agent is asked to send a draft (Gmail and IMAP only). Every recipient (To, Cc and Bcc) is checked: anyone on Never Send To → refused; a forward, any attachment, or a limit reached → waits for your approval; everyone on Send Automatically To (or a Trusted Sender, when that switch is on) → sent; otherwise Anyone Else decides. Mail waiting for approval appears as a task and under Actions → Review Agent Actions; it expires after 3 days.',
   },
   InputSpec.of({
     level: Value.select({

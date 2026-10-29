@@ -3,10 +3,13 @@ import { sdk } from './sdk'
 import { RBW_ENV, VAULT_PROBE_SCRIPT } from './vault'
 import { EmailConfig, googleSignInStatus, usesMailService } from './email'
 import { MAIL_URL } from './mailService'
+import { reviewAgentActions } from './actions/reviewAgentActions'
 import {
-  MAIL_QUEUE_TASK,
-  reviewOutgoingMail,
-} from './actions/reviewOutgoingMail'
+  AGENT_ACTIONS_TASK,
+  LEGACY_TASKS,
+  agentActionsTaskChange,
+  taskSynced,
+} from './agentActions'
 import { LocalKey, notInstalledMessage } from './localServices'
 
 // Health checks for the vault and external services.
@@ -392,7 +395,7 @@ export async function mailAnswers(
 function sendingText(h: any): string {
   const q = Array.isArray(h.queue) ? h.queue.length : 0
   const waiting = q
-    ? `; ${q} message${q > 1 ? 's' : ''} waiting for your approval (Review Outgoing Mail)`
+    ? `; ${q} message${q > 1 ? 's' : ''} waiting for your approval (Review Agent Actions)`
     : ''
   switch (h.sending) {
     case 'off':
@@ -410,10 +413,10 @@ function sendingText(h: any): string {
   }
 }
 
-// Queue items already announced (StartOS notification + ntfy), and the
-// last queue the StartOS task was set for.
+// Queue items already announced (StartOS notification + ntfy). The task
+// itself is shared with every service's queue (agentActions.ts).
 const announcedQueue = new Set<string>()
-let taskFor: string | null = null
+let legacyCleared = false
 
 async function syncQueueTask(
   effects: T.Effects,
@@ -427,31 +430,46 @@ async function syncQueueTask(
     subject?: string
     rule?: string
   }[]
-  const key = queue.map((q) => q.id).join(',')
-  if (key !== taskFor) {
-    if (queue.length) {
+  if (!legacyCleared) {
+    // Review Outgoing Mail's task (before :14) points at an action that is
+    // gone; the shared task below replaces it.
+    for (const id of LEGACY_TASKS) {
       await within(
         20_000,
-        sdk.action.createOwnTask(effects, reviewOutgoingMail, 'important', {
-          reason: `${queue.length} outgoing message${queue.length > 1 ? 's' : ''} waiting for your approval`,
-          replayId: MAIL_QUEUE_TASK,
+        sdk.action.clearTask(effects, id),
+        'clear old approval task',
+      )
+    }
+    legacyCleared = true
+  }
+  const change = agentActionsTaskChange(
+    'mail',
+    queue.map((q) => q.id),
+  )
+  if (change) {
+    if (change.total) {
+      await within(
+        20_000,
+        sdk.action.createOwnTask(effects, reviewAgentActions, 'important', {
+          reason: `${change.total} agent action${change.total > 1 ? 's' : ''} waiting for your approval`,
+          replayId: AGENT_ACTIONS_TASK,
         }),
         'approval task',
       )
     } else {
       await within(
         20_000,
-        sdk.action.clearTask(effects, MAIL_QUEUE_TASK),
+        sdk.action.clearTask(effects, AGENT_ACTIONS_TASK),
         'clear approval task',
       )
     }
-    taskFor = key
+    taskSynced(change.key)
   }
   for (const q of queue) {
     if (!live()) return
     if (announcedQueue.has(q.id)) continue
     announcedQueue.add(q.id)
-    const text = `Mail waiting for approval: to ${q.to || '?'}, "${q.subject || ''}" (${q.rule || 'rules'}). Open Actions → Review Outgoing Mail.`
+    const text = `Mail waiting for approval: to ${q.to || '?'}, "${q.subject || ''}" (${q.rule || 'rules'}). Open Actions → Review Agent Actions.`
     await within(
       20_000,
       sdk.notification.create(effects, {

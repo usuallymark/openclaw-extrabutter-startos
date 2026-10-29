@@ -109,12 +109,23 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 # agents (user node) cannot become, and code only root can change. Two
 # daemons start as root and become openclaw-mail: front.py (the MCP
 # endpoint, no secrets) and launch.py → mailservice.py (the mailbox side).
-# See startos/mailService.ts.
+# See startos/mailService.ts. The parts every isolated service shares
+# (agentsvc/: MCP server, front door, launcher steps, approval queue) are
+# copied next to each service's own code.
 RUN useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin openclaw-mail
-COPY mail/launch.py mail/front.py mail/mcp.py mail/mailservice.py mail/imapmail.py mail/message.py mail/sanitize.py mail/extract.py mail/outbox.py mail/mailctl.py /opt/openclaw-mail/
+COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py agentsvc/approvals.py /opt/openclaw-mail/
+COPY mail/launch.py mail/front.py mail/mcp.py mail/mailservice.py mail/imapmail.py mail/message.py mail/sanitize.py mail/extract.py mail/outbox.py /opt/openclaw-mail/
 RUN chmod 755 /opt/openclaw-mail && chmod 644 /opt/openclaw-mail/*.py \
     && python3 -m compileall -q /opt/openclaw-mail \
-    && cd /tmp && python3 -I -c 'import sys; sys.path.insert(0, "/opt/openclaw-mail"); import mailservice, launch, front, mailctl'
+    && cd /tmp && python3 -I -c 'import sys; sys.path.insert(0, "/opt/openclaw-mail"); import mailservice, launch, front'
+
+# Owner-side helper for every isolated service's approval queue and log
+# (Review Agent Actions, Email Activity): run as root by the package's
+# actions, never by an agent.
+COPY agentsvc/agentctl.py /opt/openclaw-services/agentctl.py
+RUN chmod 755 /opt/openclaw-services && chmod 644 /opt/openclaw-services/agentctl.py \
+    && python3 -m compileall -q /opt/openclaw-services \
+    && cd /tmp && python3 -I /opt/openclaw-services/agentctl.py queue >/dev/null
 
 # Stage skill files (loaded via extraDirs in openclaw.json)
 # start-cli skill (always loaded)
