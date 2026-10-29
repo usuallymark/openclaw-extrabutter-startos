@@ -337,7 +337,11 @@ export const main = sdk.setupMain(async ({ effects }) => {
   const calOn = calendarIsOn(calSettings)
   if (calOn) enabledSkills.push('/opt/skills/calendar')
   await applyCalendarConfig(effects, calSettings)
-  if (calOn && calSettings) await writeCalendarAgentWorkspace(calSettings)
+  if (calOn && calSettings)
+    await writeCalendarAgentWorkspace(
+      calSettings,
+      mailSettings?.agent?.trustedSenders ?? [],
+    )
   const calOwner = calOn ? await calendarRootOwner() : null
 
   // Webchat (Configure Webchat). Reactive: main re-runs when it changes.

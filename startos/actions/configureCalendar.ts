@@ -91,9 +91,13 @@ const inputSpec = InputSpec.of({
   mode: Value.select({
     name: 'Calendar',
     description:
-      'Read only: the calendar agent can list, search and read the events of this Google account, including calendars shared with it. It cannot create, change, answer or delete anything. Off: no calendar service, no calendar agent.',
+      "Read only: the calendar agent can list, search and read the events of this Google account, including calendars shared with it. It cannot change anything.\nRead + write on its own calendar: it also adds, changes and cancels events on one calendar of its own (named below), and can invite you and the people on the trusted lists. Anything with guests waits for your approval (Review Agent Actions) before Google emails them. It never changes your calendars or anyone else's, and cannot answer invitations. Needs a sign-in with the extra permission (google-signin.py --scopes calendar.readonly,calendar.app.created).\nOff: no calendar service, no calendar agent.",
     default: 'off',
-    values: { off: 'Off', read: 'Read only' },
+    values: {
+      off: 'Off',
+      read: 'Read only',
+      write: 'Read + write on its own calendar',
+    },
   }),
   account: Value.text({
     name: 'Google Account',
@@ -133,6 +137,27 @@ const inputSpec = InputSpec.of({
       },
     ),
   ),
+  includeEmailTrusted: Value.toggle({
+    name: "Also Trust Email's Trusted Senders",
+    description:
+      "The Trusted Senders in Configure Email count as Trusted Organizers too, so you don't type your own and your family's addresses twice. In write mode, the trusted addresses are also the only ones that may be invited.",
+    default: true,
+  }),
+  calendarName: Value.text({
+    name: 'Own Calendar Name',
+    description:
+      "Write mode: the name of the calendar the agent writes to, created in the Google account the first time (for example your assistant's name). Changing it later renames nothing: the calendar made first stays the agent's.",
+    required: false,
+    default: null,
+    masked: false,
+    placeholder: 'Assistant',
+  }),
+  holdAll: Value.toggle({
+    name: 'Hold Every New Event for My Approval',
+    description:
+      'Write mode: off, events without guests are added (and changed or cancelled) directly, and only those with guests wait for you. On, every change waits for your approval in Review Agent Actions.',
+    default: false,
+  }),
   agentModel,
   extraInstructions: Value.textarea({
     name: 'Extra Instructions (optional)',
@@ -152,7 +177,7 @@ export const configureCalendar = sdk.Action.withInput(
   async () => ({
     name: 'Configure Calendar',
     description:
-      'Connect a Google calendar and set up the calendar agent: the only agent that reads the calendars. It has no shell and no passwords, and for now it only reads; your main agent asks it what is on. Saving restarts OpenClaw.',
+      'Connect a Google calendar and set up the calendar agent: the only agent that reads the calendars. It has no shell and no passwords; your main agent asks it what is on. It can also keep a calendar of its own and invite your family, with your approval. Saving restarts OpenClaw.',
     warning: null,
     allowedStatuses: 'any',
     group: null,
@@ -176,6 +201,9 @@ export const configureCalendar = sdk.Action.withInput(
           ? { selection: 'manual', value: { value: null } }
           : { selection: 'from-vaultwarden', value: {} },
       trustedOrganizers: s?.trustedOrganizers ?? [],
+      includeEmailTrusted: s?.includeEmailTrusted ?? true,
+      calendarName: s?.calendarName || null,
+      holdAll: s?.holdAll ?? false,
       agentModel: s?.agent?.model || 'default',
       extraInstructions: s?.agent?.extraInstructions || null,
     } as any
@@ -212,6 +240,15 @@ export const configureCalendar = sdk.Action.withInput(
           )
         }
         if (
+          i.mode === 'write' &&
+          parsed.scopes.length &&
+          !parsed.scopes.includes('calendar.app.created')
+        ) {
+          throw new Error(
+            'Write mode needs a sign-in with the extra permission. Run google-signin.py again with --scopes calendar.readonly,calendar.app.created, or choose Read only.',
+          )
+        }
+        if (
           parsed.scopes.some((s) => s === 'calendar' || s === 'calendar.events')
         )
           scopesNote =
@@ -219,7 +256,7 @@ export const configureCalendar = sdk.Action.withInput(
         token = { source: 'manual', value: pasted }
       } else if (prior?.token?.source === 'manual' && prior.token.value) {
         token = prior.token
-      } else if (i.mode === 'read') {
+      } else if (i.mode !== 'off') {
         throw new Error(
           'Paste the sign-in (the line printed by google-signin.py), or choose Fetch from Vaultwarden.',
         )
@@ -238,10 +275,14 @@ export const configureCalendar = sdk.Action.withInput(
     )
     const settings: CalendarSettings = {
       ...(prior ?? {}),
-      mode: i.mode === 'read' ? 'read' : 'off',
+      mode: i.mode === 'read' || i.mode === 'write' ? i.mode : 'off',
       account: account || prior?.account || undefined,
       token,
       trustedOrganizers: trusted,
+      includeEmailTrusted: i.includeEmailTrusted !== false,
+      calendarName:
+        String(i.calendarName ?? '').trim() || prior?.calendarName || undefined,
+      holdAll: i.holdAll === true,
       agent: {
         ...(prior?.agent ?? {}),
         model: String(i.agentModel || 'default'),
@@ -255,8 +296,11 @@ export const configureCalendar = sdk.Action.withInput(
       version: '1' as const,
       title: 'Calendar Configured',
       message:
-        (settings.mode === 'read'
-          ? 'Settings saved. OpenClaw is restarting; the calendar service starts on its own, and its state is shown as "Calendar Service" on the service page.'
+        (settings.mode !== 'off'
+          ? 'Settings saved. OpenClaw is restarting; the calendar service starts on its own, and its state is shown as "Calendar Service" on the service page.' +
+            (settings.mode === 'write'
+              ? ` Write mode: on the first start the agent's own calendar "${settings.calendarName || 'Assistant'}" is created in the Google account; the sign-in must include calendar.app.created (the Calendar Service line warns if it does not).`
+              : '')
           : 'Calendar is off. OpenClaw is restarting.') + scopesNote,
       result: null,
     }

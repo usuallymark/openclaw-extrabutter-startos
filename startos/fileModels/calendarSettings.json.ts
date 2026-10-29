@@ -9,7 +9,7 @@ import { sdk } from '../sdk'
 
 export const CAL_ROOT_SUBPATH = '.openclaw-calendar'
 export const CAL_SETTINGS_SUBPATH = `${CAL_ROOT_SUBPATH}/settings.json`
-export const calendarModes = ['off', 'read'] as const
+export const calendarModes = ['off', 'read', 'write'] as const
 
 const shape = z.looseObject({
   mode: z.enum(calendarModes).catch('off'),
@@ -23,6 +23,13 @@ const shape = z.looseObject({
     })
     .catch({ source: 'from-vaultwarden' as const, value: undefined }),
   trustedOrganizers: z.array(z.string()).catch([]),
+  // Since :16: Configure Email's Trusted Senders count as Trusted
+  // Organizers too (the launcher reads both lists at start).
+  includeEmailTrusted: z.boolean().catch(true),
+  // Write mode (since :16): the name of the assistant's own calendar, and
+  // whether every new event (not only those with guests) waits.
+  calendarName: z.string().optional().catch(undefined),
+  holdAll: z.boolean().catch(false),
   agent: z
     .looseObject({
       model: z.string().catch('default'),
@@ -37,6 +44,8 @@ export const CALENDAR_DEFAULTS: CalendarSettings = {
   mode: 'off',
   token: { source: 'from-vaultwarden' },
   trustedOrganizers: [],
+  includeEmailTrusted: true,
+  holdAll: false,
   agent: { model: 'default' },
 }
 

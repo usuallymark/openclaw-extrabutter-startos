@@ -1,14 +1,14 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:15',
+  version: '2026.10.1:16',
   releaseNotes: {
-    en_US: `Calendar, read only.
+    en_US: `Calendar: the assistant can keep a calendar of its own.
 
-- **New: Configure Calendar.** Your assistant can read the Google calendars of its account, including the ones you share with it: what is on, when something is, who invited whom. A separate calendar agent does the reading; it has only the calendar tools (no shell, no passwords, no web), and it cannot add, change, accept or delete anything. Off until you turn it on.
-- **Invitations are treated like mail from strangers.** Event text is shown as untrusted content with hidden text removed, and each event says whether it came from the account itself, a Trusted Organizer, someone else, or an emailed invitation whose organizer can't be checked.
-- **Sign in once on your computer** with the included script (tools/google-signin.py). It asks only to read calendars. Keep the sign-in in Vaultwarden or paste it in the form. The setup guide (Instructions → Calendar Setup) has every step, including the Google settings that stop invitations from strangers.
-- **Stop logging.** If an update ever stalls at 80% again, the package log now shows which check the old version was waiting on.`,
+- **New mode in Configure Calendar: Read + write on its own calendar.** The calendar agent can add, move and cancel events on one calendar of its own (you name it), and invite you and your family. It still cannot change your calendars or answer invitations; Google itself refuses that.
+- **Your approval for anything with guests.** Before Google emails anyone, the request waits in Review Agent Actions (a task appears), showing the event, the guests and why it waits. Optionally hold every new event, with or without guests. Only addresses on your trusted lists can be invited.
+- **Trusted Organizers can reuse Email's Trusted Senders** (on by default), so the family's addresses are typed once.
+- Write mode needs a new sign-in with one more permission; Instructions → Calendar Setup has the command.`,
   },
   migrations: {
     up: async () => {},

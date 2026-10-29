@@ -420,6 +420,33 @@ function sendingText(h: any): string {
 const announcedQueue = new Set<string>()
 let legacyCleared = false
 
+/** The one Review Agent Actions task, for every service's queue. */
+async function syncAgentActionsTask(
+  effects: T.Effects,
+  source: string,
+  ids: string[],
+) {
+  const change = agentActionsTaskChange(source, ids)
+  if (!change) return
+  if (change.total) {
+    await within(
+      20_000,
+      sdk.action.createOwnTask(effects, reviewAgentActions, 'important', {
+        reason: `${change.total} agent action${change.total > 1 ? 's' : ''} waiting for your approval`,
+        replayId: AGENT_ACTIONS_TASK,
+      }),
+      'approval task',
+    )
+  } else {
+    await within(
+      20_000,
+      sdk.action.clearTask(effects, AGENT_ACTIONS_TASK),
+      'clear approval task',
+    )
+  }
+  taskSynced(change.key)
+}
+
 async function syncQueueTask(
   effects: T.Effects,
   sub: Sub,
@@ -444,29 +471,11 @@ async function syncQueueTask(
     }
     legacyCleared = true
   }
-  const change = agentActionsTaskChange(
+  await syncAgentActionsTask(
+    effects,
     'mail',
     queue.map((q) => q.id),
   )
-  if (change) {
-    if (change.total) {
-      await within(
-        20_000,
-        sdk.action.createOwnTask(effects, reviewAgentActions, 'important', {
-          reason: `${change.total} agent action${change.total > 1 ? 's' : ''} waiting for your approval`,
-          replayId: AGENT_ACTIONS_TASK,
-        }),
-        'approval task',
-      )
-    } else {
-      await within(
-        20_000,
-        sdk.action.clearTask(effects, AGENT_ACTIONS_TASK),
-        'clear approval task',
-      )
-    }
-    taskSynced(change.key)
-  }
   for (const q of queue) {
     if (!live()) return
     if (announcedQueue.has(q.id)) continue
@@ -703,18 +712,64 @@ function calendarSideJobs(effects: T.Effects, sub: Sub, h: any) {
       calendarLeft.add(effects)
     })
   }
-  if (calendarSideJob || calendarLeft.has(effects) || h.state !== 'ok') return
-  calendarSideJob = within(
-    150_000,
-    resetIdleSession(sub, 'calendar', CALENDAR_SESSION, 'Calendar'),
-    'calendar session reset',
-  )
-    .catch((e) =>
-      console.warn(`calendar session reset: ${(e as Error)?.message}`),
-    )
-    .finally(() => {
-      calendarSideJob = null
-    })
+  if (calendarSideJob || calendarLeft.has(effects)) return
+  const live = () => !calendarLeft.has(effects)
+  calendarSideJob = (async () => {
+    const queue = (Array.isArray(h.queue) ? h.queue : []) as {
+      id: string
+      summary?: string
+      rule?: string
+    }[]
+    try {
+      if (live())
+        await syncAgentActionsTask(
+          effects,
+          'calendar',
+          queue.map((q) => q.id),
+        )
+      for (const q of queue) {
+        if (!live() || announcedQueue.has(q.id)) continue
+        announcedQueue.add(q.id)
+        const text = `Calendar request waiting for approval: ${q.summary || ''} (${q.rule || 'rules'}). Open Actions → Review Agent Actions.`
+        await within(
+          20_000,
+          sdk.notification.create(effects, {
+            level: 'info',
+            title: 'Calendar request needs approval',
+            message: text,
+          }),
+          'notification',
+        ).catch(() => {})
+        await sub
+          .exec(
+            [
+              'notify',
+              '--title',
+              'OpenClaw calendar',
+              '--tags',
+              'calendar',
+              text,
+            ],
+            { user: 'node', env: { HOME: '/data' }, timeout: 30_000 },
+          )
+          .catch(() => {})
+      }
+    } catch (e) {
+      console.warn(`calendar approval task: ${(e as Error)?.message}`)
+    }
+    try {
+      if (live() && h.state === 'ok')
+        await within(
+          150_000,
+          resetIdleSession(sub, 'calendar', CALENDAR_SESSION, 'Calendar'),
+          'calendar session reset',
+        )
+    } catch (e) {
+      console.warn(`calendar session reset: ${(e as Error)?.message}`)
+    }
+  })().finally(() => {
+    calendarSideJob = null
+  })
 }
 
 /** The "Calendar Service" line: the service's own /healthz. */
@@ -731,11 +786,19 @@ export async function probeCalendar(
       ? `. Warning: ${h.warnings.join('; ')}`
       : ''
   switch (h.state) {
-    case 'ok':
-      return {
-        result: 'success',
-        message: `Signed in${acct}; read only${warn}`,
-      }
+    case 'ok': {
+      const q = Array.isArray(h.queue) ? h.queue.length : 0
+      const mode =
+        h.mode === 'write'
+          ? h.writing
+            ? `read + write on its own calendar "${h.calendarName}"` +
+              (q
+                ? `; ${q} request${q > 1 ? 's' : ''} waiting for your approval (Review Agent Actions)`
+                : '')
+            : 'read only for now (writing is not set up, see the warning)'
+          : 'read only'
+      return { result: 'success', message: `Signed in${acct}; ${mode}${warn}` }
+    }
     case 'starting':
       return { result: 'starting', message: 'Calendar service starting' }
     case 'refused':

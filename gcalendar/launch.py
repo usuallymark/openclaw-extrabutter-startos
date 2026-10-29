@@ -27,6 +27,8 @@ from launcher import Launcher, vault_field  # noqa: E402
 CAL_ROOT = '/data/.openclaw-calendar'
 SETTINGS = f'{CAL_ROOT}/settings.json'
 STATE = f'{CAL_ROOT}/state'
+DECISIONS = f'{CAL_ROOT}/decisions'
+EMAIL_SETTINGS = '/data/.openclaw-mail/settings.json'
 SERVICE = '/opt/openclaw-calendar/calservice.py'
 CAL_USER = 'openclaw-calendar'
 VAULT_POINTER = 'google-calendar:token'
@@ -49,6 +51,9 @@ def main():
     os.chown(CAL_ROOT, owner, cal.pw_gid)
     os.chmod(CAL_ROOT, 0o710)
     L.own_dir(STATE, cal.pw_uid, cal.pw_gid, 0o700)
+    # The owner's approvals (Review Agent Actions): written by the package
+    # as root, readable by the service, never writable by it.
+    L.own_dir(DECISIONS, owner, cal.pw_gid, 0o750)
 
     try:
         sst = os.lstat(SETTINGS)
@@ -62,7 +67,8 @@ def main():
     except ValueError as e:
         L.fail(f'the calendar settings cannot be read: {e}')
 
-    if settings.get('mode') != 'read':
+    mode = settings.get('mode')
+    if mode not in ('read', 'write'):
         L.fail('Calendar is off in Configure Calendar; nothing to run')
 
     tok = settings.get('token') or {}
@@ -90,10 +96,28 @@ def main():
         except ValueError:
             L.fail('CALENDAR_TEST_ENDPOINTS is not JSON')
 
+    trusted = [str(t).strip().lower() for t in settings.get('trustedOrganizers') or [] if str(t).strip()]
+    if settings.get('includeEmailTrusted', True):
+        # Configure Email's Trusted Senders count too (read as root; that
+        # file is the package's, in the mail folder).
+        try:
+            with open(EMAIL_SETTINGS) as f:
+                senders = ((json.load(f).get('agent') or {}).get('trustedSenders')) or []
+            trusted += [str(t).strip().lower() for t in senders if str(t).strip()]
+        except (OSError, ValueError, AttributeError):
+            pass
+    trusted = sorted(set(trusted))
+
     payload = {
-        'mode': 'read',
+        'mode': mode,
         'account': str(settings.get('account') or ''),
-        'trustedOrganizers': [str(t).strip().lower() for t in settings.get('trustedOrganizers') or [] if str(t).strip()],
+        'trustedOrganizers': trusted,
+        # Who may be invited: the same list (the owner's family and own
+        # addresses), nobody else.
+        'allowedGuests': trusted,
+        'holdAll': bool(settings.get('holdAll')),
+        'calendarName': str(settings.get('calendarName') or 'Assistant'),
+        'decisionsDir': DECISIONS,
         'stateDir': STATE,
         'socket': f'{STATE}/worker.sock',
         'tokenSource': source,

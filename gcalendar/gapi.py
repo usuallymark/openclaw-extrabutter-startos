@@ -104,21 +104,30 @@ class Google:
 
     # ── API ────────────────────────────────────────────────────────────────
 
-    def get(self, path, params=None, _retry=True):
+    def get(self, path, params=None):
         """GET an API path (already quoted) and return the JSON."""
+        return self.call('GET', path, params)
+
+    def call(self, method, path, params=None, body=None, _retry=True):
+        """One API call (path already quoted); the JSON answer, {} for none."""
         url = f'{self.api_base}{path}'
         if params:
             url += '?' + urllib.parse.urlencode({k: v for k, v in params.items() if v is not None}, doseq=True)
-        req = urllib.request.Request(url, headers={'Authorization': f'Bearer {self._token()}',
-                                                   'Accept': 'application/json'})
+        headers = {'Authorization': f'Bearer {self._token()}', 'Accept': 'application/json'}
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode()
+            headers['Content-Type'] = 'application/json'
+        req = urllib.request.Request(url, data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
-                return json.loads(_read(r))
+                raw = _read(r)
+                return json.loads(raw) if raw.strip() else {}
         except urllib.error.HTTPError as e:
             if e.code == 401 and _retry:
                 with self._lock:
                     self._access = None
-                return self.get(path, params, _retry=False)
+                return self.call(method, path, params, body, _retry=False)
             raise ApiError(e.code, _api_error_text(e)) from None
         except (urllib.error.URLError, OSError) as e:
             raise Unreachable(f'cannot reach Google Calendar ({getattr(e, "reason", None) or e})') from None

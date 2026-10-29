@@ -41,6 +41,7 @@ import mcp  # noqa: E402
 import svcutil  # noqa: E402
 from gapi import READ_SCOPES, WRITE_SCOPES, ApiError, Google, SignInRefused, Unreachable  # noqa: E402
 from mcp import MAX_EVENTS  # noqa: E402
+from writes import Writer  # noqa: E402
 from sanitize import clean_line, content_flags, html_to_text, wrap_untrusted  # noqa: E402
 
 try:
@@ -74,6 +75,7 @@ class Service:
         self._log = svcutil.ActivityLog(os.path.join(self.state_dir, 'activity.jsonl'), LOG_MAX_BYTES)
         self._calls = []
         self._calls_lock = threading.Lock()
+        self.writer = Writer(self, cfg) if cfg.get('mode') == 'write' and token else None
         if not token:
             self.set_state('unavailable', reason or 'no Calendar sign-in was available')
 
@@ -167,9 +169,11 @@ class Service:
     def scope_notes(self):
         sc = set(self.google.scopes) if self.google else set()
         notes = []
+        if self.writer and not self.writer.ready and self.writer.reason:
+            notes.append(self.writer.reason)
         if sc and not (sc & READ_SCOPES):
             notes.append('the sign-in does not allow reading calendars (calendar.readonly is missing)')
-        broad = sorted(sc & WRITE_SCOPES)
+        broad = sorted((sc & WRITE_SCOPES) - {'calendar.app.created'})
         if broad:
             notes.append('the sign-in also allows changes (' + ', '.join(broad) + '); this service never makes any, '
                          'but a read-only sign-in (calendar.readonly) is safer')
@@ -178,13 +182,18 @@ class Service:
     def health(self):
         return {
             'state': self.state, 'since': self.since, 'reason': self.reason,
-            'account': self.account, 'mode': 'read',
+            'account': self.account, 'mode': self.cfg.get('mode') or 'read',
+            'writing': bool(self.writer and self.writer.ready),
+            'writingProblem': (self.writer.reason if self.writer and not self.writer.ready else ''),
+            'calendarName': self.writer.name if self.writer else '',
             'scopes': self.google.scopes if self.google else [],
             'warnings': self.scope_notes() if self.state == 'ok' else [],
             'tokenSource': self.cfg.get('tokenSource'),
             'trustedOrganizers': len(self.trusted), 'version': VERSION,
             'note': self.cfg.get('note') or '',
-            'queue': [],
+            # Summary only (no event text beyond the title): the package
+            # raises the Review Agent Actions task from it.
+            'queue': self.writer.pending_summary() if self.writer else [],
         }
 
 
@@ -310,7 +319,28 @@ class Tools:
 
     def t_status(self, a):
         h = self.svc.health()
-        return {k: h[k] for k in ('state', 'reason', 'since', 'account', 'mode', 'scopes', 'warnings', 'trustedOrganizers')}
+        out = {k: h[k] for k in ('state', 'reason', 'since', 'account', 'mode', 'scopes', 'warnings', 'trustedOrganizers')}
+        if self.svc.writer:
+            out.update(self.svc.writer.status())
+        return out
+
+    def _writer(self):
+        if not self.svc.writer:
+            raise ToolError('the calendar is read only (Configure Calendar); nothing can be added, changed or cancelled')
+        return self.svc.writer
+
+    def _tz(self):
+        tz = self._primary_zone()
+        return tz, str(getattr(tz, 'key', 'UTC'))
+
+    def t_create_event(self, a):
+        return self._writer().create(a, *self._tz())
+
+    def t_change_event(self, a):
+        return self._writer().change(a, *self._tz())
+
+    def t_cancel_event(self, a):
+        return self._writer().cancel(a)
 
     def t_calendars(self, a):
         out = []
@@ -479,10 +509,23 @@ def _retry_loop(svc):
         try:
             svc.google.refresh()
             svc.set_state('ok')
+            _setup_writer(svc, None)
         except SignInRefused as e:
             svc.refused(str(e))
         except Unreachable as e:
             svc.reason = str(e)
+
+
+def _setup_writer(svc, tools):
+    if not svc.writer or svc.writer.ready or svc.state != 'ok':
+        return
+    tools = tools or getattr(svc, 'tools', None) or Tools(svc)
+    try:
+        tz = tools._primary_zone()
+    except Exception:
+        tz = timezone.utc
+    svc.writer.setup(str(getattr(tz, 'key', 'UTC')))
+    tools._cals = None  # the own calendar may be new: list it from now on
 
 
 def serve_worker(svc, tools, path):
@@ -522,9 +565,13 @@ def main():
     svc = Service(cfg, token, reason or why)
     del token
     tools = Tools(svc)
+    svc.tools = tools
     exit_after = svc.startup()
     srv = serve_worker(svc, tools, cfg.get('socket') or os.path.join(cfg['stateDir'], 'worker.sock'))
     threading.Thread(target=_retry_loop, args=(svc,), daemon=True).start()
+    if svc.writer:
+        _setup_writer(svc, tools)
+        threading.Thread(target=svc.writer.loop, daemon=True).start()
     if exit_after:
         svcutil.schedule_exit(0, exit_after)
         print(f'calendar service: {svc.state}: {svc.reason}; checking again in {exit_after // 60} min', flush=True)

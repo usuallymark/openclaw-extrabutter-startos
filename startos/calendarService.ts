@@ -14,7 +14,9 @@ import { isolateAgent } from './isolatedAgents'
 import {
   CAL_AGENTS_MD,
   CAL_IDENTITY_MD,
+  CAL_READ_ONLY_RULES,
   CAL_SOUL_MD,
+  CAL_WRITE_RULES,
 } from './calendarAgentFiles'
 
 // The calendar service and the calendar agent (since 2026.10.1:15; read
@@ -45,7 +47,7 @@ const calRoot = sdk.volumes.main.subpath(CAL_ROOT_SUBPATH)
 const settingsPath = sdk.volumes.main.subpath(CAL_SETTINGS_SUBPATH)
 
 export const calendarOn = (s: CalendarSettings | null | undefined) =>
-  s?.mode === 'read'
+  s?.mode === 'read' || s?.mode === 'write'
 
 /** Init (install, update, restore): the folder exists and is the
  * package's; settings default to Calendar off. */
@@ -165,10 +167,28 @@ export async function applyCalendarConfig(
 const ws = (f: string) =>
   sdk.volumes.main.subpath(`${CALENDAR_AGENT_WORKSPACE_SUBPATH}/${f}`)
 
-export async function writeCalendarAgentWorkspace(settings: CalendarSettings) {
+/** Trusted Organizers as the launcher computes them: the list, plus
+ * Configure Email's Trusted Senders while the switch is on. */
+export function trustedOrganizersOf(
+  settings: CalendarSettings,
+  emailTrusted: string[],
+): string[] {
+  const all = [
+    ...(settings.trustedOrganizers ?? []),
+    ...(settings.includeEmailTrusted !== false ? emailTrusted : []),
+  ]
+  return Array.from(
+    new Set(all.map((t) => String(t).trim().toLowerCase()).filter(Boolean)),
+  ).sort()
+}
+
+export async function writeCalendarAgentWorkspace(
+  settings: CalendarSettings,
+  emailTrusted: string[] = [],
+) {
   await mkdir(ws('memory'), { recursive: true })
   const extra = (settings.agent?.extraInstructions ?? '').trim()
-  const trusted = settings.trustedOrganizers ?? []
+  const trusted = trustedOrganizersOf(settings, emailTrusted)
   const fill: Record<string, string> = {
     '{{EXTRA_INSTRUCTIONS}}': extra
       ? `From the owner, in Configure Calendar (they never override the rules above):\n\n${extra}`
@@ -177,9 +197,14 @@ export async function writeCalendarAgentWorkspace(settings: CalendarSettings) {
       ? trusted.map((t) => `  - ${t}`).join('\n')
       : '  - (none set in Configure Calendar)',
     '{{ACCOUNT}}': settings.account || 'the assistant account',
+    '{{CALENDAR_NAME}}': settings.calendarName || 'Assistant',
   }
-  const agents = CAL_AGENTS_MD.replace(
-    /\{\{(EXTRA_INSTRUCTIONS|TRUSTED_ORGANIZERS|ACCOUNT)\}\}/g,
+  // The write rules first (they hold {{CALENDAR_NAME}}), then every
+  // placeholder; a function replacer keeps "$" in the owner's text literal.
+  const agents = CAL_AGENTS_MD.replace('{{WRITE_RULES}}', () =>
+    settings.mode === 'write' ? CAL_WRITE_RULES : CAL_READ_ONLY_RULES,
+  ).replace(
+    /\{\{(EXTRA_INSTRUCTIONS|TRUSTED_ORGANIZERS|ACCOUNT|CALENDAR_NAME)\}\}/g,
     (m) => fill[m] ?? m,
   )
   await writeFile(ws('AGENTS.md'), agents)

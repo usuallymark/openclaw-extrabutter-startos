@@ -304,8 +304,9 @@ step 2 and update the Vaultwarden fields or paste the new token.
 The calendar agent reads the Google calendars of your assistant's Google
 account: its own, and any calendars you share with it. Like the email
 agent, it is a separate agent with only the calendar tools: no shell, no
-passwords, no web. Your main agent asks it what is on. **For now it only
-reads**: it cannot add, move, accept, decline or delete anything.
+passwords, no web. Your main agent asks it what is on. It reads all of them;
+if you allow it (below), it can also keep a calendar of its own and invite
+your family, with your approval. It never changes your calendars.
 
 About 15 minutes the first time. Steps 1 to 3 happen on your computer.
 
@@ -383,6 +384,33 @@ the assistant's account:
 settings of *your* calendar → **Share with specific people** → add the
 assistant's address with **See all event details**. Do the same for each
 family member's calendar it should read. It never needs edit rights.
+
+**Letting the agent keep its own calendar (optional).** In *Read + write on
+its own calendar* mode the calendar agent can add, move and cancel events
+on one calendar of its own (named in **Own Calendar Name**, made in the
+assistant's account on the first start), and invite you and the people on
+the trusted lists. It still cannot touch your calendars or answer
+invitations: Google itself refuses that with this sign-in.
+
+- Anything with guests waits for your approval: a task appears, and
+  **Actions → Review Agent Actions** shows the event, the guests and why it
+  waits. Google emails nobody until you approve. Turn on **Hold Every New
+  Event for My Approval** to have events without guests wait too.
+- Guests can only be your Trusted Organizers (and, with **Also Trust
+  Email's Trusted Senders** on, the Trusted Senders from Configure Email).
+  Anyone else is refused.
+- It needs a sign-in with one more permission. Repeat step 2 with:
+
+  ```
+  python3 google-signin.py ~/Downloads/client_secret_*.json --scopes calendar.readonly,calendar.app.created > ~/Downloads/calendar-signin.json
+  ```
+
+  Google then also asks to allow **Make secondary Google calendars, and
+  see, create, change and delete events on them**. Save the new line in
+  Vaultwarden (replace the `token` field) or paste it, then choose the mode
+  in Configure Calendar. To see the agent's calendar yourself, it appears
+  in the assistant's Google Calendar; share it with your own account like
+  any calendar.
 
 What the calendar agent reports about who made an event: whether it is
 the account's own, from a Trusted Organizer, or from someone else, and
