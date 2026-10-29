@@ -46,6 +46,15 @@ import {
 } from './email'
 import { emailSettingsJson } from './fileModels/emailSettings.json'
 import { withGatewaySecrets, writeGatewaySecrets } from './secretEnv'
+import { calendarSettingsJson } from './fileModels/calendarSettings.json'
+import {
+  CALENDAR_PORT,
+  applyCalendarConfig,
+  calendarOn as calendarIsOn,
+  calendarRootOwner,
+  writeCalendarAgentWorkspace,
+} from './calendarService'
+import { logStops } from './stopLog'
 import {
   MAIL_PORT,
   applyMailConfig,
@@ -74,6 +83,8 @@ import {
   externalTrigger,
   probeHttp,
   probeMail,
+  probeCalendar,
+  calendarAnswers,
   mailAnswers,
   probeVault,
   vaultTrigger,
@@ -127,12 +138,13 @@ fi
 exit 0
 `
 
-// chown -R node:node /data, skipping the mail service's folder.
+// chown -R node:node /data, skipping the mail and calendar services' folders.
 const CHOWN_SCRIPT = `
 chown node:node /data
 for p in /data/* /data/.[!.]* /data/..?*; do
   [ -e "$p" ] || [ -L "$p" ] || continue
   [ "$p" = /data/.openclaw-mail ] && continue
+  [ "$p" = /data/.openclaw-calendar ] && continue
   chown -R node:node "$p"
 done
 `
@@ -315,6 +327,19 @@ export const main = sdk.setupMain(async ({ effects }) => {
   if (mailOn && mailSettings) await writeEmailAgentWorkspace(mailSettings)
   const mailOwner = mailOn ? await mailRootOwner() : null
 
+  // Calendar (Configure Calendar, since :15): the calendar service and the
+  // calendar agent, wired like mail (calendarService.ts). Read once:
+  // Configure Calendar restarts the service itself.
+  const calSettings = await calendarSettingsJson
+    .read()
+    .once()
+    .catch(() => null)
+  const calOn = calendarIsOn(calSettings)
+  if (calOn) enabledSkills.push('/opt/skills/calendar')
+  await applyCalendarConfig(effects, calSettings)
+  if (calOn && calSettings) await writeCalendarAgentWorkspace(calSettings)
+  const calOwner = calOn ? await calendarRootOwner() : null
+
   // Webchat (Configure Webchat). Reactive: main re-runs when it changes.
   const webchatEnabled =
     (await webchatJson.read((c) => c.enabled).const(effects)) ?? false
@@ -360,6 +385,16 @@ export const main = sdk.setupMain(async ({ effects }) => {
   // What /opt/skills/health/health.py checks: the same targets as the
   // StartOS health list (externalTargets is shared with externalChecks).
   const healthTargets: HealthTarget[] = [
+    ...(calOn
+      ? [
+          {
+            key: 'calendar',
+            label: 'Calendar Service',
+            kind: 'calendar' as const,
+            url: `http://127.0.0.1:${CALENDAR_PORT}/healthz`,
+          },
+        ]
+      : []),
     {
       key: 'gateway',
       label: 'Web Interface',
@@ -997,9 +1032,58 @@ export const main = sdk.setupMain(async ({ effects }) => {
         })
     : daemons
 
-  if (!webchatEnabled) return withMail
+  // The calendar service (calendarService.ts, gcalendar/), like mail: a
+  // front door that never restarts and the worker behind it.
+  const withCal = calOn
+    ? (withMail as typeof daemons)
+        .addDaemon('calendar-front', {
+          subcontainer: openclawSub,
+          exec: {
+            command: ['python3', '-I', '/opt/openclaw-calendar/front.py'],
+            user: 'root',
+            env: { CALENDAR_PORT: String(CALENDAR_PORT) },
+          },
+          ready: {
+            display: null,
+            fn: () =>
+              sdk.healthCheck.checkPortListening(effects, CALENDAR_PORT, {
+                successMessage: 'Calendar endpoint listening',
+                errorMessage: 'Calendar endpoint not listening',
+              }),
+            gracePeriod: 30_000,
+          },
+          requires: ['chown'],
+        })
+        .addDaemon('calendar', {
+          subcontainer: openclawSub,
+          exec: {
+            command: ['python3', '-I', '/opt/openclaw-calendar/launch.py'],
+            user: 'root',
+            env: {
+              CALENDAR_ROOT_UID: calOwner === null ? '' : String(calOwner),
+            },
+          },
+          ready: {
+            display: null,
+            fn: () => calendarAnswers(openclawSub),
+            gracePeriod: 180_000,
+          },
+          requires: ['chown', 'network-setup', 'setup-vault', 'calendar-front'],
+        })
+        .addHealthCheck('calendar-status', {
+          ready: {
+            display: 'Calendar Service',
+            fn: () => probeCalendar(effects, openclawSub),
+            trigger: externalTrigger,
+            gracePeriod: 0,
+          },
+          requires: ['calendar'],
+        })
+    : withMail
 
-  return (withMail as typeof daemons).addDaemon('webchat', {
+  if (!webchatEnabled) return logStops(effects, withCal)
+
+  const all = (withCal as typeof daemons).addDaemon('webchat', {
     subcontainer: openclawSub,
     exec: {
       command: ['node', '/opt/webchat/server.mjs'],
@@ -1028,4 +1112,5 @@ export const main = sdk.setupMain(async ({ effects }) => {
     },
     requires: ['primary'],
   })
+  return logStops(effects, all)
 })

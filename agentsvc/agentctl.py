@@ -24,6 +24,7 @@ from email.utils import getaddresses
 # exist (not set up) simply has nothing waiting.
 SERVICES = {
     'mail': {'root': '/data/.openclaw-mail', 'label': 'Email'},
+    'calendar': {'root': '/data/.openclaw-calendar', 'label': 'Calendar'},
 }
 ID = re.compile(r'[0-9]{14}-[0-9a-f]{6}')
 PUBLIC = ('id', 'action', 'summary', 'details', 'rule', 'requester', 'created', 'expires', 'recipients')

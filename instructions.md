@@ -299,6 +299,93 @@ step 2 and update the Vaultwarden fields or paste the new token.
 
 ---
 
+## Calendar Setup
+
+The calendar agent reads the Google calendars of your assistant's Google
+account: its own, and any calendars you share with it. Like the email
+agent, it is a separate agent with only the calendar tools: no shell, no
+passwords, no web. Your main agent asks it what is on. **For now it only
+reads**: it cannot add, move, accept, decline or delete anything.
+
+About 15 minutes the first time. Steps 1 to 3 happen on your computer.
+
+**1. Your own Google Cloud app (once).** Signed in to Google as the
+assistant's account:
+
+1. Create a project at <https://console.cloud.google.com/projectcreate> (or
+   use the one you already made for this account).
+2. In the [API Library](https://console.cloud.google.com/apis/library),
+   enable the **Google Calendar API**.
+3. Set up the [OAuth consent screen](https://console.cloud.google.com/auth/branding):
+   "External", your own email address.
+4. Under [Audience](https://console.cloud.google.com/auth/audience), click
+   **Publish app** → **Confirm**, so it says **In production**. In
+   "Testing", Google ends every sign-in after 7 days and the calendar
+   stops working each week. A personal app needs no verification from
+   Google; you'll see an "unverified app" warning when you sign in, which
+   is expected. If the app was in Testing when you signed in before, sign
+   in again after publishing.
+5. Under [Clients](https://console.cloud.google.com/auth/clients), create an
+   OAuth client of type **Desktop app** and download its JSON
+   (`client_secret_….json`).
+
+**2. Sign in on your computer (once).** Get the sign-in script from this
+package's repository and run it (Python 3, which macOS has):
+
+```
+cd ~/Downloads
+curl -fLO https://raw.githubusercontent.com/usuallymark/openclaw-extrabutter-startos/master/tools/google-signin.py
+python3 google-signin.py ~/Downloads/client_secret_*.json > ~/Downloads/calendar-signin.json
+```
+
+Your browser opens Google's page. Sign in as the assistant's account. At
+the "Google hasn't verified this app" warning choose **Advanced → Go to …
+(unsafe)** (it is your own app), then allow **See and download any calendar
+you can access**. The terminal then says "Signed in as …; allowed:
+calendar.readonly …". The script asks only to read calendars, so the
+sign-in cannot change anything.
+
+**3. Give the sign-in to the server.** Either:
+
+- **Fetch from Vaultwarden** (recommended): create a Vaultwarden item named
+  `google-calendar` with a hidden custom field `token` holding the whole
+  contents of `calendar-signin.json` (one line). Vaultwarden must be
+  enabled. A new sign-in saved there later is picked up within 10 minutes.
+- **Paste here**: paste the contents into Configure Calendar once.
+
+Delete `calendar-signin.json` afterwards (`rm ~/Downloads/calendar-signin.json`).
+
+**4. Configure Calendar** (Actions): set **Calendar** to *Read only*, enter
+the account, choose the sign-in from step 3, and add your own and your
+family's addresses under **Trusted Organizers**. Save; OpenClaw restarts.
+The **Calendar Service** line on the service page says "Signed in (…); read
+only" when it worked.
+
+**5. Recommended Google-side settings**, in Google Calendar on the web as
+the assistant's account:
+
+- Settings → **Event settings → Add invitations to my calendar**: choose
+  *Only if the sender is known* (or *When I respond*). Invitations from
+  strangers then never appear on the calendar at all, which is the best
+  protection against trick invitations.
+- Settings → **Events from Gmail**: turn off unless you want bookings and
+  tickets from the assistant's mail added automatically.
+
+**Sharing your calendars with the assistant.** In Google Calendar, open the
+settings of *your* calendar → **Share with specific people** → add the
+assistant's address with **See all event details**. Do the same for each
+family member's calendar it should read. It never needs edit rights.
+
+What the calendar agent reports about who made an event: whether it is
+the account's own, from a Trusted Organizer, or from someone else, and
+whether it came from an emailed invitation (whose organizer can't be
+checked). Unlike mail, calendars have no sender verification, so it never
+calls an organizer "verified".
+
+If the Calendar Service line says the sign-in was refused, Google ended
+it (revoked, the app still in Testing, or the client deleted): repeat step
+2 and save the new sign-in (Vaultwarden or Configure Calendar).
+
 ## Gitea Setup
 
 With **Configure External Services → Gitea** enabled, the agent keeps its

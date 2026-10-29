@@ -1,12 +1,14 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:14',
+  version: '2026.10.1:15',
   releaseNotes: {
-    en_US: `Groundwork for Calendar and other Google apps. Email works exactly as before.
+    en_US: `Calendar, read only.
 
-- **Review Outgoing Mail is now Review Agent Actions.** It is the one place you approve what your agents want to do. Today that is still only mail held by your sending rules; later, things like calendar invitations will appear there too. Each request shows which agent it comes from. Mail waiting from before the update is still listed and can be approved.
-- **The mail service's building blocks are now shared**, so the next isolated services (Calendar first) are built the same way: their own user, no secrets in the agent's reach, and your approval for anything held.`,
+- **New: Configure Calendar.** Your assistant can read the Google calendars of its account, including the ones you share with it: what is on, when something is, who invited whom. A separate calendar agent does the reading; it has only the calendar tools (no shell, no passwords, no web), and it cannot add, change, accept or delete anything. Off until you turn it on.
+- **Invitations are treated like mail from strangers.** Event text is shown as untrusted content with hidden text removed, and each event says whether it came from the account itself, a Trusted Organizer, someone else, or an emailed invitation whose organizer can't be checked.
+- **Sign in once on your computer** with the included script (tools/google-signin.py). It asks only to read calendars. Keep the sign-in in Vaultwarden or paste it in the form. The setup guide (Instructions → Calendar Setup) has every step, including the Google settings that stop invitations from strangers.
+- **Stop logging.** If an update ever stalls at 80% again, the package log now shows which check the old version was waiting on.`,
   },
   migrations: {
     up: async () => {},

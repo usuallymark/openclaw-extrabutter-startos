@@ -119,6 +119,18 @@ RUN chmod 755 /opt/openclaw-mail && chmod 644 /opt/openclaw-mail/*.py \
     && python3 -m compileall -q /opt/openclaw-mail \
     && cd /tmp && python3 -I -c 'import sys; sys.path.insert(0, "/opt/openclaw-mail"); import mailservice, launch, front'
 
+# Calendar service (Configure Calendar, since 2026.10.1:15): built like the
+# mail service, as its own user. See startos/calendarService.ts.
+# tzdata: event times are given in each calendar's own time zone.
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin openclaw-calendar
+COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py mail/sanitize.py /opt/openclaw-calendar/
+COPY gcalendar/launch.py gcalendar/front.py gcalendar/mcp.py gcalendar/calservice.py gcalendar/gapi.py /opt/openclaw-calendar/
+RUN chmod 755 /opt/openclaw-calendar && chmod 644 /opt/openclaw-calendar/*.py \
+    && python3 -m compileall -q /opt/openclaw-calendar \
+    && cd /tmp && python3 -I -c 'import sys; sys.path.insert(0, "/opt/openclaw-calendar"); import calservice, launch, front' \
+    && python3 -I -c 'import zoneinfo; zoneinfo.ZoneInfo("America/Chicago")'
+
 # Owner-side helper for every isolated service's approval queue and log
 # (Review Agent Actions, Email Activity): run as root by the package's
 # actions, never by an agent.
@@ -154,6 +166,7 @@ COPY skills/gitea/git-credential-openclaw /usr/local/bin/git-credential-openclaw
 RUN chmod 755 /usr/local/bin/git-credential-openclaw
 COPY skills/webchat-present/SKILL.md /opt/skills/webchat-present/SKILL.md
 COPY skills/email/SKILL.md /opt/skills/email/SKILL.md
+COPY skills/calendar/SKILL.md /opt/skills/calendar/SKILL.md
 COPY skills/google/SKILL.md /opt/skills/google/SKILL.md
 
 # Webchat (optional; started only when enabled via Configure Webchat).

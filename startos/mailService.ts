@@ -12,6 +12,7 @@ import {
 } from './fileModels/emailSettings.json'
 import { usesMailService } from './email'
 import { AGENTS_MD, IDENTITY_MD, SOUL_MD } from './mailAgentFiles'
+import { isolateAgent } from './isolatedAgents'
 
 // The mail service and the email agent (DESIGN-email-security; reading and
 // drafts since :8, sending since :10).
@@ -178,18 +179,6 @@ export async function mailRootOwner(): Promise<number | null> {
 
 // ── openclaw.json: MCP server, email agent, denies ─────────────────────────
 
-/** The main (human-facing) agent's id: the recorded system agent, else the
- * one configured agent other than the email agent, else "main". */
-export function primaryAgentId(cfg: any): string {
-  const sys = cfg?.agents?.defaults?.systemAgent?.agentId
-  if (typeof sys === 'string' && sys && sys !== EMAIL_AGENT_ID) return sys
-  const ids = Object.keys(cfg?.agents?.entries ?? {}).filter(
-    (id) => id !== EMAIL_AGENT_ID,
-  )
-  if (ids.length === 1) return ids[0]
-  return 'main'
-}
-
 /**
  * The mail wiring in openclaw.json, as a pure transform (main applies it
  * before the gateway starts). With mail off, the server is disabled and
@@ -210,49 +199,12 @@ export function mailConfigTransform(cfg: any, settings: EmailSettings | null) {
     requestTimeoutMs: 120000,
     enabled: on,
   }
-  c.agents = c.agents ?? {}
-  c.agents.entries = c.agents.entries ?? {}
+  // Shared with the other isolated agents (isolatedAgents.ts): mail__*
+  // denied for everyone else, nobody spawns the email agent, the primary
+  // agent's workspace pinned, system work owned by the primary agent.
+  isolateAgent(c, EMAIL_AGENT_ID, MAIL_TOOLS, on)
   const entries = c.agents.entries as Record<string, any>
-  const primary = primaryAgentId(c)
-  const others = Object.keys(entries).filter((id) => id !== EMAIL_AGENT_ID)
-  if (on && others.length <= 1) {
-    // The primary agent is the sole agent so far. A sole agent works in
-    // agents.defaults.workspace (or OpenClaw's default); in a fleet, an
-    // agent without its own `workspace` gets a folder of its own instead,
-    // so adding the email agent would move the main agent's workspace
-    // (identity, memory, files). Pin it where it is.
-    const e = (entries[primary] = entries[primary] ?? {})
-    if (!e.workspace) {
-      e.workspace = c.agents.defaults?.workspace || '/data/.openclaw/workspace'
-    }
-  }
-  // Every agent but the email agent: mail tools denied.
-  for (const [id, e] of Object.entries(entries)) {
-    if (id === EMAIL_AGENT_ID || !e || typeof e !== 'object') continue
-    e.tools = e.tools ?? {}
-    e.tools.deny = uniq([...(e.tools.deny ?? []), MAIL_TOOLS])
-    // Nobody spawns the email agent: a spawned copy would inherit the
-    // spawner's deny of mail__* and have no tools.
-    const allow = e.subagents?.allowAgents
-    if (Array.isArray(allow) && allow.includes(EMAIL_AGENT_ID)) {
-      e.subagents.allowAgents = allow.filter(
-        (x: string) => x !== EMAIL_AGENT_ID,
-      )
-    }
-  }
   if (on) {
-    // With a second agent the fleet is multi-agent, and OpenClaw no longer
-    // picks "the sole agent" for channels, heartbeat and system work: they
-    // need a named owner. Name the primary agent where nothing is set (an
-    // owner chosen already is kept). The email agent never owns anything.
-    const d = (c.agents.defaults = c.agents.defaults ?? {})
-    if (!d.systemAgent?.agentId || d.systemAgent.agentId === EMAIL_AGENT_ID) {
-      d.systemAgent = { ...(d.systemAgent ?? {}), agentId: primary }
-    }
-    if (!d.heartbeat?.agentId || d.heartbeat.agentId === EMAIL_AGENT_ID) {
-      d.heartbeat = { ...(d.heartbeat ?? {}), agentId: primary }
-    }
-    c.agents.ownership = c.agents.ownership ?? 'explicit'
     entries[EMAIL_AGENT_ID] = {
       name: 'Email',
       workspace: EMAIL_AGENT_WORKSPACE,

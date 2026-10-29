@@ -319,6 +319,62 @@ def check_mail(t):
     return ok, msg + '; email agent limited to the mail tools, every other agent denied them'
 
 
+def _calendar_boundary():
+    """Problems with the calendar isolation in openclaw.json ([] when intact)."""
+    try:
+        with open('/data/.openclaw/openclaw.json') as f:
+            cfg = json.load(f)
+    except (OSError, ValueError) as e:
+        return [f'openclaw.json could not be read ({e.__class__.__name__})']
+    problems = []
+    server = ((cfg.get('mcp') or {}).get('servers') or {}).get('calendar') or {}
+    if server.get('enabled') is False:
+        problems.append('the calendar MCP server is switched off in openclaw.json')
+    entries = (cfg.get('agents') or {}).get('entries') or {}
+    cal = entries.get('calendar')
+    if not cal:
+        problems.append('the calendar agent is missing from openclaw.json')
+    else:
+        tools = cal.get('tools') or {}
+        if tools.get('allow') != ['calendar__*']:
+            problems.append(f'the calendar agent may use {tools.get("allow")}, not only calendar__*')
+        for g in ('group:runtime', 'group:fs', 'group:web', 'group:sessions', 'group:messaging', 'mail__*'):
+            if g not in (tools.get('deny') or []):
+                problems.append(f'the calendar agent does not have {g} denied')
+        if (tools.get('codeMode') or {}).get('enabled') is not False:
+            problems.append('code mode is not switched off for the calendar agent')
+    for aid, e in entries.items():
+        if aid == 'calendar' or not isinstance(e, dict):
+            continue
+        if 'calendar__*' not in ((e.get('tools') or {}).get('deny') or []):
+            problems.append(f'agent {aid} does not have calendar__* denied')
+    return problems
+
+
+def check_calendar(t):
+    """The calendar service's own state, and the isolation around it."""
+    try:
+        with urllib.request.urlopen(t['url'], timeout=8) as r:
+            h = json.loads(r.read() or b'{}')
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return False, f'the calendar service does not answer ({e.__class__.__name__}); it may be starting or restarting'
+    state, reason = h.get('state'), h.get('reason') or ''
+    if state == 'ok':
+        msg, ok = f'signed in as {h.get("account") or "?"}; read only', True
+        if h.get('warnings'):
+            msg += '; warning: ' + '; '.join(h['warnings'])
+    elif state == 'refused':
+        msg, ok = reason or 'Google refused the Calendar sign-in', False
+    else:
+        msg, ok = f'{state}: {reason}' if reason else str(state), False
+    if h.get('note'):
+        msg += f' ({h["note"]})'
+    problems = _calendar_boundary()
+    if problems:
+        return False, msg + '; ISOLATION PROBLEM: ' + '; '.join(problems) + ' (a restart of OpenClaw rewrites it)'
+    return ok, msg + '; calendar agent limited to the calendar tools, every other agent denied them'
+
+
 def check_google(t):
     """Google account: ask Google to refresh the stored sign-in (gog auth list --check)."""
     keys = ['GOG_HOME', 'GOG_KEYRING_BACKEND', 'GOG_KEYRING_PASSWORD', 'GOG_ACCOUNT']
@@ -355,7 +411,7 @@ def check_missing(t):
 
 
 CHECKS = {'http': check_http, 'tcp': check_tcp, 'vault': check_vault, 'memory': check_memory,
-          'google': check_google, 'mail': check_mail, 'missing': check_missing}
+          'google': check_google, 'mail': check_mail, 'calendar': check_calendar, 'missing': check_missing}
 
 
 def run_check(t):

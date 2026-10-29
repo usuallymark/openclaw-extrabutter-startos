@@ -4,6 +4,7 @@ import { configureAgents } from './configureAgents'
 import { configureApiCredentials } from './configureApiCredentials'
 import { configureEmail } from './configureEmail'
 import { emailActivity } from './emailActivity'
+import { configureCalendar } from './configureCalendar'
 import { reviewAgentActions } from './reviewAgentActions'
 import { configureExternalServices } from './configureExternalServices'
 import { configureWebchat } from './configureWebchat'
@@ -23,6 +24,7 @@ export const actions = sdk.Actions.of()
   .addAction(configureEmail)
   .addAction(reviewAgentActions)
   .addAction(emailActivity)
+  .addAction(configureCalendar)
   .addAction(configureExternalServices)
   .addAction(configureWebchat)
   .addAction(connectTelegram)

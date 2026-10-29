@@ -3,6 +3,7 @@ import { sdk } from './sdk'
 import { RBW_ENV, VAULT_PROBE_SCRIPT } from './vault'
 import { EmailConfig, googleSignInStatus, usesMailService } from './email'
 import { MAIL_URL } from './mailService'
+import { CALENDAR_URL } from './calendarService'
 import { reviewAgentActions } from './actions/reviewAgentActions'
 import {
   AGENT_ACTIONS_TASK,
@@ -206,6 +207,7 @@ export type HealthTarget =
   | { key: string; label: string; kind: 'vault' }
   | { key: string; label: string; kind: 'google'; address: string }
   | { key: string; label: string; kind: 'mail'; url: string }
+  | { key: string; label: string; kind: 'calendar'; url: string }
   | { key: string; label: string; kind: 'missing'; message: string }
 
 // Health path per HTTP service, appended to the configured URL.
@@ -613,7 +615,6 @@ async function announceRefusal(effects: T.Effects, sub: Sub, reason: string) {
 // context but old mail does not pile up. Checked at most every 5 minutes.
 const EMAIL_SESSION = 'agent:email:main'
 const IDLE_MS = 15 * 60_000
-let lastSessionCheck = 0
 
 const CLI_ENV = { HOME: '/data', OPENCLAW_STATE_DIR: '/data/.openclaw' }
 
@@ -636,19 +637,113 @@ async function gatewayCall(sub: Sub, method: string, params: object) {
   return i < 0 ? null : JSON.parse(out.slice(i))
 }
 
-export async function resetIdleEmailSession(sub: Sub, now = Date.now()) {
-  if (now - lastSessionCheck < 5 * 60_000) return
-  lastSessionCheck = now
-  const list = await gatewayCall(sub, 'sessions.list', {
-    agentId: 'email',
-    limit: 20,
-  })
-  const s = (list?.sessions ?? []).find((x: any) => x?.key === EMAIL_SESSION)
+const lastSessionChecks = new Map<string, number>()
+
+/** Clear an isolated agent's conversation after 15 minutes without
+ * requests (checked at most every 5 minutes per agent). */
+export async function resetIdleSession(
+  sub: Sub,
+  agentId: string,
+  key: string,
+  label: string,
+  now = Date.now(),
+) {
+  if (now - (lastSessionChecks.get(key) ?? 0) < 5 * 60_000) return
+  lastSessionChecks.set(key, now)
+  const list = await gatewayCall(sub, 'sessions.list', { agentId, limit: 20 })
+  const s = (list?.sessions ?? []).find((x: any) => x?.key === key)
   if (!s || s.hasActiveRun || !(Number(s.totalTokens) > 0)) return
   const last = Number(s.lastInteractionAt ?? s.updatedAt ?? 0)
   if (!last || now - last < IDLE_MS) return
-  const res = await gatewayCall(sub, 'sessions.reset', { key: EMAIL_SESSION })
+  const res = await gatewayCall(sub, 'sessions.reset', { key })
   if (res?.ok) {
-    console.info('Email agent: conversation cleared after 15 minutes idle')
+    console.info(`${label} agent: conversation cleared after 15 minutes idle`)
+  }
+}
+
+export async function resetIdleEmailSession(sub: Sub, now = Date.now()) {
+  return resetIdleSession(sub, 'email', EMAIL_SESSION, 'Email', now)
+}
+
+// ── Calendar service (since :15) ────────────────────────────────────────────
+
+const CALENDAR_SESSION = 'agent:calendar:main'
+
+async function calendarHealthz(sub: Sub): Promise<any | null> {
+  try {
+    const res = await sub.exec(
+      ['curl', '-sS', '--max-time', '5', `${CALENDAR_URL}/healthz`],
+      { user: 'node', timeout: 15_000 },
+    )
+    if (res.exitCode !== 0) return null
+    return JSON.parse(String(res.stdout))
+  } catch {
+    return null
+  }
+}
+
+/** The calendar daemon's readiness: the service answers (in any state). */
+export async function calendarAnswers(
+  sub: Sub,
+): Promise<Result | { result: 'starting'; message: string }> {
+  return (await calendarHealthz(sub))
+    ? { result: 'success', message: 'Calendar service answering' }
+    : { result: 'starting', message: 'Calendar service starting' }
+}
+
+let calendarSideJob: Promise<void> | null = null
+const calendarLeft = new WeakSet<T.Effects>()
+const calendarWatched = new WeakSet<T.Effects>()
+
+/** The idle-conversation reset, never awaited by the check (lesson of :10). */
+function calendarSideJobs(effects: T.Effects, sub: Sub, h: any) {
+  if (!calendarWatched.has(effects)) {
+    calendarWatched.add(effects)
+    effects.onLeaveContext(() => {
+      calendarLeft.add(effects)
+    })
+  }
+  if (calendarSideJob || calendarLeft.has(effects) || h.state !== 'ok') return
+  calendarSideJob = within(
+    150_000,
+    resetIdleSession(sub, 'calendar', CALENDAR_SESSION, 'Calendar'),
+    'calendar session reset',
+  )
+    .catch((e) =>
+      console.warn(`calendar session reset: ${(e as Error)?.message}`),
+    )
+    .finally(() => {
+      calendarSideJob = null
+    })
+}
+
+/** The "Calendar Service" line: the service's own /healthz. */
+export async function probeCalendar(
+  effects: T.Effects,
+  sub: Sub,
+): Promise<Result | { result: 'starting'; message: string }> {
+  const h = await calendarHealthz(sub)
+  if (!h) return { result: 'starting', message: 'Calendar service starting' }
+  calendarSideJobs(effects, sub, h)
+  const acct = h.account ? ` (${h.account})` : ''
+  const warn =
+    Array.isArray(h.warnings) && h.warnings.length
+      ? `. Warning: ${h.warnings.join('; ')}`
+      : ''
+  switch (h.state) {
+    case 'ok':
+      return {
+        result: 'success',
+        message: `Signed in${acct}; read only${warn}`,
+      }
+    case 'starting':
+      return { result: 'starting', message: 'Calendar service starting' }
+    case 'refused':
+      return { result: 'failure', message: `Calendar${acct}: ${h.reason}` }
+    default:
+      return {
+        result: 'failure',
+        message: `Calendar${acct}: ${h.reason || h.state}${h.note ? ` (${h.note})` : ''}`,
+      }
   }
 }
