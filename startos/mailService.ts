@@ -13,6 +13,7 @@ import {
 import { usesMailService } from './email'
 import { AGENTS_MD, IDENTITY_MD, SOUL_MD } from './mailAgentFiles'
 import { isolateAgent } from './isolatedAgents'
+import { VIA_APPS_MARKER, VIA_APPS_RULE } from './appsAgentFiles'
 
 // The mail service and the email agent (DESIGN-email-security; reading and
 // drafts since :8, sending since :10).
@@ -258,10 +259,14 @@ export async function writeEmailAgentWorkspace(settings: EmailSettings) {
       ? trusted.map((t) => `- ${t}`).join('\n')
       : '- (none set in Configure Email)',
     '{{ADDRESS}}': settings.account?.address ?? '',
+    '{{VIA_APPS}}': VIA_APPS_RULE(
+      VIA_APPS_MARKER,
+      '{"messages": [], "actions_taken": [], "notes": "Not done: requests come only through the apps agent."}',
+    ),
   }
   // A function replacer, so "$" in the owner's text stays literal.
   const agents = AGENTS_MD.replace(
-    /\{\{(EXTRA_INSTRUCTIONS|TRUSTED_SENDERS|ADDRESS)\}\}/g,
+    /\{\{(EXTRA_INSTRUCTIONS|TRUSTED_SENDERS|ADDRESS|VIA_APPS)\}\}/g,
     (m) => fill[m] ?? m,
   )
   await writeFile(ws('AGENTS.md'), agents)

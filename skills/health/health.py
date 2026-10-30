@@ -250,6 +250,24 @@ def _node_kwargs(env):
     return {}
 
 
+def _apps_problems(entries):
+    """Problems with the apps agent (since 2026.10.1:20): present, and
+    limited to sessions_send."""
+    apps = entries.get('apps')
+    if not isinstance(apps, dict):
+        return ['the apps agent is missing from openclaw.json']
+    problems = []
+    tools = apps.get('tools') or {}
+    if tools.get('allow') != ['sessions_send']:
+        problems.append(f'the apps agent may use {tools.get("allow")}, not only sessions_send')
+    for g in ('group:runtime', 'group:fs', 'group:web', 'mail__*', 'calendar__*'):
+        if g not in (tools.get('deny') or []):
+            problems.append(f'the apps agent does not have {g} denied')
+    if (tools.get('codeMode') or {}).get('enabled') is not False:
+        problems.append('code mode is not switched off for the apps agent')
+    return problems
+
+
 def _boundary():
     """Problems with the mail isolation in openclaw.json ([] when intact)."""
     try:
@@ -279,7 +297,7 @@ def _boundary():
             continue
         if 'mail__*' not in ((e.get('tools') or {}).get('deny') or []):
             problems.append(f'agent {aid} does not have mail__* denied')
-    return problems
+    return problems + _apps_problems(entries)
 
 
 def check_mail(t):
@@ -316,7 +334,7 @@ def check_mail(t):
     problems = _boundary()
     if problems:
         return False, msg + '; ISOLATION PROBLEM: ' + '; '.join(problems) + ' (a restart of OpenClaw rewrites it)'
-    return ok, msg + '; email agent limited to the mail tools, every other agent denied them'
+    return ok, msg + '; email agent limited to the mail tools, every other agent denied them; apps agent limited to sessions_send'
 
 
 def _calendar_boundary():
@@ -348,7 +366,7 @@ def _calendar_boundary():
             continue
         if 'calendar__*' not in ((e.get('tools') or {}).get('deny') or []):
             problems.append(f'agent {aid} does not have calendar__* denied')
-    return problems
+    return problems + _apps_problems(entries)
 
 
 def check_calendar(t):
@@ -372,7 +390,7 @@ def check_calendar(t):
     problems = _calendar_boundary()
     if problems:
         return False, msg + '; ISOLATION PROBLEM: ' + '; '.join(problems) + ' (a restart of OpenClaw rewrites it)'
-    return ok, msg + '; calendar agent limited to the calendar tools, every other agent denied them'
+    return ok, msg + '; calendar agent limited to the calendar tools, every other agent denied them; apps agent limited to sessions_send'
 
 
 def check_google(t):

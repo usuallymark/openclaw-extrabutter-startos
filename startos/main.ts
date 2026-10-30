@@ -54,6 +54,8 @@ import {
   calendarRootOwner,
   writeCalendarAgentWorkspace,
 } from './calendarService'
+import { applyAppsConfig, writeAppsAgentWorkspace } from './appsAgent'
+import { appsAgentJson } from './fileModels/appsAgent.json'
 import { logStops } from './stopLog'
 import {
   MAIL_PORT,
@@ -335,7 +337,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
     .once()
     .catch(() => null)
   const calOn = calendarIsOn(calSettings)
-  if (calOn) enabledSkills.push('/opt/skills/calendar')
   await applyCalendarConfig(effects, calSettings)
   if (calOn && calSettings)
     await writeCalendarAgentWorkspace(
@@ -343,6 +344,26 @@ export const main = sdk.setupMain(async ({ effects }) => {
       mailSettings?.agent?.trustedSenders ?? [],
     )
   const calOwner = calOn ? await calendarRootOwner() : null
+
+  // The apps agent (appsAgent.ts, since :20): while mail or calendar is on,
+  // the main agent asks it, with one skill, and it asks the email and
+  // calendar agents. Rewritten at every start.
+  const appsOn = mailOn || calOn
+  const appsSettings = await appsAgentJson
+    .read()
+    .once()
+    .catch(() => null)
+  if (appsOn) enabledSkills.push('/opt/skills/apps')
+  await applyAppsConfig(effects, appsOn, appsSettings)
+  if (appsOn)
+    await writeAppsAgentWorkspace(
+      {
+        mail: mailOn,
+        calendar: calOn,
+        calendarWrite: calSettings?.mode === 'write',
+      },
+      appsSettings,
+    )
 
   // Webchat (Configure Webchat). Reactive: main re-runs when it changes.
   const webchatEnabled =

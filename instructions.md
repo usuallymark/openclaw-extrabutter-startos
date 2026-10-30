@@ -305,7 +305,8 @@ step 2 and update the Vaultwarden fields or paste the new token.
 The calendar agent reads the Google calendars of your assistant's Google
 account: its own, and any calendars you share with it. Like the email
 agent, it is a separate agent with only the calendar tools: no shell, no
-passwords, no web. Your main agent asks it what is on. It reads all of them;
+passwords, no web. Your main agent asks it what is on, through the apps
+agent (below). It reads all of them;
 if you allow it (below), it can also keep a calendar of its own and invite
 your family, with your approval. It never changes your calendars.
 
@@ -422,6 +423,26 @@ calls an organizer "verified".
 If the Calendar Service line says the sign-in was refused, Google ended
 it (revoked, the app still in Testing, or the client deleted): repeat step
 2 and save the new sign-in (Vaultwarden or Configure Calendar).
+
+## Apps Agent
+
+When Email or Calendar is set up, your main agent does not talk to the
+email and calendar agents itself. It asks one **apps agent**, which passes
+the job on and brings back their reports unchanged. Your main agent then
+needs only one set of instructions for all of them, and the apps agent has
+nothing but that: no shell, no files, no passwords, and it never reads
+mail or events itself.
+
+Nothing to set up: it appears with Email or Calendar. **Actions →
+Configure Apps Agent** sets its name, its model (a smaller one is usually
+enough) and extra instructions. To give it a persona, edit `SOUL.md` and
+`IDENTITY.md` in its workspace folder (`workspaces/apps`); the package
+never changes those two files.
+
+If your main agent's own files (its `AGENTS.md`, `TOOLS.md` or memory)
+say to ask the email or calendar agent directly, change that to the apps
+agent: the email and calendar agents now answer only requests that come
+through it.
 
 ## Gitea Setup
 

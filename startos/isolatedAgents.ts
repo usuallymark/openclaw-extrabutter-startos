@@ -1,9 +1,11 @@
 // The package's isolated agents: each is the only agent with one service's
 // tools (mail, calendar) and has nothing else. None of them is ever the
 // main (human-facing) agent, owns channels or the heartbeat, or is
-// spawned by another agent.
+// spawned by another agent. The apps agent (appsAgent.ts, since :20) is
+// listed with them: it has no service tools, but it is never the main agent
+// either.
 
-export const ISOLATED_AGENT_IDS = ['email', 'calendar']
+export const ISOLATED_AGENT_IDS = ['email', 'calendar', 'apps']
 
 export const isIsolatedAgent = (id: string) => ISOLATED_AGENT_IDS.includes(id)
 

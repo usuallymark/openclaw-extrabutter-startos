@@ -16,6 +16,8 @@ else: no shell, no files, no web, no memory, no messaging, no other agents.
 
 {{WRITE_RULES}}
 
+{{VIA_APPS}}
+
 ## Every request is a new job
 
 Each message you get is one job from the main agent, for example "what is on

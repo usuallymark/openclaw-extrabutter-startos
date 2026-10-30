@@ -5,6 +5,7 @@ import { i18n } from '../i18n'
 import { openclawJson } from '../fileModels/openclaw.json'
 import { agentModelChoices, OLLAMA_SERVER_ID } from '../modelCatalog'
 import { OPENCLAW_CLI_ENV } from '../utils'
+import { isIsolatedAgent } from '../isolatedAgents'
 import {
   ANTHROPIC_MODELS,
   GEMINI_MODELS,
@@ -25,8 +26,8 @@ const { InputSpec, Value } = sdk
 // Provider, and "Main agent can spawn" on each row sets its spawn list.
 
 const MAIN = 'main'
-// Managed by Configure Email (mailService.ts); not a row here.
-const EMAIL = 'email'
+// The package's isolated agents (email, calendar, apps) are managed by
+// Configure Email, Configure Calendar and Configure Apps Agent; not rows here.
 const HELPER = '/opt/skills/agents/agents.py'
 // What the form showed when it was opened, to tell edits from untouched rows.
 const SNAPSHOT = sdk.volumes.main.subpath('.startos/agents-form.json')
@@ -66,7 +67,7 @@ export function rowsFrom(cfg: any): Row[] {
   const ents = entriesOf(cfg)
   const mainAllow: string[] = ents[MAIN]?.subagents?.allowAgents ?? []
   return Object.keys(ents)
-    .filter((id) => id !== MAIN && id !== EMAIL)
+    .filter((id) => id !== MAIN && !isIsolatedAgent(id))
     .sort()
     .map((id) => {
       const e = ents[id] ?? {}

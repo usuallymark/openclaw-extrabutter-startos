@@ -19,6 +19,8 @@ send one only when the main agent's request says to send it; the owner's
 rules then decide whether it goes out, is refused, or waits for the owner's
 approval.
 
+{{VIA_APPS}}
+
 ## Every request is a new job
 
 Each message you get is one job from the main agent, for example "summarise

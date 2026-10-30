@@ -18,6 +18,7 @@ import {
   CAL_SOUL_MD,
   CAL_WRITE_RULES,
 } from './calendarAgentFiles'
+import { VIA_APPS_MARKER, VIA_APPS_RULE } from './appsAgentFiles'
 
 // The calendar service and the calendar agent (since 2026.10.1:15; read
 // only). Built like the mail service (mailService.ts):
@@ -198,13 +199,17 @@ export async function writeCalendarAgentWorkspace(
       : '  - (none set in Configure Calendar)',
     '{{ACCOUNT}}': settings.account || 'the assistant account',
     '{{CALENDAR_NAME}}': settings.calendarName || 'Assistant',
+    '{{VIA_APPS}}': VIA_APPS_RULE(
+      VIA_APPS_MARKER,
+      '{"events": [], "actions_taken": [], "notes": "Not done: requests come only through the apps agent."}',
+    ),
   }
   // The write rules first (they hold {{CALENDAR_NAME}}), then every
   // placeholder; a function replacer keeps "$" in the owner's text literal.
   const agents = CAL_AGENTS_MD.replace('{{WRITE_RULES}}', () =>
     settings.mode === 'write' ? CAL_WRITE_RULES : CAL_READ_ONLY_RULES,
   ).replace(
-    /\{\{(EXTRA_INSTRUCTIONS|TRUSTED_ORGANIZERS|ACCOUNT|CALENDAR_NAME)\}\}/g,
+    /\{\{(EXTRA_INSTRUCTIONS|TRUSTED_ORGANIZERS|ACCOUNT|CALENDAR_NAME|VIA_APPS)\}\}/g,
     (m) => fill[m] ?? m,
   )
   await writeFile(ws('AGENTS.md'), agents)

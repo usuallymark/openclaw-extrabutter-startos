@@ -167,6 +167,7 @@ RUN chmod 755 /usr/local/bin/git-credential-openclaw
 COPY skills/webchat-present/SKILL.md /opt/skills/webchat-present/SKILL.md
 COPY skills/email/SKILL.md /opt/skills/email/SKILL.md
 COPY skills/calendar/SKILL.md /opt/skills/calendar/SKILL.md
+COPY skills/apps/SKILL.md /opt/skills/apps/SKILL.md
 COPY skills/google/SKILL.md /opt/skills/google/SKILL.md
 
 # Webchat (optional; started only when enabled via Configure Webchat).

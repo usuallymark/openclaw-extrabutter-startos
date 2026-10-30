@@ -174,7 +174,8 @@ export async function emailEnvAndSkill(email: EmailConfig | undefined) {
   if (usesMailService(email)) {
     env['EMAIL_MODE'] = email!.mode!
     env['EMAIL_ADDRESS'] = email!.address ?? ''
-    skill = '/opt/skills/email'
+    // The main agent asks the apps agent (skills/apps, added in main.ts
+    // since :20), not the email agent: no email skill.
   } else if (email?.mode === 'google' && email.address) {
     env['EMAIL_MODE'] = 'google'
     env['EMAIL_ADDRESS'] = email.address

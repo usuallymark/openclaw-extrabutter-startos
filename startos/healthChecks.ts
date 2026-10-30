@@ -4,6 +4,7 @@ import { RBW_ENV, VAULT_PROBE_SCRIPT } from './vault'
 import { EmailConfig, googleSignInStatus, usesMailService } from './email'
 import { MAIL_URL } from './mailService'
 import { CALENDAR_URL } from './calendarService'
+import { APPS_AGENT_ID, APPS_SESSION } from './appsAgent'
 import { reviewAgentActions } from './actions/reviewAgentActions'
 import {
   AGENT_ACTIONS_TASK,
@@ -556,6 +557,11 @@ function mailSideJobs(effects: T.Effects, sub: Sub, h: any) {
     } catch (e) {
       console.warn(`email session reset: ${(e as Error)?.message}`)
     }
+    try {
+      if (live()) await resetIdleAppsSession(sub)
+    } catch (e) {
+      console.warn(`apps session reset: ${(e as Error)?.message}`)
+    }
   })().finally(() => {
     sideJob = null
   })
@@ -670,6 +676,17 @@ export async function resetIdleSession(
   }
 }
 
+/** The apps agent's conversation (since :20), cleared like the service
+ * agents'. Called from both services' side jobs; the 5-minute spacing per
+ * session keeps it to one check. */
+async function resetIdleAppsSession(sub: Sub) {
+  await within(
+    150_000,
+    resetIdleSession(sub, APPS_AGENT_ID, APPS_SESSION, 'Apps'),
+    'apps session reset',
+  )
+}
+
 export async function resetIdleEmailSession(sub: Sub, now = Date.now()) {
   return resetIdleSession(sub, 'email', EMAIL_SESSION, 'Email', now)
 }
@@ -766,6 +783,11 @@ function calendarSideJobs(effects: T.Effects, sub: Sub, h: any) {
         )
     } catch (e) {
       console.warn(`calendar session reset: ${(e as Error)?.message}`)
+    }
+    try {
+      if (live()) await resetIdleAppsSession(sub)
+    } catch (e) {
+      console.warn(`apps session reset: ${(e as Error)?.message}`)
     }
   })().finally(() => {
     calendarSideJob = null
