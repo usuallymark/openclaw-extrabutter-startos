@@ -1,13 +1,13 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:17',
+  version: '2026.10.1:18',
   releaseNotes: {
-    en_US: `Small Calendar fixes.
+    en_US: `Agent Activity, and steadier warnings about hidden text.
 
-- **No false "someone else added this" warning** on events on the agent's own calendar.
-- **The agent reports the exact saved times**, with the time zone, after adding, changing or cancelling an event (or when it waits for your approval).
-- **Own Calendar Name now shows its default ("Assistant") as a real value** you can change, and explains how to rename the calendar later.`,
+- **Email Activity is now Agent Activity** and covers Calendar too: what the calendar agent read, added, changed and cancelled, what waited for you and your decisions, next to the email log. Each line says [Email] or [Calendar].
+- **Hidden text is checked by the service itself.** Text a person would not see in an email (or an HTML event description) is still removed before the agent reads it; now it is also searched for instructions to an AI. A match sets a new warning, \`hidden_injection\`, which the agents pass on every time instead of depending on how they read the message.
+- **Fewer false "hidden text" counts:** style sheets and HTML comments no longer count as hidden text.`,
   },
   migrations: {
     up: async () => {},

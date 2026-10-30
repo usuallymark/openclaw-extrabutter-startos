@@ -125,11 +125,16 @@ def _tiny_font(v):
     return n < limits[unit]
 
 
-class _Frame:
-    __slots__ = ('tag', 'hidden', 'bg', 'fg')
+# Hidden content that is code, not text: never counted as hidden text, and
+# not searched for instructions (CSS and scripts would give false alarms).
+_CODE_TAGS = {'script', 'style'}
 
-    def __init__(self, tag, hidden, bg, fg):
-        self.tag, self.hidden, self.bg, self.fg = tag, hidden, bg, fg
+
+class _Frame:
+    __slots__ = ('tag', 'hidden', 'bg', 'fg', 'code')
+
+    def __init__(self, tag, hidden, bg, fg, code=False):
+        self.tag, self.hidden, self.bg, self.fg, self.code = tag, hidden, bg, fg, code
 
 
 class _HtmlText(HTMLParser):
@@ -139,6 +144,7 @@ class _HtmlText(HTMLParser):
         self.stack = [_Frame('#root', False, (255, 255, 255), (0, 0, 0))]
         self.out = []
         self.hidden_chars = 0
+        self.hidden_out = []  # the removed text, kept for hidden_flags only
         self.links = 0
         self.href_stack = []
 
@@ -197,7 +203,7 @@ class _HtmlText(HTMLParser):
                     hidden = True
                 elif isinstance(c, tuple):
                     fg = c
-        return _Frame(tag, hidden, bg, fg)
+        return _Frame(tag, hidden, bg, fg, parent.code or tag in _CODE_TAGS)
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
@@ -257,16 +263,23 @@ class _HtmlText(HTMLParser):
         # Text coloured like its background (white on white) is hidden too;
         # judged per text run, since a child may set a readable colour.
         if self.top.hidden or (data.strip() and _close(self.top.fg, self.top.bg)):
-            self.hidden_chars += len(data.strip())
+            if not self.top.code:
+                self.hidden_chars += len(data.strip())
+                self.hidden_out.append(data)
             return
         self.out.append(data)
 
     def handle_comment(self, data):
-        self.hidden_chars += len(data.strip())
+        # Comments are markup (Outlook's [if mso] blocks), not counted as
+        # hidden text; their words are searched for instructions all the same.
+        self.hidden_out.append(re.sub(r'<[^>]*>', ' ', data))
 
 
-def html_to_text(html):
-    """(text, hidden_char_count, link_count) for an HTML body."""
+def html_parts(html):
+    """(text, hidden_char_count, link_count, hidden_text) for an HTML body.
+    hidden_text is what was removed (hidden elements, white-on-white,
+    comments; not CSS or scripts). It is for hidden_flags only: never give
+    it to an agent."""
     p = _HtmlText()
     try:
         p.feed(html or '')
@@ -277,7 +290,13 @@ def html_to_text(html):
     text = re.sub(r'[ \t ]+', ' ', clean_text(text))
     text = re.sub(r' *\n *', '\n', text)
     text = re.sub(r'\n{3,}', '\n\n', text).strip()
-    return text, p.hidden_chars, p.links
+    hidden = re.sub(r'\s+', ' ', clean_text(' '.join(p.hidden_out))).strip()
+    return text, p.hidden_chars, p.links, hidden
+
+
+def html_to_text(html):
+    """(text, hidden_char_count, link_count) for an HTML body."""
+    return html_parts(html)[:3]
 
 
 # ── Untrusted-content delimiters ────────────────────────────────────────────
@@ -313,6 +332,19 @@ _MONEY_CRED = re.compile(
     r'wire transfer|bank (account|details|transfer)|routing number|iban|swift|'
     r'gift ?cards?|bitcoin|crypto|wallet|invoice|payment|pay now|overdue|refund|'
     r'social security|ssn|tax id|credit card|card number)\b', re.I)
+
+
+def hidden_flags(hidden_chars, hidden_text):
+    """Flags for the text removed as hidden, set by the tool so they do not
+    depend on the agent's reading. hidden_text_removed: there was some
+    (common: newsletters hide a preview line). hidden_injection: the hidden
+    part tries to instruct an AI, a strong sign of a hostile message."""
+    flags = []
+    if hidden_chars:
+        flags.append('hidden_text_removed')
+    if hidden_text and _INJECTION.search(hidden_text):
+        flags.append('hidden_injection')
+    return flags
 
 
 def content_flags(text):

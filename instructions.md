@@ -204,8 +204,9 @@ the one place you approve whatever your agents want to do): it shows the recipie
 attachments and why it waits. Choose **Approve**, **Reject**, or **Approve
 and always allow these recipients** (adds them to Send Automatically To).
 Undecided mail expires after 3 days, and a draft you changed or deleted in
-your mail app meanwhile is not sent. **Actions → Email Activity** lists what
-the email agent read, filed, drafted and sent, and every decision.
+your mail app meanwhile is not sent. **Actions → Agent Activity** lists what
+the email and calendar agents read, filed, drafted, sent, added, changed and
+cancelled, and every decision.
 
 To attach files, the main agent puts them in the workspace folder
 `mail-outbox`; mail with attachments always waits for your approval.

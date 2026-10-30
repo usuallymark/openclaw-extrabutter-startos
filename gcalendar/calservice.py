@@ -42,7 +42,7 @@ import svcutil  # noqa: E402
 from gapi import READ_SCOPES, WRITE_SCOPES, ApiError, Google, SignInRefused, Unreachable  # noqa: E402
 from mcp import MAX_EVENTS  # noqa: E402
 from writes import Writer  # noqa: E402
-from sanitize import clean_line, content_flags, html_to_text, wrap_untrusted  # noqa: E402
+from sanitize import clean_line, content_flags, hidden_flags, html_parts, wrap_untrusted  # noqa: E402
 
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError  # noqa: E402
@@ -452,17 +452,17 @@ class Tools:
         brief = self._brief(e, cal)
         desc_html = str(e.get('description') or '')
         if '<' in desc_html and '>' in desc_html:
-            desc, hidden, links = html_to_text(desc_html)
+            desc, hidden, links, hidden_text = html_parts(desc_html)
         else:
-            desc, hidden, links = desc_html, 0, len(re.findall(r'https?://', desc_html))
+            desc, hidden, links, hidden_text = desc_html, 0, len(re.findall(r'https?://', desc_html)), ''
         location = clean_line(e.get('location') or '', 500)
         flags = brief['flags']
         for f in content_flags(desc) + content_flags(location):
             if f not in flags:
                 flags.append(f)
         warnings = []
+        flags += [f for f in hidden_flags(hidden, hidden_text) if f not in flags]
         if hidden:
-            flags.append('hidden_text_removed')
             warnings.append(f'{hidden} characters of hidden text were removed from the description')
         if links or e.get('hangoutLink') or e.get('conferenceData'):
             flags.append('links_present')

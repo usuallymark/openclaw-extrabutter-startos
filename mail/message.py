@@ -12,7 +12,7 @@ import re
 from email import policy
 from email.utils import getaddresses, parseaddr
 
-from sanitize import clean_line, clean_text, content_flags, html_to_text
+from sanitize import clean_line, clean_text, content_flags, hidden_flags, html_parts
 
 MAX_PARTS = 200
 
@@ -194,10 +194,11 @@ def body_text(msg):
             html_part = part
         elif ct == 'text/plain' and plain_part is None:
             plain_part = part
-    info = {'hidden_text_removed': 0, 'links': 0, 'format': 'none'}
+    # _hidden: the removed text, for flags_for only (never shown to an agent).
+    info = {'hidden_text_removed': 0, 'links': 0, 'format': 'none', '_hidden': ''}
     if html_part is not None:
-        text, hidden, links = html_to_text(_part_text(html_part))
-        info.update(hidden_text_removed=hidden, links=links, format='html')
+        text, hidden, links, hidden_text = html_parts(_part_text(html_part))
+        info.update(hidden_text_removed=hidden, links=links, format='html', _hidden=hidden_text)
         if not text.strip() and plain_part is not None:
             text = clean_text(_part_text(plain_part))
             info['format'] = 'plain (html part was empty)'
@@ -245,8 +246,10 @@ def warnings_for(msg, frm, trusted):
     return warn
 
 
-def flags_for(text, subject, has_links, has_attachments, verified):
+def flags_for(text, subject, has_links, has_attachments, verified, info=None):
     flags = content_flags(subject + '\n' + text)
+    if info:
+        flags += hidden_flags(info.get('hidden_text_removed'), info.get('_hidden'))
     if has_links:
         flags.append('links_present')
     if has_attachments:

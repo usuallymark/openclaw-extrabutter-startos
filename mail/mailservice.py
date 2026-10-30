@@ -440,7 +440,7 @@ class Tools:
             'authentication': auth,
             'trusted_sender': h['from'].get('address', '') in self.svc.trusted,
             'warnings': warnings,
-            'flags': M.flags_for(text, h['subject'], info['links'] > 0, bool(atts), verified),
+            'flags': M.flags_for(text, h['subject'], info['links'] > 0, bool(atts), verified, info),
             'attachments': [{k: v for k, v in x.items() if k != '_part'} for x in atts],
             'attachments_releasable': release if atts else None,
             'body_format': info['format'],

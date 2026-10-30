@@ -109,7 +109,7 @@ export const reviewAgentActions = sdk.Action.withInput(
     const q = items.find((x) => `${x.service}/${x.id}` === key)
     if (!q) {
       throw new Error(
-        'That request is no longer waiting (it was decided, done, or expired). Email Activity shows what happened to mail.',
+        'That request is no longer waiting (it was decided, done, or expired). Agent Activity shows what happened to it.',
       )
     }
     const decision = i.decision === 'reject' ? 'reject' : 'approve'
@@ -157,7 +157,7 @@ export const reviewAgentActions = sdk.Action.withInput(
             (added.length
               ? ` Added to Send Automatically To: ${added.join(', ')}.`
               : '') +
-            (isMail ? ' Email Activity shows the outcome.' : '')
+            ' Agent Activity shows the outcome.'
           : isMail
             ? `${what} will not be sent. The draft stays in Drafts.`
             : `${what} will not be carried out.`,
