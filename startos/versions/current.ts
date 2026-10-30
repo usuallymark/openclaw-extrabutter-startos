@@ -1,13 +1,11 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:18',
+  version: '2026.10.1:19',
   releaseNotes: {
-    en_US: `Agent Activity, and steadier warnings about hidden text.
+    en_US: `Fix for updates that stall at 80%.
 
-- **Email Activity is now Agent Activity** and covers Calendar too: what the calendar agent read, added, changed and cancelled, what waited for you and your decisions, next to the email log. Each line says [Email] or [Calendar].
-- **Hidden text is checked by the service itself.** Text a person would not see in an email (or an HTML event description) is still removed before the agent reads it; now it is also searched for instructions to an AI. A match sets a new warning, \`hidden_injection\`, which the agents pass on every time instead of depending on how they read the message.
-- **Fewer false "hidden text" counts:** style sheets and HTML comments no longer count as hidden text.`,
+- **A health check that hangs no longer blocks stopping or updating the service.** Twice an update sat at 80% because the old version never stopped; the stop log showed why: two checks (Gitea and Ollama) had been stuck for hours, and the stop waited for them. Every check now gives up after 2 minutes (or 20 seconds once a stop has begun), shows as failed for that round and runs again as usual.`,
   },
   migrations: {
     up: async () => {},
