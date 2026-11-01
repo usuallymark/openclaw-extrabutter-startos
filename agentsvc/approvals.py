@@ -78,6 +78,18 @@ class ApprovalQueue:
             return None
         return d.get('decision') if d.get('decision') in ('approve', 'reject') else None
 
+    def decision_extra(self, qid):
+        """The rest of the owner's decision record (e.g. a mailing to make
+        of a mail item), {} when there is none."""
+        if not self.decisions_dir or not ID.fullmatch(qid):
+            return {}
+        try:
+            with open(os.path.join(self.decisions_dir, f'{qid}.json')) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        return {k: v for k, v in d.items() if k != 'decision'} if isinstance(d, dict) else {}
+
     def resolve(self, item, outcome, detail='', **extra):
         """Record the outcome and remove the item from the queue."""
         rec = {'id': item['id'], 'outcome': outcome, **extra, 'detail': detail, 'ts': time.time()}

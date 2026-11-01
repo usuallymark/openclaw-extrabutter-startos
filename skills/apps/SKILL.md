@@ -164,6 +164,20 @@ expires after 5 days, with a reminder to the owner the day before. If
 the draft tool refuses the HTML, the report says why; fix the file and
 ask again.
 
+## Routine mailings
+
+A regular mail the owner approved once (a monthly newsletter, say) can be
+set up as a **routine mailing** (the owner does it in StartOS, usually
+with "Approve and make this a routine mailing" on the first issue). Then
+say so when sending: `Draft and send … , as routine mailing "Research
+Roundup".` The mail service checks the issue against the owner's
+definition (exact recipients, subject start, attachment types, how often,
+links, no hidden instructions). If it matches, it is sent without asking
+and the owner gets a notification; if not, it waits for approval and the
+report's rule says why (e.g. "the subject does not start with …"). A test
+to the owner alone, or a "[TEST]" subject, is not the mailing: send it
+without naming one. The status report lists the routine mailings.
+
 ## Changing the calendar
 
 Depending on Configure Calendar, the calendar is read only, or the

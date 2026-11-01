@@ -1,6 +1,11 @@
 import { sdk } from '../sdk'
-import { emailSettingsJson } from '../fileModels/emailSettings.json'
-import { sendingOf, writeEmailSettings } from '../mailService'
+import { emailSettingsJson, Mailing } from '../fileModels/emailSettings.json'
+import {
+  mailingId,
+  mailingNameFromSubject,
+  sendingOf,
+  writeEmailSettings,
+} from '../mailService'
 import { AgentAction, agentctl, pendingAgentActions } from '../agentActions'
 
 const { InputSpec, Value } = sdk
@@ -11,7 +16,34 @@ const { InputSpec, Value } = sdk
 // send (Configure Email → Sending). Each service keeps the exact request in
 // its own queue; this records the decision (agentsvc/agentctl.py) and the
 // service acts on it within seconds. For mail, "Approve and always allow"
-// also adds the recipients to Send Automatically To.
+// also adds the recipients to Send Automatically To, and (since :22)
+// "Approve and make this a routine mailing" saves the mail's recipients,
+// subject start and attachment types as a routine mailing (Configure Email)
+// and sends this one as its first, approved issue.
+
+/** The routine mailing made from a waiting mail (exported for tests). */
+export function mailingFromItem(q: AgentAction, prior?: Mailing): Mailing {
+  const seed = q.mailingSeed ?? {}
+  if (seed.kind !== 'new')
+    throw new Error(
+      'Only a new message can become a routine mailing (not a reply or forward).',
+    )
+  const prefix = mailingNameFromSubject(seed.subject ?? '')
+  if (!prefix)
+    throw new Error('This mail has no subject to recognise the mailing by.')
+  const name = (seed.name || prior?.name || prefix).trim()
+  return {
+    name,
+    to: seed.to ?? [],
+    cc: seed.cc ?? [],
+    bcc: seed.bcc ?? [],
+    subjectPrefix: prefix,
+    perMonth: prior?.perMonth ?? 1,
+    attachmentTypes: seed.attachmentTypes ?? [],
+    linkDomains: prior?.linkDomains ?? [],
+    paused: false,
+  }
+}
 
 const when = (t?: number) =>
   t
@@ -67,12 +99,13 @@ const inputSpec = InputSpec.of({
   decision: Value.select({
     name: 'Decision',
     description:
-      'Approve: carry it out now. Reject: do not (for mail, the draft stays in Drafts). Approve and always allow (email only): send it, and add its recipients to Send Automatically To (Configure Email), so mail to them is no longer held for approval; forwards and attachments are always held. For anything else it is the same as Approve.',
+      'Approve: carry it out now. Reject: do not (for mail, the draft stays in Drafts). Approve and always allow (email only): send it, and add its recipients to Send Automatically To (Configure Email), so mail to them is no longer held for approval; forwards, attachments and HTML mail are always held. Approve and make this a routine mailing (email only, for a newsletter or another regular mail): send it, and save its recipients, the start of its subject and its attachment types as a routine mailing (Configure Email → Sending), at most 1 a month to begin with; later issues the agent sends as that mailing go out without asking when they match, and anything else still waits. For anything else both are the same as Approve.',
     default: 'approve',
     values: {
       approve: 'Approve',
       reject: 'Reject',
       always: 'Approve and always allow these recipients (email)',
+      routine: 'Approve and make this a routine mailing (email)',
     },
   }),
 })
@@ -141,7 +174,37 @@ export const reviewAgentActions = sdk.Action.withInput(
         }
       }
     }
-    const res = await agentctl(effects, ['decide', q.service, q.id, decision])
+    let made: Mailing | null = null
+    if (i.decision === 'routine' && q.service === 'mail') {
+      const s = await emailSettingsJson.read().once()
+      if (!s) throw new Error('Configure Email has no settings yet.')
+      const sending = sendingOf(s)
+      const list = sending.mailings ?? []
+      const seedId = mailingId(
+        q.mailingSeed?.name ||
+          q.mailingSeed?.mailing ||
+          mailingNameFromSubject(q.mailingSeed?.subject ?? ''),
+      )
+      const prior = list.find((m) => mailingId(m.name) === seedId)
+      made = mailingFromItem(q, prior)
+      await writeEmailSettings(effects, {
+        ...s,
+        sending: {
+          ...sending,
+          mailings: [
+            ...list.filter((m) => mailingId(m.name) !== mailingId(made!.name)),
+            made,
+          ],
+        },
+      })
+    }
+    const res = await agentctl(effects, [
+      'decide',
+      q.service,
+      q.id,
+      decision,
+      ...(made ? [mailingId(made.name)] : []),
+    ])
     if (!res?.ok)
       throw new Error(res?.error || 'The decision was not recorded.')
     const what = `"${oneLine(q.summary, 80)}"`
@@ -156,6 +219,9 @@ export const reviewAgentActions = sdk.Action.withInput(
               : `${what} will be carried out within a minute.`) +
             (added.length
               ? ` Added to Send Automatically To: ${added.join(', ')}.`
+              : '') +
+            (made
+              ? ` Saved as the routine mailing "${made.name}": to ${[...made.to, ...made.cc.map((x) => `${x} (Cc)`), ...made.bcc.map((x) => `${x} (Bcc)`)].join(', ')}; subject starting "${made.subjectPrefix}"; at most ${made.perMonth} a month; attachments: ${made.attachmentTypes.join(', ') || 'none'}. Change it in Configure Email → Sending → Routine Mailings.`
               : '') +
             ' Agent Activity shows the outcome.'
           : isMail

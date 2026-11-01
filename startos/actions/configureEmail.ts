@@ -10,7 +10,7 @@ import {
   parseClientJson,
   parseTokenJson,
 } from '../email'
-import { sendingOf, writeEmailSettings } from '../mailService'
+import { mailingId, sendingOf, writeEmailSettings } from '../mailService'
 import { agentModelChoices, OLLAMA_SERVER_ID } from '../modelCatalog'
 import {
   ANTHROPIC_MODELS,
@@ -421,6 +421,111 @@ const limit = (name: string, description: string, dflt: number, max: number) =>
     placeholder: String(dflt),
   })
 
+const EMAIL_ONLY_RE = '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$'
+
+const exactList = (name: string, description: string) =>
+  Value.list(
+    sdk.List.text(
+      { name, description, default: [], maxLength: 50 },
+      {
+        placeholder: 'sam@example.com',
+        inputmode: 'email',
+        patterns: [
+          {
+            regex: EMAIL_ONLY_RE,
+            description: 'An address, e.g. sam@example.com',
+          },
+        ],
+      },
+    ),
+  )
+
+const wordList = (
+  name: string,
+  description: string,
+  placeholder: string,
+  regex: string,
+  what: string,
+) =>
+  Value.list(
+    sdk.List.text(
+      { name, description, default: [], maxLength: 50 },
+      { placeholder, patterns: [{ regex, description: what }] },
+    ),
+  )
+
+// Routine mailings (since :22): mail/outbox.py checks a send that names one.
+const mailings = Value.list(
+  sdk.List.obj(
+    {
+      name: 'Routine Mailings',
+      description:
+        'Regular mail you have approved once, such as a monthly newsletter. When the email agent sends a draft as one of these, the mail service checks it: exactly these recipients, a subject starting as given, only these attachment types, not more often than allowed, no hidden instructions, and links only to the listed domains (if any). If everything matches and an earlier issue with the same recipients and subject start was approved, it goes out without asking and you get a notification. Anything else waits for your approval as usual, saying why. The easiest way to add one: approve the first issue with "Approve and make this a routine mailing" in Review Agent Actions.',
+      default: [],
+    },
+    {
+      spec: InputSpec.of({
+        name: Value.text({
+          name: 'Name',
+          description:
+            'How the agent names it when sending, e.g. "Research Roundup". Changing it makes a new mailing.',
+          required: true,
+          default: null,
+          masked: false,
+          placeholder: 'Research Roundup',
+        }),
+        to: exactList('To', 'Exactly these addresses, no more, no fewer.'),
+        cc: exactList('Cc', 'Exactly these addresses (usually none).'),
+        bcc: exactList(
+          'Bcc',
+          'Exactly these addresses, e.g. yourself for a copy.',
+        ),
+        subjectPrefix: Value.text({
+          name: 'Subject Starts With',
+          description:
+            'The subject must start with this, e.g. "Research Roundup". A test issue ("[TEST] …") then does not count. Changing it, or the recipients, needs a new first approval.',
+          required: true,
+          default: null,
+          masked: false,
+          placeholder: 'Research Roundup',
+        }),
+        perMonth: Value.number({
+          name: 'At Most per 30 Days',
+          description:
+            'More issues than this in 30 days wait for your approval.',
+          required: true,
+          default: 1,
+          min: 1,
+          max: 31,
+          integer: true,
+          placeholder: '1',
+        }),
+        attachmentTypes: wordList(
+          'Attachment Types',
+          'File types an issue may attach, e.g. pdf. Empty: no attachments.',
+          'pdf',
+          '^\\.?[A-Za-z0-9]{1,8}$',
+          'A file extension, e.g. pdf',
+        ),
+        linkDomains: wordList(
+          'Links Only To (optional)',
+          'If set, every link must go to one of these domains or their subdomains (e.g. nih.gov covers pubmed.ncbi.nlm.nih.gov). Empty: links anywhere, listed in the approval when one waits.',
+          'doi.org',
+          '^[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$',
+          'A domain, e.g. doi.org',
+        ),
+        paused: Value.toggle({
+          name: 'Paused',
+          description: 'On: every issue waits for your approval again.',
+          default: false,
+        }),
+      }),
+      displayAs: '{{name}}',
+      uniqueBy: 'name',
+    },
+  ),
+)
+
 const sending = Value.object(
   {
     name: 'Sending',
@@ -476,6 +581,7 @@ const sending = Value.object(
       30,
       2000,
     ),
+    mailings,
     maxRecipients: limit(
       'Recipients per Message',
       'A message to more recipients than this (To, Cc and Bcc together) waits for your approval.',
@@ -575,6 +681,21 @@ export const configureEmail = sdk.Action.withInput(
         perHour: Number(i.sending?.perHour ?? 10),
         perDay: Number(i.sending?.perDay ?? 30),
         maxRecipients: Number(i.sending?.maxRecipients ?? 10),
+        mailings: ((i.sending?.mailings ?? []) as any[])
+          .map((m) => ({
+            name: String(m?.name ?? '').trim(),
+            to: cleanList(m?.to),
+            cc: cleanList(m?.cc),
+            bcc: cleanList(m?.bcc),
+            subjectPrefix: String(m?.subjectPrefix ?? '').trim(),
+            perMonth: Math.max(1, Number(m?.perMonth ?? 1)),
+            attachmentTypes: cleanList(m?.attachmentTypes).map((x) =>
+              x.replace(/^\./, ''),
+            ),
+            linkDomains: cleanList(m?.linkDomains),
+            paused: m?.paused === true,
+          }))
+          .filter((m) => m.name && mailingId(m.name)),
       },
     } as EmailSettings
     await writeEmailSettings(effects, settings)

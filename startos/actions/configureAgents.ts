@@ -215,7 +215,29 @@ const agentSpec = InputSpec.of({
   }),
 })
 
+// Self-learning (since :22): OpenClaw's Skill Workshop can turn finished
+// work into skills of its own (skills.workshop.autonomous.mode). In "auto"
+// (OpenClaw's default) it rewrites them in the background; on the box that
+// put a half-finished procedure into a newsletter skill. "propose" leaves
+// changes for the owner to approve (Control UI → Plugins → Workshop).
+export const SELF_LEARNING = ['off', 'propose', 'auto'] as const
+export const selfLearningOf = (cfg: any): (typeof SELF_LEARNING)[number] => {
+  const m = cfg?.skills?.workshop?.autonomous?.mode
+  return SELF_LEARNING.includes(m) ? m : 'auto'
+}
+
 const inputSpec = InputSpec.of({
+  selfLearning: Value.select({
+    name: 'Self-learning',
+    description:
+      "After substantial work, OpenClaw can write what the agents learned into skills of their own (Skill Workshop). Propose: it suggests changes, and you approve them in the OpenClaw Control UI (Plugins → Workshop); recommended. Automatic: it changes those skills itself in the background (OpenClaw's default). Off: no self-learning. Skills in the workspace's skills folder are never changed by it.",
+    default: 'auto',
+    values: {
+      propose: 'Propose, I approve (recommended)',
+      auto: 'Automatic',
+      off: 'Off',
+    },
+  }),
   agents: Value.list(
     sdk.List.obj(
       {
@@ -315,13 +337,37 @@ export const configureAgents = sdk.Action.withInput(
     const rows = rowsFrom(await liveConfig())
     await writeFile(SNAPSHOT, JSON.stringify(rows)).catch(() => {})
     // Model values are validated against the dynamic list at submit.
-    return { agents: rows as any }
+    return {
+      selfLearning: selfLearningOf(await liveConfig()),
+      agents: rows as any,
+    }
   },
 
   async ({ effects, input }) => {
     const next = (input.agents ?? []) as Row[]
     const base = (await readSnapshot()) ?? rowsFrom(await liveConfig())
     const ops = diff(base, next)
+    const learning = SELF_LEARNING.includes((input as any).selfLearning)
+      ? ((input as any).selfLearning as (typeof SELF_LEARNING)[number])
+      : null
+    const learningChanged =
+      !!learning && learning !== selfLearningOf(await liveConfig())
+    if (learningChanged) {
+      await openclawJson.merge(effects, {
+        skills: { workshop: { autonomous: { mode: learning } } },
+      } as any)
+    }
+    const learningNote = learningChanged
+      ? `Self-learning is now: ${learning === 'propose' ? 'propose, you approve' : learning === 'auto' ? 'automatic' : 'off'}.`
+      : ''
+    if (!ops.length && learningChanged) {
+      return {
+        version: '1' as const,
+        title: 'Saved',
+        message: `${learningNote} OpenClaw applies it on its own.`,
+        result: null,
+      }
+    }
     if (!ops.length) {
       return {
         version: '1' as const,
@@ -361,6 +407,7 @@ export const configureAgents = sdk.Action.withInput(
       version: '1' as const,
       title: i18n('Agents saved'),
       message:
+        (learningNote ? `${learningNote}\n` : '') +
         (out.notes ?? []).join('\n') +
         (created.length
           ? `\n\n${i18n('Starter instructions were created in:')}\n${created.join('\n')}\n${i18n('Ask the main agent to fill them in with you, or edit them in the workspace.')}`

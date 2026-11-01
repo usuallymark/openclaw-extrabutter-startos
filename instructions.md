@@ -220,6 +220,16 @@ Actions shows where its links go, its pictures and any hidden text. To see
 how it looks before you approve, open the draft in the assistant's mail
 (Drafts), or have the agent send a test to you first.
 
+**Routine mailings** (a monthly newsletter, say): when the first real issue
+waits in Review Agent Actions, choose **Approve and make this a routine
+mailing**. Its recipients, the start of its subject and its attachment
+types are saved (Configure Email → Sending → Routine Mailings; at most one
+a month to begin with). Later issues the agent sends as that mailing go
+out without asking when they match, and you get a notification. An issue
+with other recipients, another subject, other attachments, one too many in
+a month, or hidden instructions still waits for you and says why. Switch
+**Paused** on to make every issue wait again.
+
 The **Mail Service** line on the service page shows whether the mailbox
 accepts the password. If you change the password (in Vaultwarden or in the
 form), nothing else is needed: when the mailbox refuses the old one, the

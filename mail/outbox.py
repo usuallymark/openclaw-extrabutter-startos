@@ -11,6 +11,13 @@ as root; this service can read it, not change it):
 - every recipient on "Send automatically to": sent.
 - anyone else: per "Anyone else" (ask: held; block: refused; auto: sent).
 
+Routine mailings (since :22): the owner defines a mailing (exact
+recipients, subject prefix, how often, attachment types, optional link
+domains). A send that names it is checked against that definition; if
+everything matches and an earlier issue with the same recipients and prefix
+was approved, it goes out without asking. Anything that does not match
+waits, saying why. The agent's naming a mailing only asks for the check.
+
 Held messages wait in the service's approval queue (approvals.py, shared
 with the package's other services: state/queue/, which only this user can
 write) with the exact bytes that will be sent. The owner decides in StartOS
@@ -42,8 +49,54 @@ EXPIRE_S = 5 * 24 * 3600
 MARKER = 'X-OpenClaw-Draft'
 DEFAULT_RULES = {
     'level': 'drafts', 'autoTo': [], 'neverTo': [], 'others': 'ask',
-    'perHour': 10, 'perDay': 30, 'maxRecipients': 10,
+    'perHour': 10, 'perDay': 30, 'maxRecipients': 10, 'mailings': [],
 }
+MONTH_S = 30 * 24 * 3600
+MAILING_ID = re.compile(r'[a-z0-9][a-z0-9-]{0,59}')
+
+
+def mailing_id(name):
+    """The id of a mailing name: lowercase, words joined by dashes."""
+    return re.sub(r'[^a-z0-9]+', '-', str(name or '').lower()).strip('-')[:60]
+
+
+def _clean_mailing(m):
+    if not isinstance(m, dict):
+        return None
+    mid = mailing_id(m.get('id') or m.get('name'))
+    if not MAILING_ID.fullmatch(mid or ''):
+        return None
+    lst = lambda k: sorted({_norm(x) for x in (m.get(k) or []) if _norm(x)})  # noqa: E731
+    try:
+        per = max(1, int(m.get('perMonth', 1)))
+    except (TypeError, ValueError):
+        per = 1
+    return {
+        'id': mid, 'name': clean_line(str(m.get('name') or mid), 80),
+        'to': lst('to'), 'cc': lst('cc'), 'bcc': lst('bcc'),
+        'subjectPrefix': clean_line(str(m.get('subjectPrefix') or ''), 120),
+        'perMonth': per,
+        'attachmentTypes': sorted({str(x).strip().lower().lstrip('.') for x in (m.get('attachmentTypes') or [])
+                                   if str(x).strip()}),
+        'linkDomains': sorted({str(x).strip().lower().lstrip('.') for x in (m.get('linkDomains') or [])
+                               if str(x).strip()}),
+        'paused': bool(m.get('paused')),
+    }
+
+
+def mailing_fp(m):
+    """What an approval of a mailing covers: its recipients and subject
+    prefix. Changing either needs a new first approval."""
+    key = json.dumps([m['to'], m['cc'], m['bcc'], m['subjectPrefix'].lower()])
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
+def _addrs_of(msg, header):
+    return sorted({_norm(a) for _, a in getaddresses([str(v) for v in (msg.get_all(header) or [])]) if a.strip()})
+
+
+def _domain_ok(domain, allowed):
+    return any(domain == d or domain.endswith('.' + d) for d in allowed)
 
 
 class SmtpRefused(Exception):
@@ -139,7 +192,83 @@ class Outbox:
                 out[k] = max(1, int(r.get(k, out[k])))
             except (TypeError, ValueError):
                 pass
+        if isinstance(r.get('mailings'), list):
+            out['mailings'] = [m for m in (_clean_mailing(x) for x in r['mailings']) if m]
         return out
+
+    def mailing(self, name):
+        """The owner's mailing definition for a name or id, or None."""
+        want = mailing_id(name)
+        return next((m for m in self.rules()['mailings'] if m['id'] == want), None) if want else None
+
+    def _sent_records(self):
+        try:
+            with open(self.sent_path) as f:
+                for line in f:
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(rec, dict):
+                        yield rec
+        except OSError:
+            return
+
+    def mailing_problems(self, m, msg, kind, att_names, now=None):
+        """Why a message does not count as an issue of mailing m ([] when it
+        does, and may go out without asking)."""
+        now = now or time.time()
+        why = []
+        if m['paused']:
+            why.append('the mailing is paused in Configure Email')
+        if kind != 'new':
+            why.append('a reply or forward is never a routine mailing')
+        for h, k in (('To', 'to'), ('Cc', 'cc'), ('Bcc', 'bcc')):
+            got = _addrs_of(msg, h)
+            if got != m[k]:
+                why.append(f'{h} is {", ".join(got) or "empty"}, the mailing has {", ".join(m[k]) or "none"}')
+        subject = str(msg['Subject'] or '').strip()
+        if not m['subjectPrefix'] or not subject.lower().startswith(m['subjectPrefix'].lower()):
+            why.append(f'the subject does not start with "{m["subjectPrefix"]}"')
+        for n in att_names:
+            ext = n.rsplit('.', 1)[-1].lower() if '.' in n else ''
+            if ext not in m['attachmentTypes']:
+                why.append(f'attachment {n} is not one of the mailing\'s types '
+                           f'({", ".join(m["attachmentTypes"]) or "none allowed"})')
+        try:
+            part = msg.get_body(preferencelist=('html',))
+            html = part.get_content() if part is not None else None
+        except Exception:  # noqa: BLE001
+            html, why = None, why + ['the HTML could not be read']
+        if html is not None:
+            try:
+                info = htmlout.check(html, allow_cid=True)
+                if 'hidden_injection' in info['flags']:
+                    why.append('the HTML has hidden text that tries to instruct an AI')
+                if m['linkDomains']:
+                    off = [d for d in info['domains'] if not d.startswith('mailto:')
+                           and not _domain_ok(d, m['linkDomains'])]
+                    if off:
+                        why.append('links go to domains outside the mailing\'s list: ' + ', '.join(off[:8]))
+            except htmlout.HtmlRefused as e:
+                why.append(f'the HTML has parts outgoing mail may not have ({_short(e, 150)})')
+        fp = mailing_fp(m)
+        recs = [r for r in self._sent_records() if r.get('mailing') == m['id']]
+        if not any(r.get('fp') == fp for r in recs):
+            why.append('the first issue (or the first after its recipients or subject changed) waits for your approval')
+        recent = sum(1 for r in recs if now - r.get('t', 0) < MONTH_S)
+        if recent >= m['perMonth']:
+            why.append(f'already {recent} sent in the last 30 days (the mailing allows {m["perMonth"]})')
+        hour, day = self._sent_counts(now)
+        r = self.rules()
+        if hour >= r['perHour'] or day >= r['perDay']:
+            why.append('the hourly or daily sending limit is reached')
+        return why
+
+    def mailing_sends(self, n=10):
+        """The latest issues sent as routine mailings (for the owner's alert)."""
+        recs = [r for r in self._sent_records() if r.get('mailing')]
+        return [{k: r.get(k) for k in ('t', 'mailing', 'name', 'subject', 'auto')} for r in recs[-n:]]
 
     def level_text(self, r=None):
         r = r or self.rules()
@@ -235,7 +364,7 @@ class Outbox:
 
     # ── SMTP ────────────────────────────────────────────────────────────────
 
-    def smtp_send(self, raw):
+    def smtp_send(self, raw, mailing=None):
         """Send raw message bytes; returns the message as sent (marker removed).
         Raises SmtpRefused, OSError or SMTPException."""
         msg = email.message_from_bytes(raw, policy=policy.SMTP)
@@ -267,16 +396,23 @@ class Outbox:
                 s.quit()
             except Exception:
                 pass
-        self._record_sent()
+        self._record_sent(msg, mailing)
         return msg
 
-    def _record_sent(self):
+    def _record_sent(self, msg=None, mailing=None):
+        """mailing: (definition, sent without asking) for a routine mailing."""
+        rec = {'t': time.time()}
+        if mailing:
+            m, auto = mailing
+            rec.update(mailing=m['id'], name=m['name'], fp=mailing_fp(m), auto=bool(auto),
+                       subject=clean_line(str((msg or {}).get('Subject') or ''), 120))
         with open(self.sent_path, 'a') as f:
-            f.write(json.dumps({'t': time.time()}) + '\n')
+            f.write(json.dumps(rec) + '\n')
 
     # ── queue ───────────────────────────────────────────────────────────────
 
-    def enqueue(self, raw, msg, kind, rule, draft_uid, draft_folder, attachment_names):
+    def enqueue(self, raw, msg, kind, rule, draft_uid, draft_folder, attachment_names, mailing=None,
+                requested=None):
         qid = self.q.new_id()
         body = ''
         try:
@@ -308,6 +444,8 @@ class Outbox:
             'messageId': str(msg['Message-ID'] or '').strip(),
             'from': str(msg['From'] or ''), 'to': to, 'cc': cc, 'bcc': bcc,
             'subject': subject, 'opening': opening, 'attachments': attachment_names,
+            **({'mailing': mailing} if mailing else {}),
+            **({'mailingRequested': clean_line(requested, 80)} if requested else {}),
             'raw': base64.b64encode(raw).decode(),
         }
         return self.q.add(item)
@@ -356,8 +494,13 @@ class Outbox:
         if not hooks.draft_present(item):
             self._result(item, 'cancelled', 'the draft was no longer in Drafts as requested (sent, edited or deleted in the mail app)')
             return
+        # A routine mailing: the item's own (the agent named it), or the one
+        # the owner made from this item ("Approve and make this a routine
+        # mailing"); its definition is read now, so the approval covers it.
+        mname = item.get('mailing') or self.q.decision_extra(qid).get('mailing')
+        m = self.mailing(mname) if mname else None
         try:
-            msg = self.smtp_send(raw)
+            msg = self.smtp_send(raw, (m, False) if m else None)
         except (SmtpRefused, OSError, smtplib.SMTPException) as e:
             count += 1
             detail = clean_line(str(e), 200)

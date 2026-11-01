@@ -1,13 +1,13 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:21',
+  version: '2026.10.1:22',
   releaseNotes: {
-    en_US: `HTML mail, longer approvals with a reminder, calendar fixes.
+    en_US: `Routine mailings, and a say in self-learning.
 
-- **The assistant can send HTML mail** (a newsletter, say). It writes the HTML into the workspace folder mail-outbox; pictures are files there too and are embedded in the mail. Pictures loaded from other websites, scripts, forms and hidden instructions are refused. HTML mail always waits for your approval, and Review Agent Actions shows where its links go, its pictures and any hidden text.
-- **Waiting requests expire after 5 days instead of 3**, for mail and calendar, and you get a reminder (notification and ntfy) the day before.
-- **Calendar:** the health line says "read + write" in write mode (it said "read only"), and the assistant's own calendar follows the account's time zone (a new account's calendar could start out in UTC).`,
+- **Routine mailings:** approve a newsletter once with "Approve and make this a routine mailing" (Review Agent Actions), and later issues go out without asking when they match: the same recipients, a subject starting the same way, the same kind of attachments, not more often than allowed (one a month to begin with), no hidden instructions. You get a notification for each. Anything else still waits for you and says why. Manage them in Configure Email → Sending → Routine Mailings, with a Paused switch.
+- **Self-learning in Configure Agents:** choose whether OpenClaw may change the skills it learned by itself (Automatic, OpenClaw's default), only propose changes for you to approve (recommended), or not learn at all.
+- An HTML mail's page title no longer counts as hidden text.`,
   },
   migrations: {
     up: async () => {},

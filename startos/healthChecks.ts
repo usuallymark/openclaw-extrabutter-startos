@@ -469,6 +469,26 @@ async function remind(
 }
 let legacyCleared = false
 
+// Routine-mailing issues sent without asking (since :22), told to the
+// owner once. Only sends from the last 15 minutes count, so a restart does
+// not repeat old ones.
+const announcedMailings = new Set<string>()
+
+/** The routine-mailing sends to announce now (exported for tests). */
+export function mailingsToAnnounce<
+  R extends { t?: number; mailing?: string; auto?: boolean },
+>(sent: R[], now = Date.now()): R[] {
+  return sent.filter((r) => {
+    const key = `${r.mailing}/${r.t}`
+    return (
+      r.auto === true &&
+      typeof r.t === 'number' &&
+      now - r.t * 1000 < 15 * 60_000 &&
+      !announcedMailings.has(key)
+    )
+  })
+}
+
 /** The one Review Agent Actions task, for every service's queue. */
 async function syncAgentActionsTask(
   effects: T.Effects,
@@ -526,6 +546,34 @@ async function syncQueueTask(
     'mail',
     queue.map((q) => q.id),
   )
+  const sent = (Array.isArray(h.mailings_sent) ? h.mailings_sent : []) as {
+    t?: number
+    mailing?: string
+    name?: string
+    subject?: string
+    auto?: boolean
+  }[]
+  for (const r of mailingsToAnnounce(sent)) {
+    if (!live()) return
+    announcedMailings.add(`${r.mailing}/${r.t}`)
+    const text = `Routine mailing "${r.name || r.mailing}" sent without asking: "${r.subject || ''}". Actions → Agent Activity shows it.`
+    await within(
+      20_000,
+      sdk.notification.create(effects, {
+        level: 'info',
+        title: 'Routine mailing sent',
+        message: text,
+      }),
+      'notification',
+    ).catch(() => {})
+    await sub
+      .exec(['notify', '--title', 'OpenClaw mail', '--tags', 'email', text], {
+        user: 'node',
+        env: { HOME: '/data' },
+        timeout: 30_000,
+      })
+      .catch(() => {})
+  }
   for (const q of queue) {
     if (!live()) return
     if (reminderDue(q))

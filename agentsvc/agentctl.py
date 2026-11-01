@@ -7,6 +7,10 @@ enter the services' folders).
                                             from every service, as JSON
     agentctl.py decide SERVICE ID approve   record the owner's decision
                                             (or reject)
+    agentctl.py decide mail ID approve MAILING
+                                            approve, and send it as an issue
+                                            of routine mailing MAILING (the
+                                            package wrote its definition)
     agentctl.py activity SERVICE [N]        the last N activity entries
 
 Each service polls its decisions/ and acts within seconds. Queue items are
@@ -63,6 +67,19 @@ def _mail_legacy(q):
     }
 
 
+def _addr_list(v):
+    return sorted({a.strip().lower() for _, a in getaddresses([str(v or '')]) if '@' in a})
+
+
+def _mailing_seed(q):
+    """What "Approve and make this a routine mailing" needs from a mail
+    item: its recipients, subject and attachment types (no message text)."""
+    exts = sorted({str(n).rsplit('.', 1)[-1].lower() for n in (q.get('attachments') or []) if '.' in str(n)})
+    return {'kind': str(q.get('kind') or ''), 'to': _addr_list(q.get('to')), 'cc': _addr_list(q.get('cc')),
+            'bcc': _addr_list(q.get('bcc')), 'subject': _short(q.get('subject'), 200), 'attachmentTypes': exts,
+            'name': _short(q.get('mailingRequested'), 80), 'mailing': str(q.get('mailing') or '')}
+
+
 def _items(service):
     p = _paths(service)
     items = []
@@ -83,6 +100,8 @@ def _items(service):
         if service == 'mail' and not q.get('details'):
             q = {**q, **_mail_legacy(q)}
         out = {k: q[k] for k in PUBLIC if k in q}
+        if service == 'mail':
+            out['mailingSeed'] = _mailing_seed(q)
         out['details'] = [str(x) for x in out.get('details') or []]
         out['service'] = service
         out['label'] = SERVICES[service]['label']
@@ -107,9 +126,12 @@ def queue():
     return items
 
 
-def decide(service, qid, decision):
+def decide(service, qid, decision, mailing=None):
     if service not in SERVICES or not ID.fullmatch(qid) or decision not in ('approve', 'reject'):
         raise SystemExit('usage: agentctl.py decide SERVICE ID approve|reject')
+    if mailing is not None and (service != 'mail' or decision != 'approve'
+                                or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,59}', mailing)):
+        raise SystemExit('usage: agentctl.py decide mail ID approve MAILING-ID')
     p = _paths(service)
     if not os.path.exists(os.path.join(p['queue'], f'{qid}.json')):
         print(json.dumps({'ok': False, 'error': 'that request is no longer waiting (done, rejected or expired)'}))
@@ -118,7 +140,7 @@ def decide(service, qid, decision):
     path = os.path.join(p['decisions'], f'{qid}.json')
     tmp = path + '.tmp'
     with open(tmp, 'w') as f:
-        json.dump({'decision': decision}, f)
+        json.dump({'decision': decision, **({'mailing': mailing} if mailing else {})}, f)
     os.chmod(tmp, 0o644)
     os.replace(tmp, path)
     print(json.dumps({'ok': True}))
@@ -154,8 +176,8 @@ def main(argv):
     cmd = argv[1] if len(argv) > 1 else ''
     if cmd == 'queue':
         print(json.dumps({'queue': queue(), 'results': results(20)}))
-    elif cmd == 'decide' and len(argv) == 5:
-        decide(argv[2], argv[3], argv[4])
+    elif cmd == 'decide' and len(argv) in (5, 6):
+        decide(argv[2], argv[3], argv[4], argv[5] if len(argv) == 6 else None)
     elif cmd == 'activity' and len(argv) in (3, 4) and argv[2] in SERVICES:
         n = int(argv[3]) if len(argv) > 3 and argv[3].isdigit() else 50
         print(json.dumps({'activity': tail(_paths(argv[2])['activity'], min(n, 500))}))

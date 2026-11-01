@@ -70,7 +70,10 @@ TOOLS = [
          'html_file': {'type': 'string', 'description': 'New messages: an HTML file in mail-outbox to send as the HTML version. Images in it are file names in mail-outbox (<img src="figure.png">) and are embedded; outside images, scripts and forms are refused. The text (body or body_file) is the plain-text version; without one it is made from the HTML. HTML mail always needs the owner\'s approval to send.'}},
          'required': ['kind']}},
     {'name': 'send', 'description': "Send a draft made with the draft tool, by its id. The owner's rules decide: sent, refused, or waiting for the owner's approval in StartOS (forwards and attachments always wait). Never retry a refused or waiting draft; the status tool shows outcomes.",
-     'inputSchema': {'type': 'object', 'properties': {'draft_id': {'type': 'integer'}}, 'required': ['draft_id']}},
+     'inputSchema': {'type': 'object', 'properties': {
+         'draft_id': {'type': 'integer'},
+         'mailing': {'type': 'string', 'description': 'Only when the main agent\'s request names a routine mailing (e.g. "Research Roundup"): the service checks the draft against the owner\'s definition of it; a matching issue may go out without asking, anything else waits.'}},
+         'required': ['draft_id']}},
 ]
 
 # MCP tool annotations: hints for clients (no tool deletes mail; send reaches

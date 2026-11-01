@@ -113,6 +113,11 @@ know (not a link or number from the message).
   wording: pass those file names exactly; never write or change HTML
   yourself. If the tool refuses the HTML (outside images, scripts, hidden
   text), report its reason word for word.
+- \`send\` with \`mailing\`: only when the main agent's request names a
+  routine mailing ("send as routine mailing Research Roundup"); pass that
+  name exactly. The service checks the draft against the owner's
+  definition: a matching issue is sent, anything else waits for approval
+  and the result says why. Never name a mailing the request did not name.
 - \`send\`: only when the main agent's request explicitly says to send
   (not "draft", not "reply" alone). Send the draft you just made, by its
   id. The result is one of: sent; refused (say why; do not try again or

@@ -137,6 +137,25 @@ export async function writeEmailSettings(
   await writeSendingRules(settings)
 }
 
+/** A routine mailing's id, as the mail service derives it (outbox.py). */
+export const mailingId = (name: string) =>
+  String(name ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+
+/** A mailing name from a subject: "[TEST] Research Roundup: October 2026"
+ * gives "Research Roundup". */
+export function mailingNameFromSubject(subject: string): string {
+  const s = String(subject ?? '')
+    .replace(/^\s*(\[[^\]]*\]\s*)+/, '')
+    .replace(/^\s*((re|fwd?|aw|wg)\s*:\s*)+/i, '')
+    .trim()
+  const head = s.split(/\s*(?::|\s[-–—|]\s)\s*/)[0].trim()
+  return (head || s).slice(0, 80)
+}
+
 /** The sending settings, with defaults (Drafts only). */
 export function sendingOf(settings: EmailSettings | null | undefined) {
   return { ...SENDING_DEFAULTS, ...(settings?.sending ?? {}) }
@@ -162,6 +181,18 @@ export async function writeSendingRules(settings: EmailSettings | null) {
     perHour: r.perHour,
     perDay: r.perDay,
     maxRecipients: r.maxRecipients,
+    mailings: (r.mailings ?? []).map((m) => ({
+      id: mailingId(m.name),
+      name: m.name,
+      to: norm(m.to),
+      cc: norm(m.cc),
+      bcc: norm(m.bcc),
+      subjectPrefix: m.subjectPrefix.trim(),
+      perMonth: m.perMonth,
+      attachmentTypes: norm(m.attachmentTypes).map((x) => x.replace(/^\./, '')),
+      linkDomains: norm(m.linkDomains).map((x) => x.replace(/^\./, '')),
+      paused: m.paused,
+    })),
   }
   await mkdir(mailRoot, { recursive: true, mode: 0o700 })
   await writeFile(rulesPath, JSON.stringify(rules, null, 2) + '\n', {

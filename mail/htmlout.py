@@ -179,7 +179,10 @@ def check(html, allow_cid=False):
         raise HtmlRefused(f'the HTML could not be read ({type(e).__name__})') from None
     if s.problems:
         raise HtmlRefused('; '.join(s.problems[:8]) + (' …' if len(s.problems) > 8 else ''))
-    text, hidden, _, hidden_text = html_parts(html)
+    # A document <title> is not shown in a mail and is no hiding place
+    # worth a note in the approval (incoming mail still counts it).
+    text, hidden, _, hidden_text = html_parts(re.sub(r'<title\b[^>]*>.*?</title\s*>', '', html,
+                                                     flags=re.I | re.S))
     domains = []
     for u in s.links:
         d = _domain(u)

@@ -184,6 +184,9 @@ class Service:
             # task and a phone alert from it.
             h['queue'] = [{'id': q['id'], 'to': q.get('to', ''), 'subject': q.get('subject', ''),
                            'rule': q.get('rule', ''), 'expires': q.get('expires')} for q in self.outbox.pending()]
+            # Issues of routine mailings sent lately (the package tells the
+            # owner about those sent without asking).
+            h['mailings_sent'] = self.outbox.mailing_sends()
         return h
 
 
@@ -292,9 +295,14 @@ class Tools:
                           + {'ask': 'anyone else waits for the owner\'s approval',
                              'block': 'anyone else is refused',
                              'auto': 'anyone else is sent too'}[r['others']]
-                          + '; forwards and attachments always wait for approval'),
+                          + '; forwards, attachments and HTML mail always wait for approval'),
             }[r['level']]
+            h['routine_mailings'] = [{'name': m['name'], 'to': m['to'], 'cc': m['cc'], 'bcc': m['bcc'],
+                                      'subject_starts_with': m['subjectPrefix'], 'per_month': m['perMonth'],
+                                      'attachment_types': m['attachmentTypes'], 'paused': m['paused']}
+                                     for m in r['mailings']]
             h['waiting_for_approval'] = h.pop('queue')
+            h.pop('mailings_sent', None)
             h['recent_outcomes'] = [{k: x.get(k) for k in ('id', 'outcome', 'to', 'subject', 'detail')}
                                     for x in ob.results(10)]
         return h
@@ -799,33 +807,51 @@ class Tools:
                             'detail': 'Do not send it again; the owner decides in StartOS (Review Agent Actions).'}
             has_html = msg.get_body(preferencelist=('html',)) is not None
             decision, rule = ob.judge(rcpts, kind, len(atts), has_html=has_html)
+            # A routine mailing (since :22): naming one only asks for the
+            # check against the owner's definition; never past a refusal.
+            mailing, mnote = None, ''
+            mname = str(a.get('mailing') or '').strip()
+            if mname and decision != 'refuse':
+                mailing = ob.mailing(mname)
+                if mailing is None:
+                    mnote = f'there is no routine mailing "{clean_line(mname, 60)}" (Configure Email); the normal rules applied'
+                else:
+                    why = ob.mailing_problems(mailing, msg, kind, atts)
+                    if why:
+                        decision, rule = 'queue', f'routine mailing "{mailing["name"]}": ' + '; '.join(why)
+                    else:
+                        decision, rule = 'send', f'routine mailing "{mailing["name"]}"'
             if decision == 'refuse':
                 self.svc.log({'event': 'send_refused', **base, 'rule': rule})
                 return {'result': 'refused', 'rule': rule,
                         'detail': 'Nothing was sent. The draft stays in Drafts; the user can send it from their mail app.'}
             if decision == 'queue':
-                qid = ob.enqueue(raw, msg, kind, rule, did, drafts['name'], atts)
+                qid = ob.enqueue(raw, msg, kind, rule, did, drafts['name'], atts,
+                                 mailing=mailing['id'] if mailing else None, requested=mname or None)
                 self.svc.log({'event': 'send_queued', **base, 'queue_id': qid, 'rule': rule})
                 return {'result': 'waiting for approval', 'queue_id': qid, 'rule': rule,
+                        **({'note': mnote} if mnote else {}),
                         'detail': ('Not sent yet. The owner approves or rejects it in StartOS (Review Agent Actions); '
                                    'without a decision it expires in 5 days. Do not send it again; '
                                    'the status tool shows the outcome.')}
             try:
-                sent = ob.smtp_send(raw)
+                sent = ob.smtp_send(raw, (mailing, True) if mailing else None)
             except SmtpRefused as e:
                 self.svc.log({'event': 'send_failed', **base, 'detail': f'password refused for sending: {e}'})
                 raise ToolError('the mail server refused the password for sending; nothing was sent') from None
             except (OSError, smtplib.SMTPException) as e:
                 self.svc.log({'event': 'send_failed', **base, 'detail': clean_line(str(e), 200)})
                 raise ToolError(f'sending failed, nothing was sent: {clean_line(str(e), 200)}') from None
-            self.svc.log({'event': 'send_sent', **base, 'rule': rule})
+            self.svc.log({'event': 'send_sent', **base, 'rule': rule,
+                          **({'mailing': mailing['id']} if mailing else {})})
         cleanup = ''
         try:
             self.after_send({'draftUid': did, 'draftFolder': drafts['name'], 'messageId': mid}, sent)
         except Exception as e:
             cleanup = f' (it could not be removed from Drafts: {clean_line(str(e), 120)})'
         return {'result': 'sent', 'rule': rule, 'to': base['to'], 'cc': base['cc'], 'bcc': base['bcc'],
-                'subject': base['subject'], 'detail': 'Sent; the draft was removed from Drafts' + cleanup}
+                'subject': base['subject'], 'detail': 'Sent; the draft was removed from Drafts' + cleanup,
+                **({'note': mnote} if mnote else {})}
 
     # queue hooks (outbox.process)
 

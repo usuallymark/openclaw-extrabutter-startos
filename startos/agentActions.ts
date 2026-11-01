@@ -28,6 +28,17 @@ export type AgentAction = {
   expires?: number
   decided?: boolean
   recipients?: string[]
+  /** Mail only (since :22): what a routine mailing made from it needs. */
+  mailingSeed?: {
+    kind?: string
+    to?: string[]
+    cc?: string[]
+    bcc?: string[]
+    subject?: string
+    attachmentTypes?: string[]
+    name?: string
+    mailing?: string
+  }
 }
 
 /**

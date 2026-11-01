@@ -64,7 +64,35 @@ export const SENDING_DEFAULTS = {
   perHour: 10,
   perDay: 30,
   maxRecipients: 10,
+  mailings: [] as {
+    name: string
+    to: string[]
+    cc: string[]
+    bcc: string[]
+    subjectPrefix: string
+    perMonth: number
+    attachmentTypes: string[]
+    linkDomains: string[]
+    paused: boolean
+  }[],
 }
+
+// Routine mailings (since 2026.10.1:22): a newsletter or another regular
+// mail the owner approved once. The mail service sends a matching issue
+// without asking (mail/outbox.py).
+export const mailingShape = z.looseObject({
+  name: z.string().catch(''),
+  to: z.array(z.string()).catch([]),
+  cc: z.array(z.string()).catch([]),
+  bcc: z.array(z.string()).catch([]),
+  subjectPrefix: z.string().catch(''),
+  perMonth: z.number().int().min(1).catch(1),
+  attachmentTypes: z.array(z.string()).catch([]),
+  linkDomains: z.array(z.string()).catch([]),
+  paused: z.boolean().catch(false),
+})
+
+export type Mailing = z.infer<typeof mailingShape>
 
 const sendingShape = z
   .looseObject({
@@ -76,6 +104,7 @@ const sendingShape = z
     perHour: z.number().int().min(1).catch(10),
     perDay: z.number().int().min(1).catch(30),
     maxRecipients: z.number().int().min(1).catch(10),
+    mailings: z.array(mailingShape).catch([]),
   })
   .catch(SENDING_DEFAULTS)
 
