@@ -6,8 +6,8 @@ as root; this service can read it, not change it):
 
 - level off or drafts: refused.
 - any recipient on "Never send to": refused.
-- a forward, any attachment, too many recipients, or over the hourly or
-  daily limit: held for approval.
+- a forward, any attachment, an HTML version (since :21), too many
+  recipients, or over the hourly or daily limit: held for approval.
 - every recipient on "Send automatically to": sent.
 - anyone else: per "Anyone else" (ask: held; block: refused; auto: sent).
 
@@ -15,7 +15,8 @@ Held messages wait in the service's approval queue (approvals.py, shared
 with the package's other services: state/queue/, which only this user can
 write) with the exact bytes that will be sent. The owner decides in StartOS
 (Review Agent Actions); the package writes the decision into decisions/,
-which only root can write. Undecided messages expire after 3 days.
+which only root can write. Undecided messages expire after 5 days (3
+until :20).
 """
 
 import base64
@@ -35,8 +36,9 @@ from email.utils import getaddresses
 
 from approvals import ApprovalQueue
 from sanitize import clean_line, clean_text
+import htmlout
 
-EXPIRE_S = 3 * 24 * 3600
+EXPIRE_S = 5 * 24 * 3600
 MARKER = 'X-OpenClaw-Draft'
 DEFAULT_RULES = {
     'level': 'drafts', 'autoTo': [], 'neverTo': [], 'others': 'ask',
@@ -78,6 +80,28 @@ def recipients(msg):
     for h in ('To', 'Cc', 'Bcc'):
         vals += [str(v) for v in (msg.get_all(h) or []) if str(v).strip()]
     return [_norm(a) for _, a in getaddresses(vals) if a.strip()]
+
+
+def html_lines(msg):
+    """What Review Agent Actions shows about a message's HTML version."""
+    try:
+        part = msg.get_body(preferencelist=('html',))
+        if part is None:
+            return []
+        html = part.get_content()
+    except Exception:  # noqa: BLE001
+        return ['HTML: present, but it could not be read; reject unless you made it yourself']
+    try:
+        info = htmlout.check(html, allow_cid=True)
+    except htmlout.HtmlRefused as e:
+        return [f'WARNING: the HTML has parts outgoing mail may not have ({_short(e, 200)}); reject']
+    names = {}
+    for p in msg.walk():
+        cid = str(p.get('Content-ID') or '').strip().strip('<>')
+        if cid:
+            names[cid] = clean_line(p.get_filename() or cid, 120)
+    info['images'] = [names.get(c, c) for c in info['images']]
+    return htmlout.describe(info, len(html.encode('utf-8', 'replace')))
 
 
 class Outbox:
@@ -139,7 +163,7 @@ class Outbox:
             pass
         return hour, day
 
-    def judge(self, rcpts, kind, n_attachments, now=None):
+    def judge(self, rcpts, kind, n_attachments, now=None, has_html=False):
         """('send' | 'queue' | 'refuse', rule text)."""
         r = self.rules()
         now = now or time.time()
@@ -156,6 +180,8 @@ class Outbox:
             return 'queue', 'forwards always need approval'
         if n_attachments:
             return 'queue', 'attachments always need approval'
+        if has_html:
+            return 'queue', 'HTML mail always needs approval'
         if len(rcpts) > r['maxRecipients']:
             return 'queue', f'more than {r["maxRecipients"]} recipients'
         hour, day = self._sent_counts(now)
@@ -273,6 +299,7 @@ class Outbox:
                 f'Subject: {subject or "(none)"}',
                 f'Kind: {"forward" if kind == "forward" else "reply" if kind.startswith("reply") else "new message"}',
                 f'Attachments: {", ".join(attachment_names) if attachment_names else "none"}',
+                *html_lines(msg),
                 f'Opening lines: {_short(opening, 400) or "(empty)"}',
             ],
             'recipients': rcpts,
@@ -313,7 +340,7 @@ class Outbox:
                 elif d == 'approve':
                     self._approved(item, hooks, now)
                 elif now > item.get('expires', 0):
-                    self._result(item, 'expired', 'not decided within 3 days; the draft stays in Drafts')
+                    self._result(item, 'expired', 'not decided within 5 days; the draft stays in Drafts')
 
     def _approved(self, item, hooks, now):
         qid = item['id']

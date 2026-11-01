@@ -419,6 +419,54 @@ function sendingText(h: any): string {
 // Queue items already announced (StartOS notification + ntfy). The task
 // itself is shared with every service's queue (agentActions.ts).
 const announcedQueue = new Set<string>()
+// Items already reminded about (since :21): once, in the last 24 hours
+// before they expire. Kept in memory, so a restart in that window can send
+// one more reminder.
+const remindedQueue = new Set<string>()
+const REMIND_BEFORE_MS = 24 * 3600_000
+
+/** Whether a waiting item is due its reminder now (expires is in seconds). */
+export function reminderDue(
+  q: { id: string; expires?: number | null },
+  now = Date.now(),
+): boolean {
+  const exp = Number(q.expires ?? 0) * 1000
+  return exp > now && exp - now <= REMIND_BEFORE_MS && !remindedQueue.has(q.id)
+}
+
+const expiryText = (expires: number | null | undefined) => {
+  const d = new Date(Number(expires ?? 0) * 1000)
+  return `${d.toISOString().slice(0, 16).replace('T', ' ')} UTC`
+}
+
+/** One reminder (StartOS notification + ntfy) for an item about to expire. */
+async function remind(
+  effects: T.Effects,
+  sub: Sub,
+  q: { id: string; expires?: number | null },
+  what: string,
+  title: string,
+  tag: string,
+) {
+  remindedQueue.add(q.id)
+  const text = `${what} still waits for your approval and expires at ${expiryText(q.expires)}. Open Actions → Review Agent Actions.`
+  await within(
+    20_000,
+    sdk.notification.create(effects, {
+      level: 'warning',
+      title,
+      message: text,
+    }),
+    'reminder',
+  ).catch(() => {})
+  await sub
+    .exec(['notify', '--title', title, '--tags', tag, text], {
+      user: 'node',
+      env: { HOME: '/data' },
+      timeout: 30_000,
+    })
+    .catch(() => {})
+}
 let legacyCleared = false
 
 /** The one Review Agent Actions task, for every service's queue. */
@@ -459,6 +507,7 @@ async function syncQueueTask(
     to?: string
     subject?: string
     rule?: string
+    expires?: number | null
   }[]
   if (!legacyCleared) {
     // Review Outgoing Mail's task (before :14) points at an action that is
@@ -479,6 +528,15 @@ async function syncQueueTask(
   )
   for (const q of queue) {
     if (!live()) return
+    if (reminderDue(q))
+      await remind(
+        effects,
+        sub,
+        q,
+        `Mail to ${q.to || '?'}, "${q.subject || ''}",`,
+        'Mail approval expires soon',
+        'email',
+      )
     if (announcedQueue.has(q.id)) continue
     announcedQueue.add(q.id)
     const text = `Mail waiting for approval: to ${q.to || '?'}, "${q.subject || ''}" (${q.rule || 'rules'}). Open Actions → Review Agent Actions.`
@@ -736,6 +794,7 @@ function calendarSideJobs(effects: T.Effects, sub: Sub, h: any) {
       id: string
       summary?: string
       rule?: string
+      expires?: number | null
     }[]
     try {
       if (live())
@@ -745,6 +804,15 @@ function calendarSideJobs(effects: T.Effects, sub: Sub, h: any) {
           queue.map((q) => q.id),
         )
       for (const q of queue) {
+        if (live() && reminderDue(q))
+          await remind(
+            effects,
+            sub,
+            q,
+            `The calendar request "${q.summary || ''}"`,
+            'Calendar approval expires soon',
+            'calendar',
+          )
         if (!live() || announcedQueue.has(q.id)) continue
         announcedQueue.add(q.id)
         const text = `Calendar request waiting for approval: ${q.summary || ''} (${q.rule || 'rules'}). Open Actions → Review Agent Actions.`

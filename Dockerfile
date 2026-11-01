@@ -114,7 +114,7 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 # copied next to each service's own code.
 RUN useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin openclaw-mail
 COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py agentsvc/approvals.py /opt/openclaw-mail/
-COPY mail/launch.py mail/front.py mail/mcp.py mail/mailservice.py mail/imapmail.py mail/message.py mail/sanitize.py mail/extract.py mail/outbox.py /opt/openclaw-mail/
+COPY mail/launch.py mail/front.py mail/mcp.py mail/mailservice.py mail/imapmail.py mail/message.py mail/sanitize.py mail/extract.py mail/outbox.py mail/htmlout.py /opt/openclaw-mail/
 RUN chmod 755 /opt/openclaw-mail && chmod 644 /opt/openclaw-mail/*.py \
     && python3 -m compileall -q /opt/openclaw-mail \
     && cd /tmp && python3 -I -c 'import sys; sys.path.insert(0, "/opt/openclaw-mail"); import mailservice, launch, front'

@@ -83,7 +83,7 @@ export const reviewAgentActions = sdk.Action.withInput(
   async () => ({
     name: 'Review Agent Actions',
     description:
-      'Approve or reject what your agents want to do that your rules hold for you, such as mail the email agent wants to send (Configure Email → Sending). Shows what would happen, to whom, and why it was held. Undecided requests expire after 3 days.',
+      'Approve or reject what your agents want to do that your rules hold for you, such as mail the email agent wants to send (Configure Email → Sending). Shows what would happen, to whom, and why it was held. Undecided requests expire after 5 days, with a reminder the day before.',
     warning: null,
     allowedStatuses: 'any',
     group: null,

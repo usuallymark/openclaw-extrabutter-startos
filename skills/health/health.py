@@ -378,7 +378,8 @@ def check_calendar(t):
         return False, f'the calendar service does not answer ({e.__class__.__name__}); it may be starting or restarting'
     state, reason = h.get('state'), h.get('reason') or ''
     if state == 'ok':
-        msg, ok = f'signed in as {h.get("account") or "?"}; read only', True
+        mode = ('read + write on its own calendar' if h.get('mode') == 'write' else 'read only')
+        msg, ok = f'signed in as {h.get("account") or "?"}; {mode}', True
         if h.get('warnings'):
             msg += '; warning: ' + '; '.join(h['warnings'])
     elif state == 'refused':

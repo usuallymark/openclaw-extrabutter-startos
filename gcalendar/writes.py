@@ -19,7 +19,7 @@ Rules (Configure Calendar; the service reads them at start):
 
 Held requests live in the approval queue (approvals.py) with the exact
 Google request; the owner's decision comes from decisions/ (root writes
-it). Undecided requests expire after 3 days, or when the event's start has
+it). Undecided requests expire after 5 days, or when the event's start has
 passed.
 """
 
@@ -37,7 +37,7 @@ from sanitize import clean_line, clean_text
 
 import svcutil
 
-EXPIRE_S = 3 * 24 * 3600
+EXPIRE_S = 5 * 24 * 3600
 MAX_WRITES_PER_DAY = 30
 MAX_GUESTS = 10
 POLL_S = 10
@@ -86,8 +86,14 @@ class Writer:
         try:
             if saved:
                 try:
-                    g.call('GET', f'/calendars/{_q(saved)}')
+                    cur = g.call('GET', f'/calendars/{_q(saved)}') or {}
                     self.own_id = saved
+                    # A new Google account's calendar can start out in UTC
+                    # and get its real zone later (seen in :20): follow the
+                    # account's primary calendar.
+                    if tz_name and tz_name != 'UTC' and cur.get('timeZone') != tz_name:
+                        g.call('PATCH', f'/calendars/{_q(saved)}', body={'timeZone': tz_name})
+                        self.svc.log({'event': 'own_calendar_zone', 'detail': f'{cur.get("timeZone")} → {tz_name}'})
                 except ApiError as e:
                     if e.status != 404:
                         raise
@@ -368,7 +374,7 @@ class Writer:
                 elif d == 'approve':
                     self._approved(item)
                 elif now > item.get('expires', 0) or _started(item.get('start')):
-                    self._result(item, 'expired', 'not decided in time (3 days, or the event has started)')
+                    self._result(item, 'expired', 'not decided in time (5 days, or the event has started)')
 
     def _approved(self, item):
         req = item.get('request') or {}
@@ -396,7 +402,8 @@ class Writer:
                 self.svc.log({'event': 'queue_error', 'type': type(e).__name__, 'detail': clean_line(str(e), 200)})
 
     def pending_summary(self):
-        return [{'id': q['id'], 'summary': q.get('summary', ''), 'rule': q.get('rule', '')} for q in self.q.pending()]
+        return [{'id': q['id'], 'summary': q.get('summary', ''), 'rule': q.get('rule', ''),
+                 'expires': q.get('expires')} for q in self.q.pending()]
 
     def status(self):
         return {'calendar': self.name if self.ready else None, 'writing': self.ready,

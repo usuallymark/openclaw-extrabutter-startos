@@ -49,6 +49,7 @@ from mcp import TOOLS, MAX_LIST, MAX_UIDS  # noqa: E402
 from extract import attachment_text  # noqa: E402
 from imapmail import AuthRefused, MailError, Mailbox  # noqa: E402
 from outbox import Outbox, SmtpRefused, recipients  # noqa: E402
+import htmlout  # noqa: E402
 from sanitize import clean_line, clean_text, wrap_untrusted  # noqa: E402
 
 VERSION = mcp.VERSION
@@ -182,7 +183,7 @@ class Service:
             # Summary only (no message text): the package raises a StartOS
             # task and a phone alert from it.
             h['queue'] = [{'id': q['id'], 'to': q.get('to', ''), 'subject': q.get('subject', ''),
-                           'rule': q.get('rule', '')} for q in self.outbox.pending()]
+                           'rule': q.get('rule', ''), 'expires': q.get('expires')} for q in self.outbox.pending()]
         return h
 
 
@@ -582,9 +583,34 @@ class Tools:
         kind = a.get('kind')
         if kind not in ('new', 'reply', 'reply_all', 'forward'):
             raise ToolError('kind: new, reply, reply_all or forward')
-        body = clean_text(str(a.get('body') or ''))
-        if len(body) > 100_000:
+        html_name = str(a.get('html_file') or '').strip()
+        body_name = str(a.get('body_file') or '').strip()
+        if (html_name or body_name) and kind != 'new':
+            raise ToolError('html_file and body_file are for new messages only')
+        if body_name and str(a.get('body') or '').strip():
+            raise ToolError('give either body or body_file, not both')
+        if body_name:
+            body = self._outbox_text(body_name, 'body_file', 200_000)
+        else:
+            body = clean_text(str(a.get('body') or ''))
+        if len(body) > 200_000:
             raise ToolError('body: too long')
+        html = info = None
+        images = []
+        if html_name:
+            html = self._outbox_text(html_name, 'html_file', htmlout.MAX_HTML_BYTES)
+            try:
+                info = htmlout.check(html)
+            except htmlout.HtmlRefused as e:
+                raise ToolError(f'html_file: {e}. Nothing was saved.') from None
+            if 'hidden_injection' in info['flags']:
+                raise ToolError('html_file: it has hidden text (text a person would not see) that tries to '
+                                'instruct an AI; outgoing mail may not. Nothing was saved.')
+            images = self._outbox_files(info['images'], 'html_file images')
+            if not body.strip():
+                body = info['text']
+        if not body.strip() and not html:
+            raise ToolError('body: give the text (or body_file)')
         to = self._addrs(a.get('to'), 'to')
         cc = self._addrs(a.get('cc'), 'cc')
         bcc = self._addrs(a.get('bcc'), 'bcc')
@@ -645,6 +671,13 @@ class Tools:
             if bcc:
                 m['Bcc'] = ', '.join(bcc)
             m.set_content(text)
+            if html is not None:
+                cids = {n: make_msgid(domain=cfg['address'].split('@')[-1])[1:-1] for n, _ in images}
+                m.add_alternative(htmlout.embed(html, cids), subtype='html')
+                hp = m.get_body(preferencelist=('html',))
+                for n, data in images:
+                    hp.add_related(data, maintype='image', subtype=htmlout.IMAGE_TYPES[n.rsplit('.', 1)[-1].lower()],
+                                   cid=f'<{cids[n]}>', filename=n, disposition='inline')
             for fname, data in files:
                 ctype = mimetypes.guess_type(fname)[0] or 'application/octet-stream'
                 maintype, _, subtype = ctype.partition('/')
@@ -657,12 +690,16 @@ class Tools:
         folder, new_uid, m = self.box.run(go)
         self.svc.log({'event': 'draft', 'kind': kind, 'to': m['To'], 'cc': m['Cc'] or '', 'bcc': m['Bcc'] or '',
                       'subject': clean_line(str(m['Subject']), 120), 'draft_id': new_uid,
-                      'attachments': [f for f, _ in files]})
+                      'attachments': [f for f, _ in files],
+                      **({'html': True, 'flags': info['flags']} if info else {})})
         body_part = m.get_body(preferencelist=('plain',))
         preview = clean_text(body_part.get_content() if body_part is not None else '')
         return {'saved': True, 'folder': folder, 'draft_id': new_uid,
                 'to': str(m['To']), 'cc': str(m['Cc'] or ''), 'bcc': str(m['Bcc'] or ''), 'subject': str(m['Subject']),
                 'attachments': [f for f, _ in files],
+                **({'html': {'links': len(info['links']), 'link_domains': info['domains'][:20],
+                             'embedded_images': [n for n, _ in images], 'flags': info['flags'],
+                             'note': 'HTML mail always waits for the owner\'s approval when sent'}} if info else {}),
                 'preview': preview[:3000] + ('\n[…]' if len(preview) > 3000 else ''),
                 'note': 'saved in Drafts; nothing was sent'
                         + ('' if new_uid else ' (the server did not return the draft id, so it cannot be sent from here)')}
@@ -676,7 +713,17 @@ class Tools:
             raise ToolError('this mailbox has no Drafts folder')
         return drafts
 
-    def _outbox_files(self, names):
+    def _outbox_text(self, name, what, limit):
+        """One text file from mail-outbox (UTF-8), for body_file/html_file."""
+        (_, data), = self._outbox_files([name], what)
+        if len(data) > limit:
+            raise ToolError(f'{what}: larger than {limit // 1024} KB')
+        try:
+            return data.decode('utf-8')
+        except UnicodeDecodeError:
+            raise ToolError(f'{what}: not UTF-8 text') from None
+
+    def _outbox_files(self, names, what='attachments'):
         """Files to attach, by name, from the workspace folder mail-outbox
         (put there by the main agent). Read without following links."""
         if not names:
@@ -684,7 +731,7 @@ class Tools:
         if isinstance(names, str):
             names = [names]
         if not isinstance(names, list) or len(names) > MAX_ATTACH_FILES:
-            raise ToolError(f'attachments: a list of up to {MAX_ATTACH_FILES} file names in mail-outbox')
+            raise ToolError(f'{what}: a list of up to {MAX_ATTACH_FILES} file names in mail-outbox')
         base = self.svc.cfg.get('outboxDir') or ''
         bfd = self.svc.cfg.get('outboxFd', -1)
         if not base or not isinstance(bfd, int) or bfd < 0:
@@ -695,18 +742,18 @@ class Tools:
             if n.startswith(base + '/'):
                 n = n[len(base) + 1:]
             if not n or '/' in n or '\x00' in n or n.startswith('.') or len(n) > 200:
-                raise ToolError(f'attachments: "{clean_line(n, 80)}" must be a file name directly in mail-outbox')
+                raise ToolError(f'{what}: "{clean_line(n, 80)}" must be a file name directly in mail-outbox')
             try:
                 fd = os.open(n, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=bfd)
             except OSError as e:
-                raise ToolError(f'attachments: cannot open "{clean_line(n, 80)}" in mail-outbox ({e.strerror})') from None
+                raise ToolError(f'{what}: cannot open "{clean_line(n, 80)}" in mail-outbox ({e.strerror})') from None
             try:
                 st = os.fstat(fd)
                 if not (st.st_mode & 0o170000 == 0o100000):
-                    raise ToolError(f'attachments: "{clean_line(n, 80)}" is not a regular file')
+                    raise ToolError(f'{what}: "{clean_line(n, 80)}" is not a regular file')
                 total += st.st_size
                 if total > MAX_ATTACH_BYTES:
-                    raise ToolError(f'attachments: more than {MAX_ATTACH_BYTES // (1024 * 1024)} MB in total')
+                    raise ToolError(f'{what}: more than {MAX_ATTACH_BYTES // (1024 * 1024)} MB in total')
                 with os.fdopen(os.dup(fd), 'rb') as f:
                     out.append((clean_line(n, 200), f.read(MAX_ATTACH_BYTES + 1)))
             finally:
@@ -750,7 +797,8 @@ class Tools:
                 if mid and q.get('messageId') == mid:
                     return {'result': 'already waiting for approval', 'queue_id': q['id'], 'rule': q.get('rule'),
                             'detail': 'Do not send it again; the owner decides in StartOS (Review Agent Actions).'}
-            decision, rule = ob.judge(rcpts, kind, len(atts))
+            has_html = msg.get_body(preferencelist=('html',)) is not None
+            decision, rule = ob.judge(rcpts, kind, len(atts), has_html=has_html)
             if decision == 'refuse':
                 self.svc.log({'event': 'send_refused', **base, 'rule': rule})
                 return {'result': 'refused', 'rule': rule,
@@ -760,7 +808,7 @@ class Tools:
                 self.svc.log({'event': 'send_queued', **base, 'queue_id': qid, 'rule': rule})
                 return {'result': 'waiting for approval', 'queue_id': qid, 'rule': rule,
                         'detail': ('Not sent yet. The owner approves or rejects it in StartOS (Review Agent Actions); '
-                                   'without a decision it expires in 3 days. Do not send it again; '
+                                   'without a decision it expires in 5 days. Do not send it again; '
                                    'the status tool shows the outcome.')}
             try:
                 sent = ob.smtp_send(raw)

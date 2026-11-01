@@ -203,13 +203,22 @@ Agent Actions** (called Review Outgoing Mail before 2026.10.1:14; it is
 the one place you approve whatever your agents want to do): it shows the recipients, subject, opening lines,
 attachments and why it waits. Choose **Approve**, **Reject**, or **Approve
 and always allow these recipients** (adds them to Send Automatically To).
-Undecided mail expires after 3 days, and a draft you changed or deleted in
+Undecided mail expires after 5 days (you get a reminder the day before),
+and a draft you changed or deleted in
 your mail app meanwhile is not sent. **Actions → Agent Activity** lists what
 the email and calendar agents read, filed, drafted, sent, added, changed and
 cancelled, and every decision.
 
 To attach files, the main agent puts them in the workspace folder
 `mail-outbox`; mail with attachments always waits for your approval.
+
+The main agent can also send **HTML mail** (a newsletter, say): it writes
+the HTML into `mail-outbox`, with any pictures as files there, which are
+embedded in the mail. Pictures loaded from other websites, scripts and
+forms are refused. HTML mail always waits for your approval; Review Agent
+Actions shows where its links go, its pictures and any hidden text. To see
+how it looks before you approve, open the draft in the assistant's mail
+(Drafts), or have the agent send a test to you first.
 
 The **Mail Service** line on the service page shows whether the mailbox
 accepts the password. If you change the password (in Vaultwarden or in the

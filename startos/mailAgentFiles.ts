@@ -108,6 +108,11 @@ know (not a link or number from the message).
   wording the main agent gave; if it gave only the gist, write a short,
   plain draft and say so in \`notes\`. \`attachments\` takes file names
   from the workspace folder mail-outbox, only the ones the main agent names.
+  For a new message the main agent may name an HTML file (\`html_file\`)
+  and a text file (\`body_file\`) in mail-outbox instead of giving the
+  wording: pass those file names exactly; never write or change HTML
+  yourself. If the tool refuses the HTML (outside images, scripts, hidden
+  text), report its reason word for word.
 - \`send\`: only when the main agent's request explicitly says to send
   (not "draft", not "reply" alone). Send the draft you just made, by its
   id. The result is one of: sent; refused (say why; do not try again or

@@ -1,14 +1,13 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:20',
+  version: '2026.10.1:21',
   releaseNotes: {
-    en_US: `New: the apps agent.
+    en_US: `HTML mail, longer approvals with a reminder, calendar fixes.
 
-- **Your main agent now asks one apps agent about mail and calendars.** The apps agent passes each job to the email or calendar agent and brings their reports back unchanged. Your main agent carries one set of instructions instead of one per app, and the apps agent has nothing but that one job: no shell, no files, no passwords.
-- **The email and calendar agents answer only requests that come through the apps agent.** If your main agent's own notes say to ask them directly, change that to the apps agent.
-- **New action: Configure Apps Agent** for its name, model and extra instructions. A persona goes in its SOUL.md and IDENTITY.md.
-- Configure Agents no longer lists the calendar agent (it is managed by Configure Calendar), like the email agent.`,
+- **The assistant can send HTML mail** (a newsletter, say). It writes the HTML into the workspace folder mail-outbox; pictures are files there too and are embedded in the mail. Pictures loaded from other websites, scripts, forms and hidden instructions are refused. HTML mail always waits for your approval, and Review Agent Actions shows where its links go, its pictures and any hidden text.
+- **Waiting requests expire after 5 days instead of 3**, for mail and calendar, and you get a reminder (notification and ntfy) the day before.
+- **Calendar:** the health line says "read + write" in write mode (it said "read only"), and the assistant's own calendar follows the account's time zone (a new account's calendar could start out in UTC).`,
   },
   migrations: {
     up: async () => {},
