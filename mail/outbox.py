@@ -51,7 +51,13 @@ DEFAULT_RULES = {
     'level': 'drafts', 'autoTo': [], 'neverTo': [], 'others': 'ask',
     'perHour': 10, 'perDay': 30, 'maxRecipients': 10, 'mailings': [],
 }
-MONTH_S = 30 * 24 * 3600
+
+
+def _month(t):
+    """The calendar month (UTC) of a time, e.g. '2026-11'. Since :23 a
+    mailing's limit counts per calendar month: monthly issues on the 1st are
+    sometimes only 28-30 days apart."""
+    return time.strftime('%Y-%m', time.gmtime(t))
 MAILING_ID = re.compile(r'[a-z0-9][a-z0-9-]{0,59}')
 
 
@@ -256,9 +262,9 @@ class Outbox:
         recs = [r for r in self._sent_records() if r.get('mailing') == m['id']]
         if not any(r.get('fp') == fp for r in recs):
             why.append('the first issue (or the first after its recipients or subject changed) waits for your approval')
-        recent = sum(1 for r in recs if now - r.get('t', 0) < MONTH_S)
+        recent = sum(1 for r in recs if _month(r.get('t', 0)) == _month(now))
         if recent >= m['perMonth']:
-            why.append(f'already {recent} sent in the last 30 days (the mailing allows {m["perMonth"]})')
+            why.append(f'already {recent} sent this month ({_month(now)}, UTC; the mailing allows {m["perMonth"]})')
         hour, day = self._sent_counts(now)
         r = self.rules()
         if hour >= r['perHour'] or day >= r['perDay']:

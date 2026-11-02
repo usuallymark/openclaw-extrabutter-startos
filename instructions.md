@@ -228,7 +228,9 @@ a month to begin with). Later issues the agent sends as that mailing go
 out without asking when they match, and you get a notification. An issue
 with other recipients, another subject, other attachments, one too many in
 a month, or hidden instructions still waits for you and says why. Switch
-**Paused** on to make every issue wait again.
+**Paused** on to make every issue wait again. To add one by hand, tick its
+To and Bcc from the list of addresses you entered before (Trusted
+Senders and the like); the field below each takes anyone new.
 
 The **Mail Service** line on the service page shows whether the mailbox
 accepts the password. If you change the password (in Vaultwarden or in the

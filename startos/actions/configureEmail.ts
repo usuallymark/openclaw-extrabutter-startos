@@ -4,6 +4,7 @@ import {
   EmailSettings,
   emailSettingsJson,
 } from '../fileModels/emailSettings.json'
+import { calendarSettingsJson } from '../fileModels/calendarSettings.json'
 import {
   EmailConfig,
   importGoogleSignIn,
@@ -454,6 +455,51 @@ const wordList = (
     ),
   )
 
+/**
+ * Addresses the owner has entered before (since :23): Trusted Senders, Send
+ * Automatically To, the calendar's Trusted Organizers, and the routine
+ * mailings' own recipients (so saved ones stay selectable). Whole domains
+ * (@example.com) are not addresses and are left out. Sorted, lowercase.
+ */
+export async function knownAddresses(): Promise<string[]> {
+  const s = await emailSettingsJson
+    .read()
+    .once()
+    .catch(() => null)
+  const c = await calendarSettingsJson
+    .read()
+    .once()
+    .catch(() => null)
+  const sending = sendingOf(s)
+  const all = [
+    ...(s?.agent?.trustedSenders ?? []),
+    ...sending.autoTo,
+    ...(c?.trustedOrganizers ?? []),
+    ...(sending.mailings ?? []).flatMap((m) => [...m.to, ...m.cc, ...m.bcc]),
+  ]
+  return Array.from(
+    new Set(
+      all
+        .map((a) => String(a).trim().toLowerCase())
+        .filter((a) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a)),
+    ),
+  ).sort()
+}
+
+/** A pick list of the known addresses; the "other" field takes the rest. */
+const knownPicker = (name: string, description: string) =>
+  Value.dynamicMultiselect(async () => {
+    const known = await knownAddresses()
+    return {
+      name,
+      description: known.length
+        ? description
+        : `${description} (No addresses yet: add Trusted Senders above, save, and they appear here. Meanwhile use the field below.)`,
+      default: [],
+      values: Object.fromEntries(known.map((a) => [a, a])),
+    }
+  })
+
 // Routine mailings (since :22): mail/outbox.py checks a send that names one.
 const mailings = Value.list(
   sdk.List.obj(
@@ -474,12 +520,23 @@ const mailings = Value.list(
           masked: false,
           placeholder: 'Research Roundup',
         }),
-        to: exactList('To', 'Exactly these addresses, no more, no fewer.'),
-        cc: exactList('Cc', 'Exactly these addresses (usually none).'),
-        bcc: exactList(
-          'Bcc',
-          'Exactly these addresses, e.g. yourself for a copy.',
+        to: knownPicker(
+          'To',
+          'Exactly these recipients, no more, no fewer: tick them from the addresses you entered elsewhere (Trusted Senders, Send Automatically To, Trusted Organizers). Addresses saved in this same form appear after saving.',
         ),
+        toOther: exactList(
+          'To: Other Addresses',
+          'More To recipients that are not in the list above.',
+        ),
+        bcc: knownPicker(
+          'Bcc',
+          'Exactly these hidden recipients, e.g. yourself for a copy.',
+        ),
+        bccOther: exactList(
+          'Bcc: Other Addresses',
+          'More Bcc recipients that are not in the list above.',
+        ),
+        cc: exactList('Cc', 'Exactly these addresses (usually none).'),
         subjectPrefix: Value.text({
           name: 'Subject Starts With',
           description:
@@ -490,9 +547,9 @@ const mailings = Value.list(
           placeholder: 'Research Roundup',
         }),
         perMonth: Value.number({
-          name: 'At Most per 30 Days',
+          name: 'At Most per Month',
           description:
-            'More issues than this in 30 days wait for your approval.',
+            'More issues than this in one calendar month (counted in UTC) wait for your approval.',
           required: true,
           default: 1,
           min: 1,
@@ -635,7 +692,19 @@ export const configureEmail = sdk.Action.withInput(
       agentModel: s?.agent?.model || 'default',
       trustedSenders: s?.agent?.trustedSenders ?? [],
       extraInstructions: s?.agent?.extraInstructions || null,
-      sending: sendingOf(s),
+      sending: (() => {
+        const sending = sendingOf(s)
+        // Saved recipients are in the pick lists (knownAddresses includes
+        // them); the "other" fields start empty.
+        return {
+          ...sending,
+          mailings: (sending.mailings ?? []).map((m) => ({
+            ...m,
+            toOther: [],
+            bccOther: [],
+          })),
+        }
+      })(),
     } as any
   },
 
@@ -684,9 +753,9 @@ export const configureEmail = sdk.Action.withInput(
         mailings: ((i.sending?.mailings ?? []) as any[])
           .map((m) => ({
             name: String(m?.name ?? '').trim(),
-            to: cleanList(m?.to),
+            to: cleanList([...(m?.to ?? []), ...(m?.toOther ?? [])]),
             cc: cleanList(m?.cc),
-            bcc: cleanList(m?.bcc),
+            bcc: cleanList([...(m?.bcc ?? []), ...(m?.bccOther ?? [])]),
             subjectPrefix: String(m?.subjectPrefix ?? '').trim(),
             perMonth: Math.max(1, Number(m?.perMonth ?? 1)),
             attachmentTypes: cleanList(m?.attachmentTypes).map((x) =>
