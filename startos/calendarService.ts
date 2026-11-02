@@ -183,6 +183,21 @@ export function trustedOrganizersOf(
   ).sort()
 }
 
+/** What the calendar agent reads, in words (its AGENTS.md). */
+export function calendarSources(settings: CalendarSettings): string {
+  const parts: string[] = []
+  if (settings.token?.source !== 'none')
+    parts.push(
+      `the Google calendars of ${settings.account || 'the assistant account'} (its own and the ones shared with it)`,
+    )
+  const names = (settings.links ?? []).map((l) => `"${l.name}"`)
+  if (names.length)
+    parts.push(
+      `the calendar link${names.length > 1 ? 's' : ''} ${names.join(', ')} (read only)`,
+    )
+  return parts.join(', and ') || 'no calendars are set up yet'
+}
+
 export async function writeCalendarAgentWorkspace(
   settings: CalendarSettings,
   emailTrusted: string[] = [],
@@ -198,6 +213,7 @@ export async function writeCalendarAgentWorkspace(
       ? trusted.map((t) => `  - ${t}`).join('\n')
       : '  - (none set in Configure Calendar)',
     '{{ACCOUNT}}': settings.account || 'the assistant account',
+    '{{SOURCES}}': calendarSources(settings),
     '{{CALENDAR_NAME}}': settings.calendarName || 'Assistant',
     '{{VIA_APPS}}': VIA_APPS_RULE(
       VIA_APPS_MARKER,
@@ -209,7 +225,7 @@ export async function writeCalendarAgentWorkspace(
   const agents = CAL_AGENTS_MD.replace('{{WRITE_RULES}}', () =>
     settings.mode === 'write' ? CAL_WRITE_RULES : CAL_READ_ONLY_RULES,
   ).replace(
-    /\{\{(EXTRA_INSTRUCTIONS|TRUSTED_ORGANIZERS|ACCOUNT|CALENDAR_NAME|VIA_APPS)\}\}/g,
+    /\{\{(EXTRA_INSTRUCTIONS|TRUSTED_ORGANIZERS|ACCOUNT|CALENDAR_NAME|VIA_APPS|SOURCES)\}\}/g,
     (m) => fill[m] ?? m,
   )
   await writeFile(ws('AGENTS.md'), agents)

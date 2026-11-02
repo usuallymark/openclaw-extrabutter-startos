@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""OpenClaw Extra Butter calendar service (read only).
+"""OpenClaw Extra Butter calendar service.
 
 Runs as its own Linux user (openclaw-calendar) and is the only thing that
-talks to Google Calendar. Started by launch.py, which hands it the settings
+talks to Google Calendar and reads the owner's calendar links (secret iCal
+addresses, since :24; links.py and ical.py). Links are read only, and they
+work with or without a Google sign-in. Started by launch.py, which hands it the settings
 and the Google sign-in on stdin and is then gone. Agents reach it as the
 MCP server "calendar" (tools calendar__*) through front.py, which stays up
 while this worker restarts. The rules below are enforced here, for every
 caller.
 
-- Read only: there is no tool that creates, changes, answers or deletes an
-  event, whatever the sign-in allows.
+- Reading never changes anything. Writing (write mode, writes.py) touches
+  only the assistant's own Google calendar, under the owner's rules; calendar
+  links are never written.
 - Everything an organizer wrote (title, description, location, attendee
   names) is outsider text: cleaned, descriptions converted from HTML with
   hidden text removed, wrapped as untrusted content, with heuristic flags.
@@ -41,6 +44,7 @@ import mcp  # noqa: E402
 import svcutil  # noqa: E402
 from gapi import READ_SCOPES, WRITE_SCOPES, ApiError, Google, SignInRefused, Unreachable  # noqa: E402
 from mcp import MAX_EVENTS  # noqa: E402
+from links import LINK_PREFIX, Links  # noqa: E402
 from writes import Writer  # noqa: E402
 from sanitize import clean_line, content_flags, hidden_flags, html_parts, wrap_untrusted  # noqa: E402
 
@@ -76,8 +80,16 @@ class Service:
         self._calls = []
         self._calls_lock = threading.Lock()
         self.writer = Writer(self, cfg) if cfg.get('mode') == 'write' and token else None
+        self.links = Links(cfg.get('links'))
+        # A Google sign-in that was wanted but could not be had, while the
+        # calendar links still work: a warning, not a stopped service.
+        self.google_problem = ''
         if not token:
-            self.set_state('unavailable', reason or 'no Calendar sign-in was available')
+            if self.links:
+                if cfg.get('tokenSource') != 'none':
+                    self.google_problem = reason or 'no Google sign-in was available'
+            else:
+                self.set_state('unavailable', reason or 'no Calendar sign-in was available')
 
     def log(self, entry):
         self._log(entry)
@@ -135,6 +147,10 @@ class Service:
     def startup(self):
         """Seconds after which to exit and be relaunched, or None."""
         if self.google is None:
+            if self.links:
+                self.set_state('ok')
+                # Try a wanted but missing sign-in again later.
+                return WAIT_REFUSED_S if self.google_problem else None
             return WAIT_UNAVAILABLE_S
         rec = self.refused_record()
         if rec and rec.get('fp') == self._fp:
@@ -169,6 +185,14 @@ class Service:
     def scope_notes(self):
         sc = set(self.google.scopes) if self.google else set()
         notes = []
+        if self.google_problem:
+            notes.append(f'Google calendars are not read: {self.google_problem}')
+        if self.cfg.get('mode') == 'write' and not self.google:
+            notes.append('write mode needs a Google sign-in; without one the calendar is read only')
+        for x in self.links.items:
+            if x.error:
+                old = f' (showing the copy from {x.fetched_ok})' if x.feed is not None and x.fetched_ok else ''
+                notes.append(f'calendar link "{x.name}": {x.error}{old}')
         if self.writer and not self.writer.ready and self.writer.reason:
             notes.append(self.writer.reason)
         if sc and not (sc & READ_SCOPES):
@@ -189,6 +213,8 @@ class Service:
             'scopes': self.google.scopes if self.google else [],
             'warnings': self.scope_notes() if self.state == 'ok' else [],
             'tokenSource': self.cfg.get('tokenSource'),
+            'google': bool(self.google),
+            'links': self.links.health(),
             'trustedOrganizers': len(self.trusted), 'version': VERSION,
             'note': self.cfg.get('note') or '',
             # Summary only (no event text beyond the title): the package
@@ -247,17 +273,36 @@ def _addr(p):
     return str((p or {}).get('email') or '').strip().lower()
 
 
+def _fmt(t, tz):
+    """An instance time as the Google path gives it: date, or offset date-time."""
+    if isinstance(t, datetime):
+        return t.astimezone(tz).isoformat()
+    return t.isoformat()
+
+
+def _ical_time(v):
+    """'20261101T120000Z' → RFC 3339, or '' (CREATED / LAST-MODIFIED)."""
+    m = re.fullmatch(r'(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z?', (v or '').strip())
+    return f'{m[1]}-{m[2]}-{m[3]}T{m[4]}:{m[5]}:{m[6]}Z' if m else ''
+
+
+_RESPONSES = {'accepted': 'accepted', 'declined': 'declined', 'tentative': 'tentative',
+              'needs-action': 'needsAction', 'delegated': 'needsAction'}
+
+
 class Tools:
     def __init__(self, svc):
         self.svc = svc
         self._cals = None
         self._cals_at = 0
+        self._gerr = ''
 
     def call(self, name, args):
         fn = getattr(self, f't_{name}', None) if isinstance(name, str) and name.isidentifier() else None
         if fn is None:
             raise ToolError(f'unknown tool {name}')
-        if name != 'status' and self.svc.state not in ('ok', 'unreachable'):
+        self._gerr = ''
+        if name != 'status' and self.svc.state not in ('ok', 'unreachable') and not self.svc.links:
             raise ToolError(self._unavailable())
         if not self.svc.rate_ok():
             raise ToolError(f'too many calendar requests (more than {CALLS_PER_MINUTE} a minute); wait a minute')
@@ -271,7 +316,7 @@ class Tools:
             raise ToolError(str(e)) from None
         except ApiError as e:
             raise ToolError(str(e)) from None
-        if self.svc.state == 'unreachable':
+        if self.svc.state == 'unreachable' and not self._gerr and self._google_usable():
             self.svc.set_state('ok')  # Google answered again
         return out
 
@@ -281,7 +326,37 @@ class Tools:
 
     # calendars
 
+    def _google_usable(self):
+        return self.svc.google is not None and self.svc.state in ('ok', 'unreachable')
+
     def _calendars(self):
+        """Google's calendar list plus the calendar links. With links, a
+        Google problem is reported (self._gerr) instead of stopping reads."""
+        cals = []
+        if self._google_usable():
+            try:
+                cals = self._google_calendars()
+            except (Unreachable, ApiError, SignInRefused) as e:
+                if not self.svc.links:
+                    raise
+                if isinstance(e, SignInRefused):
+                    self.svc.refused(str(e))
+                elif isinstance(e, Unreachable):
+                    self.svc.set_state('unreachable', str(e))
+                self._gerr = f'Google calendars: {e}'
+                cals = list(self._cals or [])
+        elif self.svc.google is not None:
+            self._gerr = f'Google calendars: {self._unavailable()}'
+        return cals + self._link_cals()
+
+    def _link_cals(self):
+        out = []
+        for x in self.svc.links.items:
+            out.append({'id': x.id, 'summary': x.name, 'accessRole': 'reader', 'selected': True,
+                        'timeZone': (x.feed.zone_name if x.feed else '') or None, '_link': x})
+        return out
+
+    def _google_calendars(self):
         if self._cals is None or time.time() - self._cals_at > CAL_CACHE_S:
             items, page = [], None
             for _ in range(10):
@@ -298,6 +373,11 @@ class Tools:
         for c in self._calendars():
             if c.get('primary'):
                 return _zone(c.get('timeZone'))
+        # No Google account: the first calendar link that names its zone.
+        for x in self.svc.links.items:
+            f = x.get(timezone.utc)
+            if f is not None and f.zone_name:
+                return f.tz
         return timezone.utc
 
     def _targets(self, a):
@@ -343,15 +423,25 @@ class Tools:
         return self._writer().cancel(a)
 
     def t_calendars(self, a):
-        out = []
+        out, errors = [], []
         for c in self._calendars():
-            out.append({
+            row = {
                 'id': c.get('id'), 'name': self._cal_name(c), 'primary': bool(c.get('primary')),
                 'access': c.get('accessRole'), 'time_zone': c.get('timeZone'),
                 'shown': bool(c.get('selected', True)) and not c.get('hidden'),
-            })
+            }
+            link = c.get('_link')
+            if link is not None:
+                f = link.get(self._primary_zone())
+                row.update({'access': 'reader (calendar link, read only)', 'link': True,
+                            'time_zone': (f.zone_name if f else '') or None})
+                if link.error:
+                    errors.append(f'{link.name}: {link.error}')
+            out.append(row)
+        if self._gerr:
+            errors.insert(0, self._gerr)
         self.svc.log({'event': 'calendars', 'count': len(out)})
-        return {'calendars': out}
+        return {'calendars': out, **({'errors': errors} if errors else {})}
 
     # events
 
@@ -412,6 +502,12 @@ class Tools:
         limit = _limit(a, default_limit)
         events, errors = [], []
         for cal in self._targets(a):
+            if cal.get('_link') is not None:
+                events += self._link_events(cal['_link'], cal, start, end, text, tz, errors)
+                continue
+            if not self._google_usable():
+                errors.append(f'{self._cal_name(cal)}: {self._unavailable()}')
+                continue
             try:
                 d = self.svc.google.get(f'/calendars/{urllib.parse.quote(cal["id"], safe="")}/events', {
                     'timeMin': start.isoformat(), 'timeMax': end.isoformat(), 'singleEvents': 'true',
@@ -422,12 +518,77 @@ class Tools:
                 errors.append(f'{self._cal_name(cal)}: {e}')
                 continue
             events += [self._brief(e, cal) for e in d.get('items') or [] if e.get('status') != 'cancelled']
+        if self._gerr:
+            errors.insert(0, self._gerr)
         events.sort(key=lambda x: (_sort_key(x['start']), x['title']))
         out = {'from': start.isoformat(), 'to': end.isoformat(), 'events': events[:limit],
                'more': len(events) > limit}
         if errors:
             out['errors'] = errors
         return out
+
+    # calendar links
+
+    def _link_feed(self, link, tz, errors):
+        f = link.get(tz)
+        if link.error:
+            old = f' (showing the copy from {link.fetched_ok})' if f is not None and link.fetched_ok else ''
+            errors.append(f'{link.name}: {link.error}{old}')
+        return f
+
+    def _link_events(self, link, cal, start, end, text, tz, errors):
+        f = self._link_feed(link, tz, errors)
+        if f is None:
+            return []
+        words = text.lower().split() if text else []
+        out = []
+        for inst in f.instances(start, end, tz):
+            ev = inst['event']
+            if words:
+                hay = ' '.join([ev['summary'], ev['description'], ev['location'],
+                                ev['organizer'].get('email', ''), ev['organizer'].get('name', '')]
+                               + [f"{x['name']} {x['email']}" for x in ev['attendees']]).lower()
+                if not all(w in hay for w in words):
+                    continue
+            out.append(self._link_brief(inst, cal, link, f, tz))
+        return out
+
+    def _link_organizer(self, ev, feed):
+        org = ev['organizer'] or {}
+        addr = str(org.get('email') or '').lower()
+        acct = (self.svc.account or '').lower()
+        flags = ['from_link']
+        if not addr:
+            flags.append('no_organizer')
+        elif acct and addr == acct:
+            flags.append('organizer_self')
+        elif addr in self.svc.trusted:
+            flags.append('organizer_trusted')
+        else:
+            flags.append('external_organizer')
+        # A feed shows what the calendar holds; only events made in Google
+        # (in a Google feed) are known not to be emailed invitations.
+        if addr and 'organizer_self' not in flags and not (feed.from_google and ev['uid'].endswith('@google.com')):
+            flags.append('organizer_unverifiable')
+        name = clean_line(org.get('name') or '', 80)
+        return (f'{name} <{addr}>' if name and addr else addr or name or 'none named'), flags
+
+    def _link_brief(self, inst, cal, link, feed, tz):
+        ev = inst['event']
+        organizer, flags = self._link_organizer(ev, feed)
+        title = clean_line(ev['summary'] or '(no title)', 200)
+        flags += [f for f in content_flags(title) if f not in flags]
+        acct = (self.svc.account or '').lower()
+        me = next((x for x in ev['attendees'] if acct and x['email'] == acct), None)
+        return {
+            'id': inst['id'], 'calendar': cal['id'], 'calendar_name': clean_line(link.name, 120),
+            'start': _fmt(inst['start'], tz), 'end': _fmt(inst['end'], tz), 'all_day': inst['all_day'],
+            'title': title, 'status': ev['status'].lower() or 'confirmed', 'organizer': organizer,
+            'my_response': _RESPONSES.get(me['response']) if me else None,
+            'attendees': len(ev['attendees']),
+            'recurring': bool(ev['rrule'] or ev['rdates'] or ev['recurrence_id'] is not None),
+            'flags': flags,
+        }
 
     def t_list(self, a):
         out = self._events(a)
@@ -447,15 +608,58 @@ class Tools:
         ev_id = str(a.get('event_id') or '').strip()
         if not cal_id or not ev_id or len(ev_id) > 1024:
             raise ToolError('give calendar and event_id from list or search')
+        if cal_id.startswith(LINK_PREFIX):
+            return self._read_link(cal_id, ev_id)
+        if not self._google_usable():
+            raise ToolError(self._unavailable())
         cal = next((c for c in self._calendars() if c.get('id') == cal_id), {'id': cal_id})
         e = self.svc.google.get(f'/calendars/{urllib.parse.quote(cal_id, safe="")}/events/{urllib.parse.quote(ev_id, safe="")}')
         brief = self._brief(e, cal)
-        desc_html = str(e.get('description') or '')
+        attendees = [{'email': _addr(x), 'name': clean_line(x.get('displayName') or '', 80),
+                      'response': x.get('responseStatus'), 'organizer': bool(x.get('organizer')),
+                      'optional': bool(x.get('optional')), 'self': bool(x.get('self'))}
+                     for x in (e.get('attendees') or [])[:100]]
+        return self._full(cal_id, brief, str(e.get('description') or ''), e.get('location') or '',
+                          [x.get('title') or '' for x in (e.get('attachments') or [])],
+                          bool(e.get('hangoutLink') or e.get('conferenceData')), attendees,
+                          e.get('visibility') or 'default', e.get('created'), e.get('updated'))
+
+    def _read_link(self, cal_id, ev_id):
+        link = self.svc.links.by_id(cal_id)
+        if link is None:
+            raise ToolError(f'no calendar with id {clean_line(cal_id, 100)}; the calendars tool lists them')
+        tz = self._primary_zone()
+        errors = []
+        f = self._link_feed(link, tz, errors)
+        if f is None:
+            raise ToolError(errors[0] if errors else f'{link.name}: the calendar link could not be read')
+        inst = f.find(ev_id, tz)
+        if inst is None:
+            raise ToolError('not found (wrong event id, or it is no longer on that calendar)')
+        ev = inst['event']
+        brief = self._link_brief(inst, {'id': cal_id}, link, f, tz)
+        org = (ev['organizer'] or {}).get('email') or ''
+        acct = (self.svc.account or '').lower()
+        attendees = [{'email': x['email'], 'name': clean_line(x['name'], 80),
+                      'response': _RESPONSES.get(x['response'], x['response']), 'organizer': bool(org) and x['email'] == org,
+                      'optional': x['optional'], 'self': bool(acct) and x['email'] == acct}
+                     for x in ev['attendees'][:100]]
+        out = self._full(cal_id, brief, ev['description'], ev['location'],
+                         ['attachment'] * min(ev['attachments'], 20), ev['conference'] or bool(ev['url']), attendees,
+                         {'PRIVATE': 'private', 'CONFIDENTIAL': 'confidential', 'PUBLIC': 'public'}.get(ev['class'], 'default'),
+                         _ical_time(ev['created']), _ical_time(ev['updated']))
+        if errors:
+            out['warnings'].append(errors[0])
+        return out
+
+    def _full(self, cal_id, brief, desc_html, location, attachment_titles, video, attendees,
+              visibility, created, updated):
+        """One event in full (read), the same for Google and calendar links."""
         if '<' in desc_html and '>' in desc_html:
             desc, hidden, links, hidden_text = html_parts(desc_html)
         else:
             desc, hidden, links, hidden_text = desc_html, 0, len(re.findall(r'https?://', desc_html)), ''
-        location = clean_line(e.get('location') or '', 500)
+        location = clean_line(location or '', 500)
         flags = brief['flags']
         for f in content_flags(desc) + content_flags(location):
             if f not in flags:
@@ -464,26 +668,24 @@ class Tools:
         flags += [f for f in hidden_flags(hidden, hidden_text) if f not in flags]
         if hidden:
             warnings.append(f'{hidden} characters of hidden text were removed from the description')
-        if links or e.get('hangoutLink') or e.get('conferenceData'):
+        if links or video:
             flags.append('links_present')
-        if e.get('attachments'):
+        if attachment_titles:
             flags.append('attachments_present')
         if 'organizer_unverifiable' in flags:
-            warnings.append('this event came from an emailed invitation: the organizer address is only what the invitation claims')
-        attendees = [{'email': _addr(x), 'name': clean_line(x.get('displayName') or '', 80),
-                      'response': x.get('responseStatus'), 'organizer': bool(x.get('organizer')),
-                      'optional': bool(x.get('optional')), 'self': bool(x.get('self'))}
-                     for x in (e.get('attendees') or [])[:100]]
+            warnings.append('the organizer address is only what the calendar link says (the event may come from an emailed invitation)'
+                            if 'from_link' in flags else
+                            'this event came from an emailed invitation: the organizer address is only what the invitation claims')
         content = []
         if desc.strip():
             content.append('Description:\n' + desc.strip())
         if location:
             content.append('Location: ' + location)
-        for x in (e.get('attachments') or [])[:20]:
-            content.append('Attachment: ' + clean_line(x.get('title') or '', 120))
+        for x in attachment_titles[:20]:
+            content.append('Attachment: ' + clean_line(x or '', 120))
         out = {**brief, 'flags': flags, 'warnings': warnings, 'attendees': attendees,
-               'visibility': e.get('visibility') or 'default', 'created': e.get('created'),
-               'updated': e.get('updated'), 'has_video_link': bool(e.get('hangoutLink') or e.get('conferenceData')),
+               'visibility': visibility, 'created': created,
+               'updated': updated, 'has_video_link': bool(video),
                'content': 'between the UNTRUSTED markers below' if content else 'none'}
         if content:
             wrapped, truncated = wrap_untrusted('\n\n'.join(content), 'CALENDAR EVENT CONTENT', 12000)
@@ -575,15 +777,21 @@ def main():
     exit_after = svc.startup()
     srv = serve_worker(svc, tools, cfg.get('socket') or os.path.join(cfg['stateDir'], 'worker.sock'))
     threading.Thread(target=_retry_loop, args=(svc,), daemon=True).start()
+    if svc.links:
+        # Fetch the calendar links once now, so the health line can say
+        # whether they work before anyone asks.
+        threading.Thread(target=lambda: svc.links.warm(tools._primary_zone() if svc.google is None
+                                                       else timezone.utc), daemon=True).start()
     if svc.writer:
         _setup_writer(svc, tools)
         threading.Thread(target=svc.writer.loop, daemon=True).start()
     if exit_after:
         svcutil.schedule_exit(0, exit_after)
-        print(f'calendar service: {svc.state}: {svc.reason}; checking again in {exit_after // 60} min', flush=True)
+        print(f'calendar service: {svc.state}: {svc.reason or svc.google_problem}; checking again in {exit_after // 60} min', flush=True)
     else:
         print(f'calendar service: {svc.state}{": " + svc.reason if svc.reason else ""}; '
-              f'serving {svc.account or "the calendar"} to the front door', flush=True)
+              f'serving {svc.account or "the calendar"}'
+              f'{f" and {len(svc.links.items)} calendar link(s)" if svc.links else ""} to the front door', flush=True)
     srv.serve_forever()
     return 0
 

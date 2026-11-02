@@ -377,13 +377,23 @@ def check_calendar(t):
     except (urllib.error.URLError, OSError, ValueError) as e:
         return False, f'the calendar service does not answer ({e.__class__.__name__}); it may be starting or restarting'
     state, reason = h.get('state'), h.get('reason') or ''
+    links = h.get('links') or []
+    good = sum(1 for x in links if x.get('ok'))
+    links_text = f'{good} of {len(links)} calendar link{"s" if len(links) > 1 else ""} readable'
     if state == 'ok':
-        mode = ('read + write on its own calendar' if h.get('mode') == 'write' else 'read only')
-        msg, ok = f'signed in as {h.get("account") or "?"}; {mode}', True
+        if h.get('google') is False:
+            msg, ok = f'{links_text}; read only (no Google account)', good > 0
+        else:
+            mode = ('read + write on its own calendar' if h.get('mode') == 'write' else 'read only')
+            msg, ok = f'signed in as {h.get("account") or "?"}; {mode}', True
+            if links:
+                msg += f'; {links_text}'
         if h.get('warnings'):
             msg += '; warning: ' + '; '.join(h['warnings'])
     elif state == 'refused':
         msg, ok = reason or 'Google refused the Calendar sign-in', False
+        if links:
+            msg += f' ({links_text})'
     else:
         msg, ok = f'{state}: {reason}' if reason else str(state), False
     if h.get('note'):

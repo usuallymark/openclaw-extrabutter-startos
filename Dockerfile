@@ -125,10 +125,10 @@ RUN chmod 755 /opt/openclaw-mail && chmod 644 /opt/openclaw-mail/*.py \
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/* \
     && useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin openclaw-calendar
 COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py agentsvc/approvals.py mail/sanitize.py /opt/openclaw-calendar/
-COPY gcalendar/launch.py gcalendar/front.py gcalendar/mcp.py gcalendar/calservice.py gcalendar/gapi.py gcalendar/writes.py /opt/openclaw-calendar/
+COPY gcalendar/launch.py gcalendar/front.py gcalendar/mcp.py gcalendar/calservice.py gcalendar/gapi.py gcalendar/writes.py gcalendar/ical.py gcalendar/links.py /opt/openclaw-calendar/
 RUN chmod 755 /opt/openclaw-calendar && chmod 644 /opt/openclaw-calendar/*.py \
     && python3 -m compileall -q /opt/openclaw-calendar \
-    && cd /tmp && python3 -I -c 'import sys; sys.path.insert(0, "/opt/openclaw-calendar"); import calservice, launch, front, writes' \
+    && cd /tmp && python3 -I -c 'import sys; sys.path.insert(0, "/opt/openclaw-calendar"); import calservice, launch, front, writes, ical, links' \
     && python3 -I -c 'import zoneinfo; zoneinfo.ZoneInfo("America/Chicago")'
 
 # Owner-side helper for every isolated service's approval queue and log

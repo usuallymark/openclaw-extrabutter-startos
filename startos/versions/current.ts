@@ -1,12 +1,13 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:23',
+  version: '2026.10.1:24',
   releaseNotes: {
-    en_US: `Routine mailings: per calendar month, and pick recipients from a list.
+    en_US: `Calendar links: read your calendars without any Google setup.
 
-- **"At Most per Month" now means per calendar month** (it counted 30 days). Monthly issues sent on the 1st are sometimes only 28 to 30 days apart and would have waited for approval for no reason.
-- **Pick a mailing's To and Bcc from a list** of the addresses you entered before (Trusted Senders, Send Automatically To, the calendar's Trusted Organizers) instead of typing them again; a field below each takes any other address.`,
+- **Calendar Links in Configure Calendar.** Paste a calendar's secret iCal address (Google's "Secret address in iCal format", an iCloud public calendar link, an Outlook ICS link) or keep it in Vaultwarden, and the calendar agent can list, search and read those events. Read only, and no Google Cloud project or sign-in needed: choose *No Google account (calendar links only)*. Links also work next to a Google sign-in.
+- Recurring events, moved or cancelled single dates and time zones are handled as in Google Calendar. The secret address never reaches the agents or the logs, and the agent marks these events as from a calendar link.
+- The Calendar Service line now says how many calendar links can be read, with a warning for each one that cannot.`,
   },
   migrations: {
     up: async () => {},

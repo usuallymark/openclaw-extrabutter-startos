@@ -5,7 +5,9 @@
    link), and set the owners and modes the service relies on.
 2. Get the Google sign-in: the one pasted in Configure Calendar, or from
    Vaultwarden item "google-calendar" (field "token") through the gateway
-   user's rbw, exactly as getcred does for the skills.
+   user's rbw, exactly as getcred does for the skills; none when the
+   calendar links are used alone. Also the calendar links' addresses (since
+   :24), pasted or from Vaultwarden (field "url" of the named item).
 3. Become the openclaw-calendar user and replace this process with the
    worker, handing it the settings and sign-in on stdin. No sign-in file is
    written and nothing privileged keeps running.
@@ -23,6 +25,9 @@ import pwd  # noqa: E402
 import stat  # noqa: E402
 
 from launcher import Launcher, vault_field  # noqa: E402
+
+MAX_LINKS = 20
+LINK_FIELD = 'url'
 
 CAL_ROOT = '/data/.openclaw-calendar'
 SETTINGS = f'{CAL_ROOT}/settings.json'
@@ -73,7 +78,9 @@ def main():
 
     tok = settings.get('token') or {}
     note = ''
-    if tok.get('source') == 'manual':
+    if tok.get('source') == 'none':
+        token, error, source = None, '', 'none'
+    elif tok.get('source') == 'manual':
         token = tok.get('value') or None
         error = '' if token else 'no Calendar sign-in is saved in Configure Calendar'
         source = 'manual'
@@ -86,6 +93,28 @@ def main():
         L.say(note)
     if error:
         L.say(error)
+
+    links = []
+    for i, ln in enumerate((settings.get('links') or [])[:MAX_LINKS]):
+        if not isinstance(ln, dict):
+            continue
+        name = str(ln.get('name') or '').strip() or f'Calendar {i + 1}'
+        if ln.get('source') == 'from-vaultwarden':
+            item = str(ln.get('item') or '').strip()
+            if not item or ':' in item:
+                links.append({'name': name, 'url': '', 'error': 'no Vaultwarden item named for this link'})
+                continue
+            url, why, lnote = vault_field(node, 'CAL_LINK', f'{item}:{LINK_FIELD}')
+            if lnote and lnote != note:
+                L.say(lnote)
+            links.append({'name': name, 'url': (url or '').strip(),
+                          'error': f'Vaultwarden item "{item}", field "{LINK_FIELD}": {why}' if why else ''})
+            if why:
+                L.say(f'calendar link "{name}": {why}')
+        else:
+            links.append({'name': name, 'url': str(ln.get('url') or '').strip(), 'error': ''})
+    if source == 'none' and not links:
+        L.fail('Configure Calendar has no Google sign-in and no calendar links; add one of them')
 
     endpoints = None
     test = os.environ.get('CALENDAR_TEST_ENDPOINTS') or ''
@@ -125,8 +154,9 @@ def main():
         'tokenError': error,
         'note': note,
         'endpoints': endpoints,
+        'links': links,
     }
-    del token
+    del token, links
     L.exec_service(cal, SERVICE, payload, STATE, 'the calendar settings are too large')
 
 

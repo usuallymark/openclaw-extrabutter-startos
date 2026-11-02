@@ -923,8 +923,26 @@ export async function probeCalendar(
     Array.isArray(h.warnings) && h.warnings.length
       ? `. Warning: ${h.warnings.join('; ')}`
       : ''
+  // Calendar links (since :24): how many can be read.
+  const links: any[] = Array.isArray(h.links) ? h.links : []
+  const linksOk = links.filter((l) => l?.ok).length
+  const linksText = links.length
+    ? `${linksOk} of ${links.length} calendar link${links.length > 1 ? 's' : ''} readable`
+    : ''
   switch (h.state) {
     case 'ok': {
+      if (h.google === false) {
+        // Calendar links only, no Google account.
+        if (!linksOk && links.some((l) => !l?.ok && !l?.error))
+          return {
+            result: 'starting',
+            message: 'Calendar service reading the calendar links',
+          }
+        return {
+          result: linksOk ? 'success' : 'failure',
+          message: `${linksText}; read only${warn}`,
+        }
+      }
       const q = Array.isArray(h.queue) ? h.queue.length : 0
       const mode =
         h.mode === 'write'
@@ -935,7 +953,10 @@ export async function probeCalendar(
                 : '')
             : 'read only for now (writing is not set up, see the warning)'
           : 'read only'
-      return { result: 'success', message: `Signed in${acct}; ${mode}${warn}` }
+      return {
+        result: 'success',
+        message: `Signed in${acct}; ${mode}${linksText ? `; ${linksText}` : ''}${warn}`,
+      }
     }
     case 'starting':
       return { result: 'starting', message: 'Calendar service starting' }

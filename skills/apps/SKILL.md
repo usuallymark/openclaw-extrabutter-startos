@@ -184,9 +184,10 @@ Depending on Configure Calendar, the calendar is read only, or the
 calendar agent may also add, change and cancel events on **its own
 calendar** (one calendar in the assistant's account), inviting the owner
 and family as guests. It can never change the owner's or anyone else's
-calendars, and cannot accept or decline invitations. When the user asks
-for something it cannot do, say so and that they can do it in their
-calendar app.
+calendars, and cannot accept or decline invitations. Calendars read
+through a calendar link (ids starting with `link:`) are read only too.
+When the user asks for something it cannot do, say so and that they can
+do it in their calendar app.
 
 Ask only when the user asked for it, with everything spelled out: title,
 date and time (YYYY-MM-DDTHH:MM, or a date for all day), length, place,

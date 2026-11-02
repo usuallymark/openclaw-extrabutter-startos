@@ -323,6 +323,43 @@ step 2 and update the Vaultwarden fields or paste the new token.
 
 ## Calendar Setup
 
+The calendar agent reads your calendars in one of two ways, or both:
+
+- **Calendar links** (simplest, about 2 minutes, read only): the secret
+  address each calendar app gives you. No Google Cloud project, no sign-in.
+  See *The simple way* right below.
+- **A Google account** for the assistant (about 15 minutes): it reads the
+  calendars shared with that account, and can also keep a calendar of its
+  own and invite your family, with your approval. Steps 1 to 5 below.
+
+### The simple way: calendar links
+
+1. Copy the calendar's secret address:
+   - **Google Calendar** (on a computer): the gear → **Settings** → under
+     *Settings for my calendars* click the calendar → **Integrate
+     calendar** → copy **Secret address in iCal format**.
+   - **iCloud**: in the Calendar app, share the calendar, tick **Public
+     Calendar** and copy the link (it starts with `webcal://`).
+   - **Outlook**: Settings → Calendar → Shared calendars → **Publish a
+     calendar** → choose the calendar and *Can view all details* →
+     Publish → copy the **ICS** link.
+2. **Configure Calendar** (Actions): **Calendar** *Read only*; **Google
+   Sign-in** *No Google account (calendar links only)*; under **Calendar
+   Links** add one entry per calendar with a name ("Family", "Sam's
+   school") and paste the address into **Secret Address**, or put it in a
+   Vaultwarden item (custom field `url`) and name the item instead. Add
+   your own and your family's addresses under **Trusted Organizers**. Save.
+3. The **Calendar Service** line on the service page says "1 of 1 calendar
+   link readable; read only".
+
+The address works like a password: anyone who has it sees the calendar. It
+stays on the server and never reaches the agents. If it leaks, reset it
+where you copied it (Google: **Reset** next to the secret address) and
+paste the new one. The agent sees changes within about 5 minutes; Google
+itself may take a few hours to update what the link shows.
+
+### With a Google account
+
 The calendar agent reads the Google calendars of your assistant's Google
 account: its own, and any calendars you share with it. Like the email
 agent, it is a separate agent with only the calendar tools: no shell, no

@@ -18,7 +18,10 @@ const shape = z.looseObject({
   account: z.string().optional().catch(undefined),
   token: z
     .looseObject({
-      source: z.enum(['from-vaultwarden', 'manual']).catch('from-vaultwarden'),
+      // 'none' (since :24): no Google account, calendar links only.
+      source: z
+        .enum(['from-vaultwarden', 'manual', 'none'])
+        .catch('from-vaultwarden'),
       value: z.string().optional().catch(undefined),
     })
     .catch({ source: 'from-vaultwarden' as const, value: undefined }),
@@ -30,6 +33,19 @@ const shape = z.looseObject({
   // whether every new event (not only those with guests) waits.
   calendarName: z.string().optional().catch(undefined),
   holdAll: z.boolean().catch(false),
+  // Calendar links (since :24): secret iCal addresses read by the calendar
+  // service, read only. The address is pasted (url) or fetched at start
+  // from Vaultwarden (field "url" of item).
+  links: z
+    .array(
+      z.looseObject({
+        name: z.string().catch(''),
+        source: z.enum(['manual', 'from-vaultwarden']).catch('manual'),
+        url: z.string().optional().catch(undefined),
+        item: z.string().optional().catch(undefined),
+      }),
+    )
+    .catch([]),
   agent: z
     .looseObject({
       model: z.string().catch('default'),
@@ -46,6 +62,7 @@ export const CALENDAR_DEFAULTS: CalendarSettings = {
   trustedOrganizers: [],
   includeEmailTrusted: true,
   holdAll: false,
+  links: [],
   agent: { model: 'default' },
 }
 

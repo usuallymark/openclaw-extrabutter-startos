@@ -20,7 +20,8 @@ import {
 const { InputSpec, Value, Variants } = sdk
 
 // Configure Calendar (since 2026.10.1:15): the Google sign-in for the
-// calendar service and the calendar agent (read only for now). Stored in
+// calendar service and the calendar agent, and (since :24) calendar links:
+// secret iCal addresses read without any Google sign-in. Stored in
 // /data/.openclaw-calendar/settings.json, a root-only file the agents
 // cannot read (calendarService.ts).
 
@@ -28,11 +29,17 @@ const EMAIL_RE = '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$'
 
 const SIGN_IN_HELP = `A Google sign-in made once on your computer with the script google-signin.py from this package's repository (folder tools/), using a "Desktop app" OAuth client from your own Google Cloud project with the Google Calendar API enabled. It asks only to read calendars. Set the Google Cloud app to "In production" first: in "Testing", Google ends sign-ins after 7 days. The setup guide (Instructions → Calendar) has every step.`
 
+const LINK_RE = '^(https?|webcals?)://\\S+$'
+
 const signIn = Value.union({
   name: 'Google Sign-in',
-  description: `${SIGN_IN_HELP}\n\nFetch from Vaultwarden: item "${CALENDAR_VAULT.item}", a hidden custom field "${CALENDAR_VAULT.field}" holding the whole line the script printed. Fetched at every start (requires Vaultwarden in Configure External Services); a new sign-in saved there is picked up within 10 minutes.\nPaste here: stored once, encrypted, on this server only.`,
+  description: `${SIGN_IN_HELP}\n\nFetch from Vaultwarden: item "${CALENDAR_VAULT.item}", a hidden custom field "${CALENDAR_VAULT.field}" holding the whole line the script printed. Fetched at every start (requires Vaultwarden in Configure External Services); a new sign-in saved there is picked up within 10 minutes.\nPaste here: stored once, encrypted, on this server only.\nNo Google account: read only the Calendar Links below (simplest; nothing to set up at Google).`,
   default: 'from-vaultwarden',
   variants: Variants.of({
+    none: {
+      name: 'No Google account (calendar links only)',
+      spec: InputSpec.of({}),
+    },
     'from-vaultwarden': {
       name: 'Fetch from Vaultwarden',
       spec: InputSpec.of({}),
@@ -55,6 +62,57 @@ const signIn = Value.union({
     },
   }),
 })
+
+const links = Value.list(
+  sdk.List.obj(
+    {
+      name: 'Calendar Links',
+      description:
+        'Calendars read through their secret address in iCal format, no Google sign-in needed: in Google Calendar, Settings → (the calendar) → Integrate calendar → "Secret address in iCal format"; in iCloud, share the calendar as a Public Calendar and copy its link; in Outlook, Settings → Calendar → Shared calendars → Publish a calendar → the ICS link. Read only: the agent can list, search and read these events, never change them. The address is a password in all but name (anyone who has it sees the calendar): it is kept on this server, never shown to the agents, and if it leaks you can reset it where you copied it.',
+      default: [],
+    },
+    {
+      spec: InputSpec.of({
+        name: Value.text({
+          name: 'Name',
+          description:
+            'How the agent calls this calendar, e.g. "Family" or "Sam\'s school".',
+          required: true,
+          default: null,
+          masked: false,
+          placeholder: 'Family',
+        }),
+        url: Value.text({
+          name: 'Secret Address',
+          description:
+            'The whole address, starting with https:// or webcal://. Leave blank to keep the address already saved for this name, or to use Vaultwarden below.',
+          required: false,
+          default: null,
+          masked: true,
+          placeholder: 'https://calendar.google.com/calendar/ical/…/basic.ics',
+          patterns: [
+            {
+              regex: LINK_RE,
+              description:
+                'A web address starting with https://, http:// or webcal://',
+            },
+          ],
+        }),
+        item: Value.text({
+          name: 'Or Fetch from Vaultwarden Item',
+          description:
+            'Instead of pasting: the name of a Vaultwarden item with a custom field "url" holding the address (fetched at every start; requires Vaultwarden in Configure External Services). Used when Secret Address is blank.',
+          required: false,
+          default: null,
+          masked: false,
+          placeholder: 'calendar-family',
+        }),
+      }),
+      displayAs: '{{name}}',
+      uniqueBy: 'name',
+    },
+  ),
+)
 
 const agentModel = Value.dynamicSelect(async () => {
   const cfg = ((await openclawJson
@@ -91,7 +149,7 @@ const inputSpec = InputSpec.of({
   mode: Value.select({
     name: 'Calendar',
     description:
-      "Read only: the calendar agent can list, search and read the events of this Google account, including calendars shared with it. It cannot change anything.\nRead + write on its own calendar: it also adds, changes and cancels events on one calendar of its own (named below), and can invite you and the people on the trusted lists. Anything with guests waits for your approval (Review Agent Actions) before Google emails them. It never changes your calendars or anyone else's, and cannot answer invitations. Needs a sign-in with the extra permission (google-signin.py --scopes calendar.readonly,calendar.app.created).\nOff: no calendar service, no calendar agent.",
+      "Read only: the calendar agent can list, search and read the events of this Google account, including calendars shared with it, and of the Calendar Links. It cannot change anything.\nRead + write on its own calendar (needs the Google sign-in): it also adds, changes and cancels events on one calendar of its own (named below), and can invite you and the people on the trusted lists. Anything with guests waits for your approval (Review Agent Actions) before Google emails them. It never changes your calendars or anyone else's, and cannot answer invitations. Needs a sign-in with the extra permission (google-signin.py --scopes calendar.readonly,calendar.app.created).\nOff: no calendar service, no calendar agent.",
     default: 'off',
     values: {
       off: 'Off',
@@ -102,7 +160,7 @@ const inputSpec = InputSpec.of({
   account: Value.text({
     name: 'Google Account',
     description:
-      'The Google account the sign-in is for (shown in the health line). Filled in from a pasted sign-in when left blank.',
+      'The Google account the sign-in is for (shown in the health line). Filled in from a pasted sign-in when left blank. Without a Google account: optional, the address the calendar links know you by, so your own events and answers are recognised.',
     required: false,
     default: null,
     masked: false,
@@ -116,6 +174,7 @@ const inputSpec = InputSpec.of({
     ],
   }),
   signIn,
+  links,
   trustedOrganizers: Value.list(
     sdk.List.text(
       {
@@ -177,7 +236,7 @@ export const configureCalendar = sdk.Action.withInput(
   async () => ({
     name: 'Configure Calendar',
     description:
-      'Connect a Google calendar and set up the calendar agent: the only agent that reads the calendars. It has no shell and no passwords; your main agent asks it what is on. It can also keep a calendar of its own and invite your family, with your approval. Saving restarts OpenClaw.',
+      'Connect calendars (calendar links, or a Google account) and set up the calendar agent: the only agent that reads the calendars. It has no shell and no passwords; your main agent asks it what is on. It can also keep a calendar of its own and invite your family, with your approval. Saving restarts OpenClaw.',
     warning: null,
     allowedStatuses: 'any',
     group: null,
@@ -199,7 +258,15 @@ export const configureCalendar = sdk.Action.withInput(
       signIn:
         source === 'manual'
           ? { selection: 'manual', value: { value: null } }
-          : { selection: 'from-vaultwarden', value: {} },
+          : source === 'none'
+            ? { selection: 'none', value: {} }
+            : { selection: 'from-vaultwarden', value: {} },
+      // Saved addresses are never shown; blank keeps them.
+      links: (s?.links ?? []).map((l) => ({
+        name: l.name,
+        url: null,
+        item: l.source === 'from-vaultwarden' ? l.item || null : null,
+      })),
       trustedOrganizers: s?.trustedOrganizers ?? [],
       includeEmailTrusted: s?.includeEmailTrusted ?? true,
       calendarName: s?.calendarName || 'Assistant',
@@ -263,8 +330,50 @@ export const configureCalendar = sdk.Action.withInput(
       } else {
         token = { source: 'manual' }
       }
+    } else if (i.signIn?.selection === 'none') {
+      token = { source: 'none' }
     } else {
       token = { source: 'from-vaultwarden' }
+    }
+    const savedLinks = new Map(
+      (prior?.links ?? []).map((l) => [l.name.trim().toLowerCase(), l]),
+    )
+    const linkList: NonNullable<CalendarSettings['links']> = []
+    for (const l of (i.links ?? []) as any[]) {
+      const name = String(l?.name ?? '').trim()
+      if (!name) continue
+      const url = String(l?.url ?? '').trim()
+      const item = String(l?.item ?? '').trim()
+      const saved = savedLinks.get(name.toLowerCase())
+      if (url) {
+        if (!new RegExp(LINK_RE, 'i').test(url))
+          throw new Error(
+            `Calendar link "${name}": the address must start with https://, http:// or webcal://.`,
+          )
+        linkList.push({ name, source: 'manual', url })
+      } else if (item) {
+        if (item.includes(':'))
+          throw new Error(
+            `Calendar link "${name}": a Vaultwarden item name cannot contain ":".`,
+          )
+        linkList.push({ name, source: 'from-vaultwarden', item })
+      } else if (saved?.source === 'manual' && saved.url) {
+        linkList.push({ name, source: 'manual', url: saved.url })
+      } else {
+        throw new Error(
+          `Calendar link "${name}": paste its secret address, or name the Vaultwarden item that holds it.`,
+        )
+      }
+    }
+    if (i.mode !== 'off' && token.source === 'none' && !linkList.length) {
+      throw new Error(
+        'Without a Google account, add at least one Calendar Link (or choose a Google sign-in).',
+      )
+    }
+    if (i.mode === 'write' && token.source === 'none') {
+      throw new Error(
+        'Read + write needs the Google sign-in (the calendar links are read only). Choose Read only, or a Google sign-in.',
+      )
     }
     const trusted = Array.from(
       new Set(
@@ -283,6 +392,7 @@ export const configureCalendar = sdk.Action.withInput(
       calendarName:
         String(i.calendarName ?? '').trim() || prior?.calendarName || undefined,
       holdAll: i.holdAll === true,
+      links: linkList,
       agent: {
         ...(prior?.agent ?? {}),
         model: String(i.agentModel || 'default'),
@@ -297,7 +407,10 @@ export const configureCalendar = sdk.Action.withInput(
       title: 'Calendar Configured',
       message:
         (settings.mode !== 'off'
-          ? 'Settings saved. OpenClaw is restarting; the calendar service starts on its own, and its state is shown as "Calendar Service" on the service page.' +
+          ? 'Settings saved. OpenClaw is restarting; the calendar service starts on its own, and its state is shown as "Calendar Service" on the service page' +
+            (linkList.length
+              ? `, including whether each of the ${linkList.length} calendar link${linkList.length > 1 ? 's' : ''} can be read.`
+              : '.') +
             (settings.mode === 'write'
               ? ` Write mode: on the first start the agent's own calendar "${settings.calendarName || 'Assistant'}" is created in the Google account; the sign-in must include calendar.app.created (the Calendar Service line warns if it does not).`
               : '')
