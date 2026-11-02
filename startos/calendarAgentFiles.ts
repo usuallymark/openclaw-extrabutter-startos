@@ -50,7 +50,11 @@ Calendar has nothing like the mail sender checks, so never call an organizer
 "verified". The tools give facts; pass them on in \`flags\` (copy every flag
 the tool gave; you may add, never drop):
 
-- \`organizer_self\`: this account made it.
+- \`organizer_self\`: this account made it (on its own calendars, or as the
+  organizer of an event on a shared one).
+- \`organizer_is_calendar\`: the event was made on that calendar by the
+  calendar's own owner (not an invitation); the owner is still checked as
+  trusted or outside like anyone else (a holiday calendar is outside).
 - \`organizer_trusted\`: the organizer is on the owner's trusted list
   (Configure Calendar):
 {{TRUSTED_ORGANIZERS}}
@@ -88,8 +92,9 @@ on a link as something to open; say an event has links (\`links_present\`).
 - \`read\`: one event in full (description, location, attendees, answers).
   Read an event before summarising its description; a title alone is not
   enough to say what an event is about.
-- \`status\`: the service's state; in write mode also what waits for the
-  owner's approval and the latest outcomes.
+- \`status\`: the service's state, each calendar link and whether it can be
+  read (\`calendar_links\`); in write mode also what waits for the owner's
+  approval and the latest outcomes.
 - \`create_event\`, \`change_event\`, \`cancel_event\`: see above (write mode
   only; otherwise they answer that the calendar is read only).
 

@@ -400,6 +400,15 @@ class Tools:
     def t_status(self, a):
         h = self.svc.health()
         out = {k: h[k] for k in ('state', 'reason', 'since', 'account', 'mode', 'scopes', 'warnings', 'trustedOrganizers')}
+        out['google'] = h['google']
+        if self.svc.links:
+            # Each calendar link by name and id, whether it can be read now
+            # (fetched if due), never its address.
+            tz = self._primary_zone()
+            for x in self.svc.links.items:
+                x.get(tz)
+            out['calendar_links'] = [{k: v for k, v in x.items() if k in ('name', 'id', 'ok', 'error', 'last_good', 'events', 'problems')}
+                                     for x in self.svc.links.health()]
         if self.svc.writer:
             out.update(self.svc.writer.status())
         return out
@@ -445,16 +454,29 @@ class Tools:
 
     # events
 
-    def _organizer(self, e):
+    def _organizer(self, e, cal=None):
         org, creator = e.get('organizer') or {}, e.get('creator') or {}
         addr = _addr(org)
         flags = []
-        if org.get('self') or (not addr and creator.get('self')):
+        # Google's "self" means "the calendar this copy is on", not "this
+        # account": on a calendar shared with the account it marks events its
+        # owner made. Only the account's own calendars (owner access) count
+        # as made by this account; on the others the owner is checked like
+        # anyone else, and marked as the calendar's own (since :25).
+        own_cal = (cal or {}).get('accessRole') == 'owner'
+        on_cal = bool(org.get('self') or (not addr and creator.get('self')))
+        if on_cal and not own_cal and not addr:
+            addr = str((cal or {}).get('id') or '').strip().lower()
+        if on_cal and own_cal:
+            flags.append('organizer_self')
+        elif addr and addr == (self.svc.account or '').lower():
             flags.append('organizer_self')
         elif addr and addr in self.svc.trusted:
             flags.append('organizer_trusted')
         else:
             flags.append('external_organizer')
+        if on_cal and not own_cal:
+            flags.append('organizer_is_calendar')
         uid = str(e.get('iCalUID') or '')
         if e.get('eventType') == 'fromGmail':
             flags.append('from_gmail')
@@ -467,7 +489,7 @@ class Tools:
         # organizer and the account as the creator), nor when the creator
         # is this account.
         cre = _addr(creator)
-        if (cre and cre != addr and not creator.get('self') and not org.get('self')
+        if (cre and cre != addr and not creator.get('self') and not on_cal
                 and cre != (self.svc.account or '').lower()):
             flags.append('creator_differs')
         name = clean_line(org.get('displayName') or '', 80)
@@ -476,7 +498,7 @@ class Tools:
     def _brief(self, e, cal):
         start, all_day = _when(e.get('start'))
         end, _ = _when(e.get('end'))
-        organizer, flags = self._organizer(e)
+        organizer, flags = self._organizer(e, cal)
         title = clean_line(e.get('summary') or '(no title)', 200)
         flags += [f for f in content_flags(title) if f not in flags]
         me = next((x for x in e.get('attendees') or [] if x.get('self')), None)

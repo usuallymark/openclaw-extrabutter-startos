@@ -1,13 +1,12 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:24',
+  version: '2026.10.1:25',
   releaseNotes: {
-    en_US: `Calendar links: read your calendars without any Google setup.
+    en_US: `Calendar: who made an event, told correctly.
 
-- **Calendar Links in Configure Calendar.** Paste a calendar's secret iCal address (Google's "Secret address in iCal format", an iCloud public calendar link, an Outlook ICS link) or keep it in Vaultwarden, and the calendar agent can list, search and read those events. Read only, and no Google Cloud project or sign-in needed: choose *No Google account (calendar links only)*. Links also work next to a Google sign-in.
-- Recurring events, moved or cancelled single dates and time zones are handled as in Google Calendar. The secret address never reaches the agents or the logs, and the agent marks these events as from a calendar link.
-- The Calendar Service line now says how many calendar links can be read, with a warning for each one that cannot.`,
+- **Events on calendars shared with the assistant** were marked as made by the assistant's own account when their calendar's owner made them (and so was a holiday calendar's every event). Now only the account's own calendars count as its own; the owner of a shared calendar is checked against your Trusted Organizers like anyone else, and such events are marked as the calendar's own.
+- The calendar agent's status now lists each calendar link and whether it can be read.`,
   },
   migrations: {
     up: async () => {},
