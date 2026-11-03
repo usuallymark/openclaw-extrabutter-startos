@@ -47,6 +47,7 @@ import {
 import { emailSettingsJson } from './fileModels/emailSettings.json'
 import { withGatewaySecrets, writeGatewaySecrets } from './secretEnv'
 import { calendarSettingsJson } from './fileModels/calendarSettings.json'
+import { vaultRootOwner, writeVaultFiles } from './vaultService'
 import {
   CALENDAR_PORT,
   applyCalendarConfig,
@@ -65,16 +66,11 @@ import {
 } from './mailService'
 import {
   RBW_ENV,
-  RBW_CONFIG,
-  RBW_CREDENTIALS,
-  RBW_DIR,
-  RBW_PINENTRY,
-  PINENTRY_SCRIPT,
-  VAULT_START_SCRIPT,
   CUSTOM_CA_DIR,
   CUSTOM_CA_PREFIX,
   applyHostsBlock,
   credentialsVolumePath,
+  oldCredentialsVolumePath,
   splitPemCerts,
   writeMasterPassword,
 } from './vault'
@@ -86,13 +82,13 @@ import {
   probeHttp,
   probeMail,
   probeServerAccess,
+  vaultAnswers,
   probeCalendar,
   calendarAnswers,
   mailAnswers,
   probeVault,
   vaultTrigger,
 } from './healthChecks'
-import { clearLinks } from './noLinks'
 
 // Maps each provider's auth-profile id to the env var OpenClaw reads its API
 // key from. Keep in sync with MANAGED_PROVIDERS in configureApiCredentials.ts.
@@ -142,8 +138,8 @@ fi
 exit 0
 `
 
-// chown -R node:node everything in /data, skipping the mail and calendar
-// services' folders. /data itself is root's, group node, with the sticky bit
+// chown -R node:node everything in /data, skipping the package's and the
+// services' folders (mail, calendar, vault, and the package's settings). /data itself is root's, group node, with the sticky bit
 // (since 2026.10.1:26): the gateway user still creates and replaces its own
 // files there, but it can no longer rename or replace the services' folders
 // (owning /data let it swap a service's folder for one of its own, with its
@@ -156,6 +152,8 @@ for p in /data/* /data/.[!.]* /data/..?*; do
   [ -e "$p" ] || [ -L "$p" ] || continue
   [ "$p" = /data/.openclaw-mail ] && continue
   [ "$p" = /data/.openclaw-calendar ] && continue
+  [ "$p" = /data/.openclaw-vault ] && continue
+  [ "$p" = /data/.openclaw-package ] && continue
   chown -R node:node "$p"
 done
 `
@@ -354,6 +352,38 @@ export const main = sdk.setupMain(async ({ effects }) => {
     )
   const calOwner = calOn ? await calendarRootOwner() : null
 
+  // The vault service's settings and which items belong to which service
+  // (vaultService.ts). The master password: once from the legacy settings
+  // field (<= :1) if there is none yet, and that field then removed.
+  if (vw?.masterPassword) {
+    const have =
+      (await access(credentialsVolumePath)
+        .then(() => true)
+        .catch(() => false)) ||
+      (await access(oldCredentialsVolumePath)
+        .then(() => true)
+        .catch(() => false))
+    if (!have) {
+      await writeMasterPassword(vw.masterPassword)
+      console.info('Saved the Vaultwarden master password from legacy settings')
+    }
+    await externalServicesJson.update(effects, (c: any) => {
+      if (!c?.vaultwarden) return c
+      const { masterPassword: _gone, ...rest } = c.vaultwarden
+      return { ...c, vaultwarden: rest }
+    })
+  }
+  const owned = await writeVaultFiles(
+    vw,
+    !(vw?.enabled && missingLocal.vaultwarden),
+    mailSettings,
+    calSettings,
+    calOn,
+  )
+  if (owned.length)
+    console.info(`Vault items only their service may read: ${owned.join(', ')}`)
+  const vaultOwner = await vaultRootOwner()
+
   // The apps agent (appsAgent.ts, since :20): while mail or calendar is on,
   // the main agent asks it, with one skill, and it asks the email and
   // calendar agents. Rewritten at every start.
@@ -390,7 +420,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
   // Ensure required directories exist
   await mkdir(sdk.volumes.main.subpath('.startos'), { recursive: true })
-  await mkdir(sdk.volumes.main.subpath('.openclaw/rbw/config/rbw'), {
+  await mkdir(sdk.volumes.main.subpath('.openclaw/rbw/config'), {
     recursive: true,
   })
   await mkdir(sdk.volumes.main.subpath('.openclaw/rbw/cache'), {
@@ -670,11 +700,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: [],
     })
-    // Configure rbw and unlock the vault (proven manual sequence):
-    // master password in rbw/.credentials, answered by a file-based
-    // pinentry, so login/unlock are non-interactive. Because pinentry is
-    // non-interactive, a later `rbw get` from a skill also re-unlocks on
-    // its own if the agent died or the lock timeout passed. Never fatal.
     // OpenClaw (since 2026.9.5) does not migrate an older agent database on
     // its own: the gateway starts but refuses sessions until
     // `openclaw doctor` has run with the gateway stopped. Run it once per
@@ -695,95 +720,24 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['chown', 'network-setup'],
     })
-    .addOneshot('setup-vault', {
+    // The vault service (vaultService.ts, vault/; since 2026.10.1:27): the
+    // only holder of rbw, its keys and the master password, as the user
+    // openclaw-vault. It signs in, unlocks and syncs at start (the old
+    // setup-vault step) and answers everyone else on its socket. Always
+    // running: with Vaultwarden off it says so to whoever asks.
+    .addDaemon('vault-service', {
       subcontainer: openclawSub,
       exec: {
-        fn: async (subcontainer) => {
-          if (vw?.enabled && missingLocal.vaultwarden) {
-            console.error(
-              `${notInstalledMessage(missingLocal.vaultwarden)} Skipping vault setup.`,
-            )
-            return null
-          }
-          if (!vw?.enabled || !vw.url || !vw.email) {
-            console.info(
-              'Vaultwarden not enabled/configured — skipping vault setup',
-            )
-            return null
-          }
-          try {
-            let haveCreds = await access(credentialsVolumePath)
-              .then(() => true)
-              .catch(() => false)
-            // One-time seed from the legacy settings field (<= :1).
-            if (!haveCreds && vw.masterPassword) {
-              await writeMasterPassword(vw.masterPassword)
-              haveCreds = true
-              console.info('Seeded rbw/.credentials from legacy settings')
-            }
-            if (!haveCreds) {
-              console.error(
-                'Vaultwarden enabled but no master password saved — enter it in Configure External Services. Skipping vault setup.',
-              )
-              return null
-            }
-
-            // The rbw folder is the gateway user's: clear any link it put
-            // where the package writes, or chmods (noLinks.ts).
-            for (const f of [
-              '.openclaw/rbw/pinentry-file.sh',
-              '.openclaw/rbw/.credentials',
-              '.openclaw/rbw/config/rbw/config.json',
-            ])
-              await clearLinks(f)
-            await subcontainer.writeFile(RBW_PINENTRY, PINENTRY_SCRIPT, {
-              mode: 0o755,
-            })
-            await subcontainer.writeFile(
-              RBW_CONFIG,
-              JSON.stringify({
-                email: vw.email,
-                base_url: vw.url.replace(/\/+$/, ''),
-                lock_timeout: 3600,
-                pinentry: RBW_PINENTRY,
-              }),
-              { mode: 0o644 },
-            )
-            await subcontainer.exec(
-              [
-                'sh',
-                '-c',
-                `chown -R node:node ${RBW_DIR} && chmod 600 ${RBW_CREDENTIALS} && chmod 755 ${RBW_PINENTRY}`,
-              ],
-              { user: 'root' },
-            )
-
-            // rbw spawns (and daemonizes) rbw-agent itself; the script
-            // stops any stale agent first (see VAULT_START_SCRIPT).
-            const res = await subcontainer.exec(
-              ['sh', '-c', VAULT_START_SCRIPT],
-              {
-                user: 'node',
-                env: { ...RBW_ENV, VW_URL: vw.url.replace(/\/+$/, '') },
-              },
-            )
-            for (const line of String(res.stdout).split('\n')) {
-              if (line.trim()) console.info(line.trim())
-            }
-            const errText = String(res.stderr).trim()
-            if (res.exitCode === 0) {
-              if (errText) console.warn(errText)
-              console.info('Vault unlocked successfully')
-            } else {
-              console.error(
-                `Vault setup did not unlock (exit ${res.exitCode}): ${errText}`,
-              )
-            }
-          } catch (e) {
-            console.error('Vault setup failed (non-fatal):', e)
-          }
-          return null
+        command: ['python3', '-I', '/opt/openclaw-vault/launch.py'],
+        user: 'root',
+        env: {
+          VAULT_ROOT_UID: vaultOwner === null ? '' : String(vaultOwner),
         },
+      },
+      ready: {
+        display: null,
+        fn: () => vaultAnswers(openclawSub),
+        gracePeriod: 600_000,
       },
       requires: ['install-root-ca', 'chown', 'network-setup'],
     })
@@ -805,7 +759,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
             : {}),
         },
       },
-      requires: ['chown', 'setup-vault'],
+      requires: ['chown', 'vault-service'],
     })
     .addDaemon('qdrant', {
       subcontainer: qdrantSub,
@@ -846,7 +800,8 @@ export const main = sdk.setupMain(async ({ effects }) => {
           NODE_EXTRA_CA_CERTS: '/etc/ssl/certs/ca-certificates.crt',
           QDRANT_URL: qdrantUrl,
           OPENCLAW_HEALTH_TARGETS: JSON.stringify(healthTargets),
-          // rbw XDG paths so skills can call rbw with the unlocked agent
+          // XDG folders the gateway's tools have always used (rbw itself is
+          // the vault service's since :27; the agents' rbw asks it)
           XDG_CONFIG_HOME: '/data/.openclaw/rbw/config',
           XDG_CACHE_HOME: '/data/.openclaw/rbw/cache',
           XDG_RUNTIME_DIR: '/data/.openclaw/rbw/runtime',
@@ -871,7 +826,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
         'chown',
         'state-migrate',
         'network-setup',
-        'setup-vault',
+        'vault-service',
         'google-sign-in',
         'git-setup',
         'qdrant',
@@ -936,7 +891,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
         trigger: vaultTrigger,
         gracePeriod: 0,
       },
-      requires: ['setup-vault'],
+      requires: ['vault-service'],
     })
     .addHealthCheck('ext-vaultwarden', {
       ready: {
@@ -1070,7 +1025,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
             fn: () => mailAnswers(openclawSub),
             gracePeriod: 180_000,
           },
-          requires: ['chown', 'network-setup', 'setup-vault', 'mail-front'],
+          requires: ['chown', 'network-setup', 'vault-service', 'mail-front'],
         })
         .addHealthCheck('mail-status', {
           ready: {
@@ -1119,7 +1074,12 @@ export const main = sdk.setupMain(async ({ effects }) => {
             fn: () => calendarAnswers(openclawSub),
             gracePeriod: 180_000,
           },
-          requires: ['chown', 'network-setup', 'setup-vault', 'calendar-front'],
+          requires: [
+            'chown',
+            'network-setup',
+            'vault-service',
+            'calendar-front',
+          ],
         })
         .addHealthCheck('calendar-status', {
           ready: {

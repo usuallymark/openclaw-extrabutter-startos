@@ -6,8 +6,8 @@
    The package writes the sending rules (rules.json) and the owner's
    approvals (decisions/) here; the service can read them, not write them.
 2. Get the password: the manual one from the settings, or from Vaultwarden
-   through the gateway user's rbw (sync first, so a password changed in
-   Vaultwarden is seen), exactly as getcred does for the skills.
+   through the vault service (as root, after a sync, so a password changed
+   in Vaultwarden is seen; since 2026.10.1:27 the agents cannot read it).
 3. Become the openclaw-mail user and replace this process with the service
    (the worker), handing it the settings and password on stdin. No password
    file is written and nothing privileged keeps running. The worker serves
@@ -25,9 +25,8 @@ import json  # noqa: E402
 import os  # noqa: E402
 import pwd  # noqa: E402
 import stat  # noqa: E402
-import subprocess  # noqa: E402
 
-from launcher import Launcher  # noqa: E402
+from launcher import Launcher, vault_field  # noqa: E402
 
 MAIL_ROOT = '/data/.openclaw-mail'
 SETTINGS = f'{MAIL_ROOT}/settings.json'
@@ -39,13 +38,6 @@ RULES = f'{MAIL_ROOT}/rules.json'
 DECISIONS = f'{MAIL_ROOT}/decisions'
 SERVICE = '/opt/openclaw-mail/mailservice.py'
 MAIL_USER = 'openclaw-mail'
-RBW_ENV = {
-    'XDG_CONFIG_HOME': '/data/.openclaw/rbw/config',
-    'XDG_CACHE_HOME': '/data/.openclaw/rbw/cache',
-    'XDG_RUNTIME_DIR': '/data/.openclaw/rbw/runtime',
-    'HOME': '/data',
-    'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-}
 GMAIL = {'imap': {'host': 'imap.gmail.com', 'port': 993, 'security': 'tls'},
          'smtp': {'host': 'smtp.gmail.com', 'port': 465, 'security': 'tls'}}
 
@@ -54,30 +46,13 @@ L = Launcher('mail launcher')
 say, fail, own_dir, open_dir_fd = L.say, L.fail, L.own_dir, L.open_dir_fd
 
 
-def first_line(s):
-    return next((ln.strip() for ln in (s or '').splitlines() if ln.strip()), '')
-
-
-def vault_password(node):
-    """(password, error, note) from Vaultwarden item "email", as node."""
-    run = dict(user=node.pw_uid, group=node.pw_gid, extra_groups=[], capture_output=True,
-               text=True, cwd='/data')
-    note = ''
-    try:
-        r = subprocess.run(['rbw', 'sync'], env=RBW_ENV, timeout=90, **run)
-        if r.returncode != 0:
-            note = f'rbw sync failed ({first_line(r.stderr) or "exit " + str(r.returncode)}), so a password changed in Vaultwarden may not be seen yet'
-    except subprocess.TimeoutExpired:
-        note = 'rbw sync did not answer within 90 s, so a password changed in Vaultwarden may not be seen yet'
-    env = {**RBW_ENV, 'EMAIL_PASS_FROM_VAULT': 'email:password'}
-    try:
-        r = subprocess.run(['/usr/local/bin/getcred', 'EMAIL_PASS'], env=env, timeout=90, **run)
-    except subprocess.TimeoutExpired:
-        return None, 'Vaultwarden did not answer within 90 s', note
-    if r.returncode != 0 or not r.stdout:
-        why = first_line(r.stderr).replace('getcred: ', '') or 'no answer'
-        return None, f'the password could not be fetched from Vaultwarden: {why}', note
-    return r.stdout, '', note
+def vault_password():
+    """(password, error, note) from Vaultwarden item "email", field
+    "password", through the vault service (as root; agents cannot read it)."""
+    password, error, note = vault_field('email:password')
+    if error:
+        error = error.replace('it could not be fetched', 'the password could not be fetched', 1)
+    return password, error, note
 
 
 def main():
@@ -174,7 +149,7 @@ def main():
         error = '' if password else 'no password is saved in Configure Email'
         source = 'manual'
     else:
-        password, error, note = vault_password(node)
+        password, error, note = vault_password()
         source = 'vault'
     if password and mode == 'gmail':
         # Google shows app passwords in groups of four; the spaces are display only.

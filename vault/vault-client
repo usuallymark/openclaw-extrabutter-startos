@@ -1,0 +1,3 @@
+#!/bin/sh
+# vault-client: ask the vault service (see /opt/openclaw-vault/client.py).
+exec /usr/bin/python3 -I /opt/openclaw-vault/client.py "$@"

@@ -1,6 +1,5 @@
 import type { SubContainer, T } from '@start9labs/start-sdk'
 import { sdk } from './sdk'
-import { RBW_ENV, VAULT_PROBE_SCRIPT } from './vault'
 import { EmailConfig, googleSignInStatus, usesMailService } from './email'
 import { MAIL_URL } from './mailService'
 import { CALENDAR_URL } from './calendarService'
@@ -139,32 +138,47 @@ export async function probeTcp(
 }
 
 /**
- * End-to-end vault check: `rbw unlock` exercises the master password, the
- * file pinentry and the Vaultwarden connection (a no-op when unlocked), and
- * `rbw sync` confirms Vaultwarden still accepts rbw's sign-in. rbw keeps
- * answering from its local copy when a sync fails, so without the sync a
- * refused sign-in looked healthy while vault edits stopped arriving.
+ * End-to-end vault check, asked of the vault service as root (since :27):
+ * unlock (exercises the master password and the Vaultwarden connection) and
+ * sync (confirms Vaultwarden still accepts the stored sign-in; rbw keeps
+ * answering from its local copy when it does not, so without the sync a
+ * refused sign-in looked healthy while vault edits stopped arriving).
  */
 export async function probeVault(sub: Sub): Promise<Result> {
   try {
-    const res = await sub.exec(['sh', '-c', VAULT_PROBE_SCRIPT], {
-      user: 'node',
-      env: RBW_ENV,
-      timeout: 150_000,
-    })
-    if (res.exitCode === 0) {
-      return { result: 'success', message: 'Vault unlocked and synced' }
-    }
-    const why = firstLine(res.stderr) || `exit ${res.exitCode}`
-    if (res.exitCode === 20) {
+    const res = await sub.exec(
+      ['python3', '-I', '/opt/openclaw-vault/client.py', 'check'],
+      { user: 'root', timeout: 150_000 },
+    )
+    if (res.exitCode !== 0) {
       return {
         result: 'failure',
-        message: `Vault unlocked, but syncing with Vaultwarden fails (${why}): changes made in Vaultwarden do not reach OpenClaw. If Vaultwarden is running, restart OpenClaw to sign in again.`,
+        message: `Vault service not answering — ${firstLine(res.stderr).replace(/^vault: /, '') || `exit ${res.exitCode}`}`,
+      }
+    }
+    const a = JSON.parse(String(res.stdout))
+    if (a.enabled === false) {
+      return {
+        result: 'failure',
+        message: `Vault off — ${a.reason || 'see Configure External Services'}`,
+      }
+    }
+    if (!a.unlocked) {
+      return {
+        result: 'failure',
+        message: `Vault locked — ${a.sync_error || 'unlock failed'}. Check the master password and Vaultwarden settings in Configure External Services.`,
+      }
+    }
+    if (a.sync_ok === false) {
+      return {
+        result: 'failure',
+        message: `Vault unlocked, but syncing with Vaultwarden fails (${a.sync_error}): changes made in Vaultwarden do not reach OpenClaw. If Vaultwarden is running, restart OpenClaw to sign in again.`,
       }
     }
     return {
-      result: 'failure',
-      message: `Vault locked — ${why}. Check the master password and Vaultwarden settings in Configure External Services.`,
+      result: 'success',
+      message:
+        'Vault unlocked and synced (held by the vault service; agents get only items no service owns)',
     }
   } catch (e) {
     return {
@@ -997,5 +1011,24 @@ export async function probeServerAccess(sub: Sub): Promise<Result> {
     }
   } catch {
     return { result: 'success', message: 'start-cli status unknown' }
+  }
+}
+
+/** The vault daemon's readiness: its service answers and has finished
+ * signing in (the mail and calendar launchers then get their items). */
+export async function vaultAnswers(
+  sub: Sub,
+): Promise<Result | { result: 'starting'; message: string }> {
+  try {
+    const res = await sub.exec(
+      ['python3', '-I', '/opt/openclaw-vault/client.py', 'status'],
+      { user: 'root', timeout: 30_000 },
+    )
+    if (res.exitCode === 0 && !JSON.parse(String(res.stdout)).starting) {
+      return { result: 'success', message: 'Vault service answering' }
+    }
+    return { result: 'starting', message: 'Vault service starting' }
+  } catch {
+    return { result: 'starting', message: 'Vault service starting' }
   }
 }

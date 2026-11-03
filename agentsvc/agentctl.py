@@ -29,6 +29,9 @@ from email.utils import getaddresses
 SERVICES = {
     'mail': {'root': '/data/.openclaw-mail', 'label': 'Email'},
     'calendar': {'root': '/data/.openclaw-calendar', 'label': 'Calendar'},
+    # No approvals; its activity log (since :27) says which items the
+    # agents asked for and which were refused.
+    'vault': {'root': '/data/.openclaw-vault', 'label': 'Vault'},
 }
 ID = re.compile(r'[0-9]{14}-[0-9a-f]{6}')
 PUBLIC = ('id', 'action', 'summary', 'details', 'rule', 'requester', 'created', 'expires', 'recipients')

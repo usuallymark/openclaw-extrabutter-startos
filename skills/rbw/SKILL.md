@@ -21,18 +21,29 @@ Call this skill whenever you need a credential that is stored in Vaultwarden:
 
 Do NOT call rbw if Vaultwarden is not configured — check the environment first.
 
-## Environment
+## How the vault works here
 
-rbw is installed at `/usr/bin/rbw`. Configuration and cache are stored at:
-- Config: `/data/.openclaw/rbw/config/rbw/config.json`
-- Cache: `/data/.openclaw/rbw/cache/`
-- Runtime: `/data/.openclaw/rbw/runtime/`
+The vault (rbw, its keys and the Vaultwarden master password) belongs to the
+**vault service**, not to you: you cannot read its files or run rbw itself.
+The `rbw` command you have asks that service, and so do `getcred` and
+`creds.py`. It keeps the everyday commands:
 
-The vault is unlocked and synced automatically at startup if Vaultwarden is
-configured. If the sync fails while Vaultwarden is up (Vaultwarden no longer
-accepts rbw's stored sign-in), startup signs in again on its own. rbw uses a
-non-interactive pinentry, so if the vault has locked (timeout or agent
-restart), the next `rbw get` unlocks it again on its own.
+```bash
+rbw get [--field FIELD] NAME    # a field of an item (default: the password)
+rbw list                        # item names
+rbw sync                        # sync with Vaultwarden (at most every 30 s)
+rbw unlocked                    # exit 0 when the vault is unlocked
+```
+
+Adding, editing or removing items happens in Vaultwarden itself (ask the
+user), then `rbw sync`.
+
+**Items that belong to a service are refused**, by design: the email
+password (`email`), the Calendar sign-in (`google-calendar`) and the
+calendar links' items go only to the mail and calendar services, so their
+rules and the owner's approvals cannot be stepped around. For mail or
+calendar work, ask the apps agent (or the email/calendar agent) as your
+email and calendar skills say. Do not look for another way to those items.
 
 ## Credentials of configured services: use auth_headers / getcred
 
@@ -59,10 +70,9 @@ nas/crawl4ai/ntfy helpers read them from the running gateway process
 instead. To run any command exactly as the gateway would (its environment,
 as user node): `gateway-env python3 script.py`.
 
-rbw answers from a local copy of the vault. If a lookup fails or comes back
-empty, getcred runs `rbw sync` once and tries again, so an entry added or
-corrected in Vaultwarden is found without a manual sync. When calling rbw
-directly and an entry seems missing, run `rbw sync` first.
+The vault service answers from its local copy of the vault and syncs once
+on a miss, so an item added or corrected in Vaultwarden is found without a
+manual sync.
 
 Do not assign a credential to a variable whose name ends in `KEY`,
 `TOKEN`, `SECRET` or `PASSWORD`, or to `password`/`api_key`-style names.
@@ -76,21 +86,12 @@ by `***`). Pass the value straight into a header or function call instead.
 python3 -c "
 import subprocess, sys
 
-def rbw_get(entry, field=None):
-    # -i: item names are matched without regard to case (field names always are).
-    cmd = ['rbw', 'get', '-i', entry] if not field else ['rbw', 'get', '-i', '--field', field, entry]
-    env = {
-        'XDG_CONFIG_HOME': '/data/.openclaw/rbw/config',
-        'XDG_CACHE_HOME': '/data/.openclaw/rbw/cache',
-        'XDG_RUNTIME_DIR': '/data/.openclaw/rbw/runtime',
-        'PATH': '/usr/bin:/usr/local/bin',
-        'HOME': '/data',
-    }
-    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
-    if result.returncode != 0:
-        print(f'ERROR: rbw failed for {entry}/{field}: {result.stderr.strip()}', file=sys.stderr)
+def rbw_get(entry, field='password'):
+    r = subprocess.run(['rbw', 'get', '--field', field, entry], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f'ERROR: {entry}/{field}: {r.stderr.strip()}', file=sys.stderr)
         return None
-    return result.stdout.strip()
+    return r.stdout.rstrip('\\n')
 
 # Example: pass the value straight on; never print it.
 headers = {'X-N8N-API-KEY': rbw_get('n8n', 'api_key')}
@@ -102,12 +103,13 @@ headers = {'X-N8N-API-KEY': rbw_get('n8n', 'api_key')}
 One Vaultwarden item per service, named after the service in lowercase:
 - Logins (`email`, `nas`, …): the item's own `username` and `password`.
 - API keys: a hidden custom field `api_key`.
-- Names are matched without regard to case (`rbw get -i`), so older items
-  such as `NAS` or a field `API_Key` still work.
+- Names are matched without regard to case, so older items such as `NAS`
+  or a field `API_Key` still work. An exact name wins; otherwise the one
+  item whose name contains it.
 
 | Service | Item | Field |
 |---|---|---|
-| Email | `email` | `password` |
+| Email | `email` | `password` (the mail service's: refused to agents while it is on) |
 | NAS | `nas` | `username`, `password` |
 | n8n | `n8n` | `api_key` |
 | Trilium | `trilium` | `api_key` |
@@ -127,11 +129,9 @@ rbw unlocked && echo "UNLOCKED" || echo "LOCKED"
 rbw sync && echo "SYNCED" || echo "SYNC FAILED"
 ```
 
-If a `rbw get` still fails with the vault locked, the master password is
-missing or wrong — check the `setup-vault` lines in the service logs.
-
-If the sync fails, rbw still answers from its local copy, but items added
-or renamed in Vaultwarden since then are missing. A message like
-"missing field `access_token`" means Vaultwarden refused rbw's stored
-sign-in: if Vaultwarden is running, ask the user to restart OpenClaw, which
-signs in again. Never run `rbw purge` yourself.
+If a lookup fails with the vault locked or "the vault service is not
+answering", the master password is missing or wrong, or Vaultwarden is
+down: the **Vault** line in StartOS says which. If the sync fails, lookups
+still answer from the local copy, but items added or renamed in Vaultwarden
+since then are missing; ask the user to restart OpenClaw, which signs in to
+Vaultwarden again.

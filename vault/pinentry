@@ -1,0 +1,13 @@
+#!/bin/sh
+# Non-interactive pinentry for the vault service's rbw: answers GETPIN with
+# the master password file (only the vault user can read it). Assuan
+# requires '%' to be escaped; printf avoids dash's echo mangling '\'.
+CREDS=/data/.openclaw-vault/credentials
+echo 'OK Pleased to meet you'
+while read -r line; do
+  case "$line" in
+    GETPIN*) printf 'D %s\n' "$(sed 's/%/%25/g' "$CREDS")"; echo OK ;;
+    BYE*) echo OK; exit 0 ;;
+    *) echo OK ;;
+  esac
+done

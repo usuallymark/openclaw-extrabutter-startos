@@ -2,7 +2,10 @@ import { T } from '@start9labs/start-sdk'
 import { chmod, lstat, mkdir, readFile, rm, writeFile } from 'fs/promises'
 import { sdk } from './sdk'
 import { openclawJson } from './fileModels/openclaw.json'
-import { externalServicesJson } from './fileModels/externalServices.json'
+import {
+  EXT_SETTINGS_SUBPATH,
+  externalServicesJson,
+} from './fileModels/externalServices.json'
 import {
   EMAIL_SETTINGS_SUBPATH,
   EmailSettings,
@@ -87,7 +90,7 @@ export const initEmailSettings = sdk.setupOnInit(async (effects) => {
   }
   // The raw file: the settings model no longer has an `email` section.
   const raw = await readFile(
-    sdk.volumes.main.subpath('.openclaw/external-services.json'),
+    sdk.volumes.main.subpath(EXT_SETTINGS_SUBPATH),
     'utf8',
   )
     .then((t) => JSON.parse(t))

@@ -1,16 +1,17 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:26',
+  version: '2026.10.1:27',
   releaseNotes: {
-    en_US: `Security fixes only.
+    en_US: `Security: the vault moves out of the agents' reach.
 
-- **Webchat: every profile needs a PIN.** The webchat reaches the main agent and all its tools, and a profile without a PIN was open to anyone who could reach its address. Such a profile is now closed until it has one; Configure Webchat will not save a profile without a PIN, and new PINs are 6 to 12 digits. If ntfy is set up, you are notified when someone keeps entering wrong PINs.
-- **The email and calendar services hold their rules against the main agent's shell.** The agent's user could rename the services' folders and put its own sending rules and approvals in their place, or make the package write into them through a link, and a race in the mail service's start could give it root in the container. All three are closed: /data now belongs to root (sticky), the package removes links before writing into the agent's folders, the services accept only rules and approvals exactly as the package writes them, and the mail service's start changes files by descriptor.
-- **Never Send To** now also blocks the same address written another way (sam+anything@, Gmail with dots) and, for @domain, its subdomains.
-- **HTML mail** checks also refuse CSS escapes, image-set(), @font-face, comments holding markup (Outlook shows <!--[if mso]> blocks), and links that a browser would open somewhere other than the domain shown; international domains are shown in their xn-- form in Review Agent Actions.
-- **Calendar links:** a whole download ends after 30 seconds however slowly the server sends; a link never reaches this server itself, and reaches your own network only when the link itself is there (never by a redirect). A feed whose recurring events repeat absurdly often can no longer keep the calendar busy for minutes per question.
-- **Server Access** health line: while start-cli is signed in (Login to StartOS), it warns that the agent then has root on the whole server, so the email and calendar rules do not hold against it.`,
+- **A separate vault service now holds Vaultwarden.** Until now every agent with a shell could read the master password and every vault item, including the email password and the Calendar sign-in, and so could send mail or change your calendar without the email and calendar services' rules and your approvals. Now rbw, its keys and the master password belong to the vault service alone; agents ask it.
+- **Items that belong to a service go only to that service**: the email password (while Configure Email uses Gmail or IMAP), the Calendar sign-in and your calendar links' items (while Calendar is on). Every other item works for every agent as before (NAS, Crawl4AI, n8n, ntfy, Gitea and your own), through getcred and rbw get as before. Agents can no longer add, edit or delete vault items; do that in Vaultwarden.
+- **Configure External Services' settings moved to a folder only the package can read**, so an agent can no longer change the Vaultwarden address it signs in to, your host mappings or your trusted certificates.
+- Agent Activity lists which vault items were asked for and which were refused.
+- The first start signs in to Vaultwarden again from a new place, so Vaultwarden may report a new device.
+
+**After installing, change what the agents could read until now**: the mail app password (then save it in Vaultwarden or Configure Email), the Google Calendar sign-in (sign in again and remove the old access in your Google account), each calendar link's secret address, and your Vaultwarden master password (then enter it in Configure External Services).`,
   },
   migrations: {
     up: async () => {},

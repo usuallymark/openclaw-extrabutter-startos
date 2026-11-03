@@ -10,8 +10,10 @@ import { agentctl } from '../agentActions'
 type Entry = Record<string, unknown> & { ts?: string; event?: string }
 
 type Service = {
-  id: 'mail' | 'calendar'
+  id: 'mail' | 'calendar' | 'vault'
   label: string
+  /** The section title for this service's changes or refusals. */
+  title: string
   /** Events that changed something or waited for the owner. */
   isChange: (ev: string) => boolean
   labels: Record<string, string>
@@ -21,6 +23,7 @@ const SERVICES: Service[] = [
   {
     id: 'mail',
     label: 'Email',
+    title: 'Email sending',
     isChange: (ev) => ev.startsWith('send_'),
     labels: {
       state: 'Mail service',
@@ -50,6 +53,7 @@ const SERVICES: Service[] = [
   {
     id: 'calendar',
     label: 'Calendar',
+    title: 'Calendar changes',
     isChange: (ev) => ev.startsWith('write_') || ev.startsWith('own_calendar'),
     labels: {
       state: 'Calendar service',
@@ -69,6 +73,18 @@ const SERVICES: Service[] = [
       write_failed: 'Failed',
       queue_error: 'Approval queue error',
       error: 'Tool error',
+    },
+  },
+  {
+    // Since :27: which Vaultwarden items were asked for, by the package or
+    // an agent, and which were refused (names only, never values).
+    id: 'vault',
+    label: 'Vault',
+    title: 'Vault requests refused',
+    isChange: (ev) => ev === 'refused',
+    labels: {
+      get: 'Given',
+      refused: 'REFUSED',
     },
   },
 ]
@@ -99,6 +115,9 @@ function line(svc: Service, e: Entry): string {
     add('attachments', e.attachments)
     add('flags', e.flags)
     add('tool', e.tool)
+    add('item', e.item)
+    add('field', e.field)
+    add('by', e.caller)
     add('rule:', e.rule)
     add('—', e.detail)
     add('queue', e.queue_id ?? e.request_id)
@@ -118,7 +137,7 @@ export function activityText(
     const changes = entries
       .filter((e) => svc.isChange(String(e.event ?? '')))
       .reverse()
-    const title = svc.id === 'mail' ? 'Email sending' : 'Calendar changes'
+    const title = svc.title
     sections.push(
       changes.length
         ? `${title} (last ${changes.length}):\n` +
@@ -126,7 +145,7 @@ export function activityText(
         : `${title}: nothing yet.`,
     )
   }
-  // Newest first across both logs ("YYYY-MM-DD HH:MM UTC" sorts as text);
+  // Newest first across all logs ("YYYY-MM-DD HH:MM UTC" sorts as text);
   // entries of the same minute keep each log's own order.
   all.sort((a, b) => {
     const ta = String(a.e.ts ?? '')
@@ -150,7 +169,7 @@ export const agentActivity = sdk.Action.withoutInput(
   async () => ({
     name: 'Agent Activity',
     description:
-      "The email and calendar services' logs, newest first: what the agents read, filed, drafted, sent, added, changed and cancelled, what your rules refused or held for approval, and your decisions. No message text or event descriptions are logged.",
+      "The email, calendar and vault services' logs, newest first: what the agents read, filed, drafted, sent, added, changed and cancelled, what your rules refused or held for approval, your decisions, and which Vaultwarden items were given or refused. No message text, event descriptions or secrets are logged.",
     warning: null,
     allowedStatuses: 'any',
     group: null,

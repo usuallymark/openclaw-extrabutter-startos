@@ -65,8 +65,8 @@ ENV PYTHONPATH=/opt/python-libs
 RUN apt-get update && apt-get install -y --no-install-recommends pinentry-curses && rm -rf /var/lib/apt/lists/*
 
 # Install rbw (Vaultwarden CLI) for credential retrieval at runtime.
-# rbw is used by the agent's skills to fetch secrets from Vaultwarden.
-# Configuration and XDG dirs are set up at runtime via the setup-vault oneshot.
+# Since 2026.10.1:27 only the vault service runs it (below: the binaries
+# move to /usr/libexec/openclaw-vault); the agents' rbw asks that service.
 # - amd64: install from official .deb release
 # - arm64: prebuilt binaries from this repo's rbw-arm64-1.15.0 release
 #   (built once by .github/workflows/build-rbw-arm64.yml; sha256-pinned)
@@ -138,6 +138,27 @@ COPY agentsvc/agentctl.py /opt/openclaw-services/agentctl.py
 RUN chmod 755 /opt/openclaw-services && chmod 644 /opt/openclaw-services/agentctl.py \
     && python3 -m compileall -q /opt/openclaw-services \
     && cd /tmp && python3 -I /opt/openclaw-services/agentctl.py queue >/dev/null
+
+# Vault service (since 2026.10.1:27): rbw, its keys and the Vaultwarden
+# master password belong to openclaw-vault; everyone else asks it over its
+# socket (startos/vaultService.ts, vault/). rbw's binaries move where only
+# that user (and root) can run them; the agents' `rbw` is
+# vault/rbw-agent-cli, which asks the service.
+RUN useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin openclaw-vault \
+    && mkdir -p /usr/libexec/openclaw-vault \
+    && for b in rbw rbw-agent; do for d in /usr/bin /usr/local/bin; do \
+         if [ -f "$d/$b" ]; then mv "$d/$b" "/usr/libexec/openclaw-vault/$b"; fi; done; done \
+    && test -x /usr/libexec/openclaw-vault/rbw && test -x /usr/libexec/openclaw-vault/rbw-agent \
+    && chown -R root:openclaw-vault /usr/libexec/openclaw-vault \
+    && chmod 0750 /usr/libexec/openclaw-vault /usr/libexec/openclaw-vault/rbw /usr/libexec/openclaw-vault/rbw-agent
+COPY agentsvc/launcher.py agentsvc/svcutil.py vault/launch.py vault/broker.py vault/client.py vault/start.sh vault/pinentry /opt/openclaw-vault/
+COPY vault/vault-client /usr/local/bin/vault-client
+COPY vault/rbw-agent-cli /usr/local/bin/rbw
+RUN chmod 755 /opt/openclaw-vault /opt/openclaw-vault/pinentry /usr/local/bin/vault-client /usr/local/bin/rbw \
+    && chmod 644 /opt/openclaw-vault/*.py /opt/openclaw-vault/start.sh \
+    && python3 -m compileall -q /opt/openclaw-vault \
+    && cd /tmp && python3 -I -c 'import sys; sys.path.insert(0, "/opt/openclaw-vault"); import broker, client, launch' \
+    && ! command -v rbw-agent
 
 # Stage skill files (loaded via extraDirs in openclaw.json)
 # start-cli skill (always loaded)

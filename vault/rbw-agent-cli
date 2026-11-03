@@ -1,0 +1,76 @@
+#!/usr/bin/python3 -I
+"""rbw, as the agents see it (since 2026.10.1:27).
+
+The vault belongs to the vault service; this command asks it. It keeps the
+everyday commands:
+
+    rbw get [-i] [--field FIELD] NAME     a field (default: the password)
+    rbw list                               item names
+    rbw sync                               sync with Vaultwarden (at most every 30 s)
+    rbw unlocked                           exit 0 when the vault is unlocked
+
+Items that belong to a service (the email password, the Calendar sign-in,
+calendar link addresses) are refused here: only their service reads them.
+Adding, editing or removing items is done in Vaultwarden itself.
+"""
+
+import sys
+
+sys.path.insert(0, '/opt/openclaw-vault')
+
+from client import VaultError, call, get  # noqa: E402
+
+NOT_HERE = ('rbw {cmd}: not available to agents. The vault belongs to the vault service; '
+            'add or change items in Vaultwarden itself (then rbw sync).')
+
+
+def main(argv):
+    if not argv or argv[0] in ('-h', '--help', 'help'):
+        print(__doc__.strip())
+        return 0
+    cmd, rest = argv[0], argv[1:]
+    try:
+        if cmd == 'get':
+            field, names = 'password', []
+            i = 0
+            while i < len(rest):
+                a = rest[i]
+                if a in ('-i', '--ignorecase'):
+                    pass
+                elif a in ('-f', '--field') and i + 1 < len(rest):
+                    i += 1
+                    field = rest[i]
+                elif a.startswith('--field='):
+                    field = a.split('=', 1)[1]
+                elif a.startswith('-'):
+                    print(f'rbw get: option {a} is not available to agents (use --field)', file=sys.stderr)
+                    return 2
+                else:
+                    names.append(a)
+                i += 1
+            if len(names) != 1:
+                print('usage: rbw get [--field FIELD] NAME', file=sys.stderr)
+                return 2
+            print(get(names[0], field))
+            return 0
+        if cmd in ('list', 'ls'):
+            for it in call({'op': 'list'})['items']:
+                print(it['name'])
+            return 0
+        if cmd == 'sync':
+            a = call({'op': 'sync'})
+            if a.get('sync_ok') is False:
+                print(f'rbw sync: {a.get("sync_error") or "failed"}', file=sys.stderr)
+                return 1
+            return 0
+        if cmd in ('unlocked', 'unlock'):
+            return 0 if call({'op': 'status'}).get('unlocked') else 1
+        print(NOT_HERE.format(cmd=cmd), file=sys.stderr)
+        return 2
+    except VaultError as e:
+        print(f'rbw: {e}', file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

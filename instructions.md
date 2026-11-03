@@ -115,6 +115,18 @@ In Configure External Services, enable Vaultwarden and enter:
 
 Login uses the master password only (rbw does not support API-key login).
 
+**Who can read what (since 2026.10.1:27).** The vault is held by a separate
+vault service; no agent can read the master password or the vault's files.
+Agents ask the service, and it gives them any item except those that belong
+to the email and calendar services: `email` (while Configure Email uses
+Gmail or IMAP), `google-calendar` and your calendar links' items (while
+Calendar is on). Those go only to their service, so an agent cannot use
+them to get around Never Send To, your approvals or the own-calendar rule.
+All your other items (NAS, Crawl4AI, n8n, ntfy, Gitea …) work for every
+agent as before. Agents can no longer add, edit or delete vault items: do
+that in Vaultwarden. Agent Activity lists which items were asked for and
+which were refused.
+
 **If Vaultwarden has a `.local` name or an internal certificate**, also fill in:
 - **Custom Host Mappings** — e.g. `vaultwarden.home.local` → `192.168.1.50`.
   StartOS treats `.local` as mDNS-only and never forwards it to your DNS

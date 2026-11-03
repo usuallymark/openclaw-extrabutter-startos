@@ -24,7 +24,7 @@ const vaultwardenShape = z
     url: z.string().optional().catch(undefined),
     email: z.string().optional().catch(undefined),
     // Legacy (<= 2026.9.4:1). No longer written: rbw cannot log in with an
-    // API key, and the master password now lives only in rbw/.credentials.
+    // API key, and the master password lives only in the vault service's folder.
     // Still read once so an existing install can seed .credentials.
     apiKey: z.string().optional().catch(undefined),
     masterPassword: z.string().optional().catch(undefined),
@@ -96,14 +96,19 @@ const shape = z.looseObject({
   gitea: urlWithKeyShape.catch(OFF),
 })
 
+// Since 2026.10.1:27 in the package's own folder (root only), moved from
+// the gateway user's .openclaw/ by initPackageSettings (vaultService.ts):
+// an agent could edit it there, and it names the Vaultwarden server the
+// vault service signs in to, the host mappings and the trusted CAs.
+export const EXT_SETTINGS_SUBPATH = '.openclaw-package/external-services.json'
+
 const externalServicesJsonRaw = FileHelper.json(
-  { base: sdk.volumes.main, subpath: '.openclaw/external-services.json' },
+  { base: sdk.volumes.main, subpath: EXT_SETTINGS_SUBPATH },
   shape,
 )
 
-// Writes clear any link on the way first (noLinks.ts): the folder is the
-// gateway user's.
+// Writes clear any link on the way first (noLinks.ts).
 export const externalServicesJson = linkSafe(
   externalServicesJsonRaw,
-  '.openclaw/external-services.json',
+  EXT_SETTINGS_SUBPATH,
 )

@@ -140,42 +140,25 @@ class Launcher:
         os.execve('/usr/bin/python3', ['python3', '-I', script], env)
 
 
-RBW_ENV = {
-    'XDG_CONFIG_HOME': '/data/.openclaw/rbw/config',
-    'XDG_CACHE_HOME': '/data/.openclaw/rbw/cache',
-    'XDG_RUNTIME_DIR': '/data/.openclaw/rbw/runtime',
-    'HOME': '/data',
-    'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-}
+_vault_synced = False  # one sync per launcher run is enough
 
 
-def _first_line(s):
-    return next((ln.strip() for ln in (s or '').splitlines() if ln.strip()), '')
-
-
-def vault_field(node, var, pointer):
-    """(value, error, note): one Vaultwarden field ("item:field"), fetched
-    as the gateway user with getcred, after an rbw sync (so a value changed
-    in Vaultwarden is seen). The value never appears in a message."""
-    import subprocess
-    run = dict(user=node.pw_uid, group=node.pw_gid, extra_groups=[], capture_output=True,
-               text=True, cwd='/data')
-    note = ''
+def vault_field(pointer):
+    """(value, error, note): one Vaultwarden field ("item:field"), asked of
+    the vault service as root (since 2026.10.1:27; the service gives root
+    any item, the agents none that a service owns), after a sync, so a
+    value changed in Vaultwarden is seen. The value never appears in a
+    message."""
+    sys.path.insert(0, '/opt/openclaw-vault')
     try:
-        r = subprocess.run(['rbw', 'sync'], env=RBW_ENV, timeout=90, **run)
-        if r.returncode != 0:
-            note = (f'rbw sync failed ({_first_line(r.stderr) or "exit " + str(r.returncode)}), '
-                    'so a value changed in Vaultwarden may not be seen yet')
-    except (subprocess.TimeoutExpired, OSError):
-        note = 'rbw sync did not answer within 90 s, so a value changed in Vaultwarden may not be seen yet'
-    env = {**RBW_ENV, f'{var}_FROM_VAULT': pointer}
+        import client
+    except ImportError:
+        return None, 'the vault client is missing from the image', ''
+    global _vault_synced
+    item, _, field = pointer.partition(':')
     try:
-        r = subprocess.run(['/usr/local/bin/getcred', var], env=env, timeout=90, **run)
-    except subprocess.TimeoutExpired:
-        return None, 'Vaultwarden did not answer within 90 s', note
-    except OSError as e:
-        return None, f'getcred could not run ({e.strerror})', note
-    if r.returncode != 0 or not r.stdout:
-        why = _first_line(r.stderr).replace('getcred: ', '') or 'no answer'
-        return None, f'it could not be fetched from Vaultwarden: {why}', note
-    return r.stdout, '', note
+        value = client.get(item, field or 'password', sync=not _vault_synced)
+        _vault_synced = True
+        return value, '', ''
+    except client.VaultError as e:
+        return None, f'it could not be fetched from Vaultwarden: {e}', ''

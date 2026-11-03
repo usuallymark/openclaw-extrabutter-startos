@@ -4,8 +4,8 @@
 1. Check the calendar folder is the package's own (owned by root, not a
    link), and set the owners and modes the service relies on.
 2. Get the Google sign-in: the one pasted in Configure Calendar, or from
-   Vaultwarden item "google-calendar" (field "token") through the gateway
-   user's rbw, exactly as getcred does for the skills; none when the
+   Vaultwarden item "google-calendar" (field "token") through the vault
+   service (as root; since 2026.10.1:27 the agents cannot read it); none when the
    calendar links are used alone. Also the calendar links' addresses (since
    :24), pasted or from Vaultwarden (field "url" of the named item).
 3. Become the openclaw-calendar user and replace this process with the
@@ -85,7 +85,7 @@ def main():
         error = '' if token else 'no Calendar sign-in is saved in Configure Calendar'
         source = 'manual'
     else:
-        token, error, note = vault_field(node, 'CAL_TOKEN', VAULT_POINTER)
+        token, error, note = vault_field(VAULT_POINTER)
         if error:
             error = f'the Calendar sign-in (Vaultwarden item "google-calendar", field "token"): {error}'
         source = 'vault'
@@ -104,7 +104,7 @@ def main():
             if not item or ':' in item:
                 links.append({'name': name, 'url': '', 'error': 'no Vaultwarden item named for this link'})
                 continue
-            url, why, lnote = vault_field(node, 'CAL_LINK', f'{item}:{LINK_FIELD}')
+            url, why, lnote = vault_field(f'{item}:{LINK_FIELD}')
             if lnote and lnote != note:
                 L.say(lnote)
             links.append({'name': name, 'url': (url or '').strip(),

@@ -539,7 +539,8 @@ export const configureExternalServices = sdk.Action.withInput(
       .catch(() => undefined)
 
     // The master password is never stored in the settings file. A non-empty
-    // value is written byte-exact to rbw/.credentials; blank keeps the
+    // value is written byte-exact to the vault service's folder (only that
+    // service can read it, since :27); blank keeps the
     // existing file untouched.
     const vaultwarden = placedFromInput(
       i.vaultwarden,

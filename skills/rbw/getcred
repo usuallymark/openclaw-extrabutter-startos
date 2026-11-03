@@ -3,12 +3,12 @@
 #
 # If VAR is set in the environment ("Enter manually"), print it.
 # Otherwise, if VAR_FROM_VAULT is set ("Fetch from Vaultwarden", value
-# "<entry>:<field>"), fetch that field from Vaultwarden with rbw and print it.
+# "<entry>:<field>"), fetch that field from the vault service and print it.
 # The value is printed without a trailing newline. Exits non-zero, with a
 # message on stderr only, if the credential is not configured or the lookup
 # fails. When this shell has neither variable (e.g. a root attach shell),
-# both are read from the running gateway process. A failed or empty lookup
-# is retried once after `rbw sync`, so vault edits are picked up without a
+# both are read from the running gateway process. The vault service syncs
+# once and looks again on a miss, so vault edits are picked up without a
 # manual sync. Secrets never appear in error messages.
 set -u
 
@@ -69,47 +69,17 @@ if [ -z "$entry" ] || [ "$field" = "$pointer" ] || [ -z "$field" ]; then
   exit 1
 fi
 
-# Item and field names are matched without regard to case (rbw -i; rbw
-# always compares field names that way), so "NAS"/"nas" and
-# "API_Key"/"api_key" are the same. The documented standard is lowercase.
-
-# rbw locations used by the package (also set in the gateway environment).
-: "${XDG_CONFIG_HOME:=/data/.openclaw/rbw/config}"
-: "${XDG_CACHE_HOME:=/data/.openclaw/rbw/cache}"
-: "${XDG_RUNTIME_DIR:=/data/.openclaw/rbw/runtime}"
-export XDG_CONFIG_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR
-
-lookup() {
-  value=$(rbw get -i --field "$field" "$entry" 2>/dev/null) && [ -n "$value" ]
-}
-
-# rbw answers from its local copy of the vault, which it refreshes only
-# now and then, so an entry added or fixed in Vaultwarden may not be seen
-# yet. On a miss, sync once (quietly, with a time limit) and look again.
-# Error messages carry rbw's own reason (never the secret) and say when the
-# sync itself failed, which is how a refused Vaultwarden sign-in shows up.
-if ! lookup; then
-  t=
-  command -v timeout >/dev/null 2>&1 && t="timeout 30"
-  if out=$($t rbw sync 2>&1 >/dev/null); then
-    syncerr=
-  else
-    syncerr=$(printf '%s\n' "${out:-no answer within 30 s}" | head -n 1)
-  fi
-  if [ -n "$syncerr" ]; then
-    syncnote="; rbw sync also failed ($syncerr), so recent Vaultwarden changes are not here yet: if Vaultwarden is running, restart OpenClaw to sign in again"
-  else
-    syncnote=", also after rbw sync"
-  fi
-  if ! value=$(rbw get -i --field "$field" "$entry" 2>/dev/null); then
-    # Ask again only for rbw's error message (stdout, the secret, is dropped).
-    why=$(rbw get -i --field "$field" "$entry" 2>&1 >/dev/null | head -n 1)
-    echo "getcred: Vaultwarden lookup failed for entry \"$entry\", field \"$field\" ($var): ${why:-no answer from rbw}$syncnote" >&2
-    exit 1
-  fi
-  if [ -z "$value" ]; then
-    echo "getcred: Vaultwarden entry \"$entry\", field \"$field\" is empty ($var)$syncnote" >&2
-    exit 1
-  fi
+# The vault belongs to the vault service (since 2026.10.1:27); ask it. It
+# matches item names without regard to case (and field names always), syncs
+# once with Vaultwarden on a miss, and refuses items that belong to a
+# service (the email password, the Calendar sign-in, calendar links).
+# Errors carry its reason, never the secret.
+if ! value=$(/usr/local/bin/vault-client get "$entry" "$field"); then
+  # vault-client printed why (prefixed "vault: ") on stderr.
+  exit 1
+fi
+if [ -z "$value" ]; then
+  echo "getcred: Vaultwarden entry \"$entry\", field \"$field\" is empty ($var)" >&2
+  exit 1
 fi
 printf '%s' "$value"
