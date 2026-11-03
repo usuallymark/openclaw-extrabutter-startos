@@ -3,6 +3,7 @@ import { dirname } from 'path'
 import { sdk } from './sdk'
 import { authProfilesJson } from './fileModels/authProfiles.json'
 import { embeddingsJson } from './fileModels/embeddings.json'
+import { clearLinksAt } from './noLinks'
 
 // Live model lists for the Configure AI Provider dropdowns.
 //
@@ -182,6 +183,7 @@ function saveCache(p: CloudProvider, lists: Lists) {
     .then(async () => {
       const cache = await readCache()
       cache[p] = { ...lists, at: new Date().toISOString() }
+      await clearLinksAt(CACHE_FILE)
       await mkdir(dirname(CACHE_FILE), { recursive: true })
       await writeFile(CACHE_FILE, JSON.stringify(cache, null, 2))
     })
@@ -354,6 +356,7 @@ export async function ollamaServerModels(
                     models,
                     at: new Date().toISOString(),
                   }
+                  await clearLinksAt(CACHE_FILE)
                   await mkdir(dirname(CACHE_FILE), { recursive: true })
                   await writeFile(CACHE_FILE, JSON.stringify(cache, null, 2))
                 })

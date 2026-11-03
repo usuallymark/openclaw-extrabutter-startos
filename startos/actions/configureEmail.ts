@@ -613,7 +613,7 @@ const sending = Value.object(
     ),
     neverTo: addressList(
       'Never Send To',
-      'Addresses or domains the email agent must never send to. A message with any of these among its recipients is refused, even if you would approve it.',
+      'Addresses or domains the email agent must never send to. A message with any of these among its recipients is refused, even if you would approve it. An address also blocks the same mailbox written another way (sam+anything@…, and for Gmail with dots added); @example.com also blocks its subdomains.',
     ),
     others: Value.select({
       name: 'Anyone Else',

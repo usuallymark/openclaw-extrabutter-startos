@@ -1,5 +1,6 @@
 import { FileHelper, z } from '@start9labs/start-sdk'
 import { sdk } from '../sdk'
+import { linkSafe } from '../noLinks'
 
 // Default agent ID - openclaw uses 'main' for the primary agent
 export const defaultAgentId = 'main'
@@ -28,7 +29,7 @@ const shape = z.looseObject({
 
 // Not under `.openclaw/agents/<id>/agent/`: OpenClaw archives `auth-profiles.json`
 // there as a retired credential source and refuses an owner with an empty store.
-export const authProfilesJson = FileHelper.json(
+const authProfilesJsonRaw = FileHelper.json(
   { base: sdk.volumes.main, subpath: '.startos/auth-profiles.json' },
   shape,
 )
@@ -53,3 +54,10 @@ export type AuthProfile = TokenProfile | OAuthProfile
 export type AuthProfilesFile = {
   profiles: Record<string, AuthProfile>
 }
+
+// Writes clear any link on the way first (noLinks.ts): the folder is the
+// gateway user's.
+export const authProfilesJson = linkSafe(
+  authProfilesJsonRaw,
+  '.startos/auth-profiles.json',
+)

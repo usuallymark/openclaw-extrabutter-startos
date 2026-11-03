@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { sdk } from './sdk'
 import { inOpenclawContainer } from './gatewayContainer'
+import { clearLinksAt } from './noLinks'
 
 // Email, configured in Configure Email (since 2026.10.1:8; before that, in
 // Configure External Services → Email).
@@ -148,6 +149,7 @@ export async function gogKeyringPassword(): Promise<string> {
   )
   if (existing.trim()) return existing.trim()
   const fresh = randomBytes(32).toString('base64url')
+  await clearLinksAt(gogKeyringPasswordPath)
   await mkdir(dirname(gogKeyringPasswordPath), { recursive: true })
   await writeFile(gogKeyringPasswordPath, fresh, { mode: 0o600 })
   return fresh

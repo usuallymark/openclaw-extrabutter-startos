@@ -6,13 +6,17 @@
 //   to this server over /u/<id>/ws using a small app protocol; they never see
 //   gateway credentials and can only touch sessions under their own profile
 //   prefix (agent:main:<profileId>).
-// - Optional per-profile PIN, remembered per device with an HMAC cookie.
+// - A PIN on every profile (since 2026.10.1:26), remembered per device with
+//   an HMAC cookie. A profile without one is not served: the webchat drives
+//   the main agent with all its tools, so it is never open to anyone who can
+//   reach the address.
 // - File hand-off: a loopback-only /upload endpoint for the agent; download
 //   links on the public port expire after 24 h.
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { GatewayClient } from '@openclaw/gateway-client'
 import { WebSocketServer } from 'ws'
@@ -84,8 +88,7 @@ function loadConfig() {
 }
 const config = loadConfig()
 const profilesById = new Map(config.profiles.map((p) => [p.id, p]))
-const anyPin = config.profiles.some((p) => p.pinHash)
-log(`profiles: ${config.profiles.map((p) => p.id + (p.pinHash ? ' (PIN)' : '')).join(', ')}`)
+log(`profiles: ${config.profiles.map((p) => p.id + (p.pinHash ? ' (PIN)' : ' (no PIN: closed)')).join(', ')}`)
 
 // All webchat sessions live under their own "wc-" namespace, so a profile id
 // can never collide with OpenClaw's own session keys (agent:main:main,
@@ -182,7 +185,21 @@ function hasValidCookie(req, p) {
   const b = Buffer.from(want)
   return a.length === b.length && crypto.timingSafeEqual(a, b)
 }
-const authorized = (req, p) => !p.pinHash || hasValidCookie(req, p)
+// No PIN, no access: a profile without one is never served (see the top).
+const authorized = (req, p) => !!p.pinHash && hasValidCookie(req, p)
+
+// A push notification to the owner (ntfy, when set up in Configure External
+// Services); the helper reads its settings from the gateway. Never fatal.
+function notifyOwner(title, message) {
+  try {
+    const c = spawn('notify', ['--title', title, '--priority', 'high', '--tags', 'warning', message], {
+      stdio: 'ignore',
+      detached: true,
+    })
+    c.on('error', () => {})
+    c.unref()
+  } catch {}
+}
 
 const lockouts = new Map() // `${id}|${ip}` -> { fails, until, strikes }
 const profileFails = new Map() // id -> { times: number[], until }
@@ -674,6 +691,10 @@ async function handleLogin(req, res, p) {
     pf.until = now + PROFILE_LOCK_MS
     pf.times = []
     log(`profile ${p.id}: too many wrong PINs from several addresses, locked for 15 min`)
+    notifyOwner(
+      `${config.appName} webchat`,
+      `Profile "${p.name}" was locked for 15 minutes after ${PROFILE_MAX_FAILS} wrong PINs in 10 minutes. If that was not you or someone you know, someone is guessing its PIN.`,
+    )
   }
   profileFails.set(p.id, pf)
   l.fails += 1
@@ -681,6 +702,13 @@ async function handleLogin(req, res, p) {
     l.strikes += 1
     l.until = Date.now() + BASE_LOCK_MS * 2 ** (l.strikes - 1)
     l.fails = 0
+    log(`profile ${p.id}: ${MAX_FAILS} wrong PINs from ${ip}, locked for ${Math.round((l.until - Date.now()) / 60000)} min`)
+    if (l.strikes >= 2) {
+      notifyOwner(
+        `${config.appName} webchat`,
+        `Profile "${p.name}": repeated wrong PINs from ${ip} (locked ${l.strikes} times). If that was not you or someone you know, someone is guessing its PIN.`,
+      )
+    }
   }
   lockouts.set(lk, l)
   return page(l.until > Date.now() ? 'Too many attempts. Try again later.' : 'Incorrect PIN.')
@@ -709,7 +737,7 @@ sweepUploads()
 setInterval(sweepUploads, 3600_000).unref()
 
 function handleDownload(req, res, token, requested) {
-  if (anyPin && !config.profiles.some((p) => authorized(req, p))) return send(res, 403, 'Forbidden')
+  if (!config.profiles.some((p) => authorized(req, p))) return send(res, 403, 'Forbidden')
   const dir = path.join(UPLOADS, token)
   let meta
   try {
@@ -816,10 +844,16 @@ const server = http.createServer(async (req, res) => {
     }
     return send(res, 200, JSON.stringify(manifest), { 'Content-Type': 'application/manifest+json' })
   }
-  if (sub === '/login') {
-    if (!p.pinHash) return send(res, 302, '', { Location: `/u/${p.id}/` })
-    return handleLogin(req, res, p)
+  if (!p.pinHash) {
+    // Never served without a PIN (see the top). Say how to fix it.
+    return send(
+      res,
+      403,
+      `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(config.appName)}</title><body style="font-family:system-ui,sans-serif;background:#0a0a0a;color:#ddd;padding:24px;line-height:1.5"><h1 style="font-size:20px">${esc(p.name)} needs a PIN</h1><p>This chat is closed until the profile has a PIN. In StartOS, open OpenClaw → Actions → Configure Webchat, give the profile "${esc(p.name)}" a PIN of at least 6 digits, and save.</p></body>`,
+      { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+    )
   }
+  if (sub === '/login') return handleLogin(req, res, p)
   if (sub === '/logout' && req.method === 'POST') {
     return send(res, 303, '', {
       Location: `/u/${p.id}/`,

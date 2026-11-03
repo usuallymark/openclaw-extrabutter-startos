@@ -147,13 +147,23 @@ def main():
     try:
         if os.path.isdir(WORKSPACE) and not os.path.islink(WORKSPACE):
             own_dir(OUTBOX, node.pw_uid, mail.pw_gid, 0o2770)
-            for n in os.listdir(OUTBOX):
-                p = os.path.join(OUTBOX, n)
-                st2 = os.lstat(p)
-                if stat.S_ISREG(st2.st_mode):
-                    os.chown(p, st2.st_uid, mail.pw_gid, follow_symlinks=False)
-                    os.chmod(p, (st2.st_mode & 0o7777) | 0o040)
             outbox_fd = open_dir_fd(OUTBOX, node.pw_uid, mail.pw_gid)
+            # Files already there: group openclaw-mail, group-readable. Each
+            # is changed through its own descriptor (opened without following
+            # a link), never by path, and keeps no setuid/setgid bit: the
+            # gateway user owns this folder and could swap a file for a link.
+            for n in os.listdir(outbox_fd):
+                try:
+                    fd = os.open(n, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY, dir_fd=outbox_fd)
+                except OSError:
+                    continue  # a link, or gone
+                try:
+                    st2 = os.fstat(fd)
+                    if stat.S_ISREG(st2.st_mode):
+                        os.fchown(fd, st2.st_uid, mail.pw_gid)
+                        os.fchmod(fd, (st2.st_mode & 0o777) | 0o040)
+                finally:
+                    os.close(fd)
     except (OSError, SystemExit) as e:
         say(f'the workspace folder mail-outbox could not be prepared ({e}); drafts cannot have attachments')
 

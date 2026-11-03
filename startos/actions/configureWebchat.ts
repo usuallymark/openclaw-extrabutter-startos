@@ -6,6 +6,7 @@ import {
   type WebchatProfile,
   webchatJson,
 } from '../fileModels/webchat.json'
+import { clearLinks } from '../noLinks'
 
 const { InputSpec, Value, Variants } = sdk
 
@@ -68,19 +69,13 @@ const profileSpec = InputSpec.of({
   pin: Value.text({
     name: 'PIN',
     description:
-      'Optional. 4–12 digits, asked once per device. Leave blank to keep the current PIN (or to have no PIN). Setting a new PIN signs out every device for this profile.',
+      'Required: 6–12 digits, asked once per device. A profile without a PIN is closed (the webchat reaches the main agent and all its tools). Leave blank to keep the current PIN. Setting a new PIN signs out every device for this profile.',
     required: false,
     default: null,
     masked: true,
     placeholder: 'Leave blank to keep',
     inputmode: 'tel',
-    patterns: [{ regex: '^\\d{4,12}$', description: '4–12 digits.' }],
-  }),
-  removePin: Value.toggle({
-    name: 'Remove PIN',
-    description:
-      "Turn on to remove this profile's PIN (anyone on your network can then open it).",
-    default: false,
+    patterns: [{ regex: '^\\d{6,12}$', description: '6–12 digits.' }],
   }),
 })
 
@@ -133,7 +128,7 @@ const inputSpec = InputSpec.of({
   webchat: Value.union({
     name: 'Webchat',
     description:
-      "A mobile-friendly chat app for OpenClaw with one profile per person, each installable on a phone's home screen. Each profile only sees its own conversations. It is reachable by anyone who can reach this server, so add a PIN to any profile that should be private.",
+      "A mobile-friendly chat app for OpenClaw with one profile per person, each installable on a phone's home screen. Each profile only sees its own conversations. It is reachable by anyone who can reach this server, so every profile needs a PIN.",
     default: 'disabled',
     variants: Variants.of({
       disabled: { name: 'Disabled', spec: InputSpec.of({}) },
@@ -213,7 +208,7 @@ export const configureWebchat = sdk.Action.withInput(
   async () => ({
     name: 'Configure Webchat',
     description:
-      'Turn on the mobile-friendly webchat and set up a profile for each person (name, color, optional PIN, preset conversations). Saving starts or stops the webchat; the rest of OpenClaw keeps running.',
+      'Turn on the mobile-friendly webchat and set up a profile for each person (name, color, PIN, preset conversations). Saving starts or stops the webchat; the rest of OpenClaw keeps running.',
     warning: null,
     allowedStatuses: 'any',
     group: null,
@@ -249,7 +244,6 @@ export const configureWebchat = sdk.Action.withInput(
             greeting: p.greeting || null,
             presets: p.presets.join('\n') || null,
             pin: null, // never echoed
-            removePin: false,
           })),
         },
       },
@@ -285,10 +279,7 @@ export const configureWebchat = sdk.Action.withInput(
         const old = prevById.get(p.id)
         let pinHash = old?.pinHash ?? null
         let pinVersion = old?.pinVersion ?? 0
-        if (p.removePin) {
-          if (pinHash) pinVersion += 1
-          pinHash = null
-        } else if (p.pin) {
+        if (p.pin) {
           pinHash = hashPin(String(p.pin))
           pinVersion += 1
         }
@@ -302,9 +293,18 @@ export const configureWebchat = sdk.Action.withInput(
           pinVersion,
         }
       })
+      // Every profile needs a PIN (it reaches the main agent and all its
+      // tools); one without would be closed, so refuse before saving.
+      const noPin = profiles.filter((p) => !p.pinHash).map((p) => p.name)
+      if (noPin.length) {
+        throw new Error(
+          `Give every profile a PIN of 6–12 digits: ${noPin.join(', ')} has none. The webchat reaches the main agent and all its tools, so a profile without a PIN is never opened.`,
+        )
+      }
       if (v.removeAvatar) {
         await removeAvatars()
       } else if (avatar) {
+        await clearLinks(`.openclaw/webchat/avatar.${avatar.ext}`)
         await mkdir(webchatDir, { recursive: true })
         await removeAvatars()
         await writeFile(`${webchatDir}/avatar.${avatar.ext}`, avatar.bytes, {

@@ -96,10 +96,11 @@ Modeled on Configure External Services. Saving restarts OpenClaw.
     - **Greeting prompt** — optional textarea; sent as the first message of a
       new conversation
     - **Preset conversations** — optional textarea, one title per line
-    - **PIN** — optional, masked, 4–12 digits; blank on edit keeps the
-      current PIN. A separate toggle **Remove PIN** clears it.
+    - **PIN** — required (since 2026.10.1:26), masked, 6–12 digits; blank
+      on edit keeps the current PIN. Saving refuses a profile without one,
+      and the server never serves a profile without one.
 - At least one profile is required when enabled. Default profile on first
-  enable: id `me`, name `Me`, Gold, no PIN.
+  enable: id `me`, name `Me`, Gold; its PIN must be entered before saving.
 
 Stored in `/data/.openclaw/webchat/config.json` via a file model. PINs are
 stored only as scrypt hashes, never echoed back.

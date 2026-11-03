@@ -19,6 +19,7 @@ import {
   CAL_WRITE_RULES,
 } from './calendarAgentFiles'
 import { VIA_APPS_MARKER, VIA_APPS_RULE } from './appsAgentFiles'
+import { clearLinksAt } from './noLinks'
 
 // The calendar service and the calendar agent (since 2026.10.1:15; read
 // only). Built like the mail service (mailService.ts):
@@ -202,6 +203,8 @@ export async function writeCalendarAgentWorkspace(
   settings: CalendarSettings,
   emailTrusted: string[] = [],
 ) {
+  for (const f of ['memory', 'AGENTS.md', 'SOUL.md', 'IDENTITY.md'])
+    await clearLinksAt(ws(f))
   await mkdir(ws('memory'), { recursive: true })
   const extra = (settings.agent?.extraInstructions ?? '').trim()
   const trusted = trustedOrganizersOf(settings, emailTrusted)

@@ -1,5 +1,6 @@
 import { FileHelper, z } from '@start9labs/start-sdk'
 import { sdk } from '../sdk'
+import { linkSafe } from '../noLinks'
 
 // Webchat configuration, written by Configure Webchat and read by the webchat
 // server (/opt/webchat/server.mjs). PINs are stored only as scrypt hashes.
@@ -31,7 +32,14 @@ const shape = z.looseObject({
 
 export type WebchatProfile = z.infer<typeof profileShape>
 
-export const webchatJson = FileHelper.json(
+const webchatJsonRaw = FileHelper.json(
   { base: sdk.volumes.main, subpath: '.openclaw/webchat/config.json' },
   shape,
+)
+
+// Writes clear any link on the way first (noLinks.ts): the folder is the
+// gateway user's.
+export const webchatJson = linkSafe(
+  webchatJsonRaw,
+  '.openclaw/webchat/config.json',
 )

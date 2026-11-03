@@ -612,8 +612,11 @@ default**.
    picker; each profile lives at `/u/<id>/`. Use **Add to Home Screen** to
    install it as an app.
 
-**Privacy:** anyone who can reach the Webchat address can open profiles that
-have no PIN. Each profile only sees its own conversations. A PIN is asked once
+**Privacy:** every profile needs a PIN of 6–12 digits; a profile without one
+stays closed. Each profile only sees its own conversations, but every profile
+talks to the same agent with all its tools, so give a profile only to someone
+you would let use the agent. If ntfy is set up, you get a notification when
+someone keeps entering wrong PINs. A PIN is asked once
 per device and remembered for the period you choose; setting a new PIN signs
 out every device for that profile. On iPhone, the home-screen app asks once
 more after installing because it keeps its own storage.

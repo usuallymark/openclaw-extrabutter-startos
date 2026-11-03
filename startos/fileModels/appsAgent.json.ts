@@ -1,5 +1,6 @@
 import { FileHelper, z } from '@start9labs/start-sdk'
 import { sdk } from '../sdk'
+import { linkSafe } from '../noLinks'
 
 // Configure Apps Agent (since 2026.10.1:20): the apps agent's display name,
 // model and extra instructions. No secrets.
@@ -17,7 +18,14 @@ export const APPS_AGENT_DEFAULTS: AppsAgentSettings = {
   model: 'default',
 }
 
-export const appsAgentJson = FileHelper.json(
+const appsAgentJsonRaw = FileHelper.json(
   { base: sdk.volumes.main, subpath: '.startos/apps-agent.json' },
   shape,
+)
+
+// Writes clear any link on the way first (noLinks.ts): the folder is the
+// gateway user's.
+export const appsAgentJson = linkSafe(
+  appsAgentJsonRaw,
+  '.startos/apps-agent.json',
 )

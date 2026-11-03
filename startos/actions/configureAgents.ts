@@ -12,6 +12,7 @@ import {
   GROK_MODELS,
   OPENAI_MODELS,
 } from './configureApiCredentials'
+import { clearLinksAt } from '../noLinks'
 
 const { InputSpec, Value } = sdk
 
@@ -335,6 +336,7 @@ export const configureAgents = sdk.Action.withInput(
 
   async () => {
     const rows = rowsFrom(await liveConfig())
+    await clearLinksAt(SNAPSHOT).catch(() => {})
     await writeFile(SNAPSHOT, JSON.stringify(rows)).catch(() => {})
     // Model values are validated against the dynamic list at submit.
     return {
@@ -397,6 +399,7 @@ export const configureAgents = sdk.Action.withInput(
       )
     }
     // The next opening of the form starts from the new state.
+    await clearLinksAt(SNAPSHOT).catch(() => {})
     await writeFile(
       SNAPSHOT,
       JSON.stringify(rowsFrom(await liveConfig())),

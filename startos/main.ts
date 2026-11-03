@@ -85,12 +85,14 @@ import {
   externalTrigger,
   probeHttp,
   probeMail,
+  probeServerAccess,
   probeCalendar,
   calendarAnswers,
   mailAnswers,
   probeVault,
   vaultTrigger,
 } from './healthChecks'
+import { clearLinks } from './noLinks'
 
 // Maps each provider's auth-profile id to the env var OpenClaw reads its API
 // key from. Keep in sync with MANAGED_PROVIDERS in configureApiCredentials.ts.
@@ -140,9 +142,16 @@ fi
 exit 0
 `
 
-// chown -R node:node /data, skipping the mail and calendar services' folders.
+// chown -R node:node everything in /data, skipping the mail and calendar
+// services' folders. /data itself is root's, group node, with the sticky bit
+// (since 2026.10.1:26): the gateway user still creates and replaces its own
+// files there, but it can no longer rename or replace the services' folders
+// (owning /data let it swap a service's folder for one of its own, with its
+// own sending rules and approvals in it). The launchers refuse to start
+// otherwise.
 const CHOWN_SCRIPT = `
-chown node:node /data
+chown root:node /data
+chmod 1775 /data
 for p in /data/* /data/.[!.]* /data/..?*; do
   [ -e "$p" ] || [ -L "$p" ] || continue
   [ "$p" = /data/.openclaw-mail ] && continue
@@ -719,6 +728,14 @@ export const main = sdk.setupMain(async ({ effects }) => {
               return null
             }
 
+            // The rbw folder is the gateway user's: clear any link it put
+            // where the package writes, or chmods (noLinks.ts).
+            for (const f of [
+              '.openclaw/rbw/pinentry-file.sh',
+              '.openclaw/rbw/.credentials',
+              '.openclaw/rbw/config/rbw/config.json',
+            ])
+              await clearLinks(f)
             await subcontainer.writeFile(RBW_PINENTRY, PINENTRY_SCRIPT, {
               mode: 0o755,
             })
@@ -879,6 +896,15 @@ export const main = sdk.setupMain(async ({ effects }) => {
         },
       },
       requires: ['primary'],
+    })
+    .addHealthCheck('server-access', {
+      ready: {
+        display: 'Server Access',
+        fn: () => probeServerAccess(openclawSub),
+        trigger: externalTrigger,
+        gracePeriod: 0,
+      },
+      requires: ['check-login'],
     })
     .addOneshot('check-simplex-plugin', {
       subcontainer: openclawSub,

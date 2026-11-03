@@ -129,6 +129,46 @@ def matches(addr, entries):
     return False
 
 
+_GMAIL = {'gmail.com', 'googlemail.com'}
+
+
+def _canon(addr):
+    """The mailbox an address reaches, as far as can be told: lower case,
+    no trailing dot on the domain, no "+tag", and for Gmail no dots in the
+    name (Gmail ignores them) and googlemail.com as gmail.com."""
+    addr = _norm(addr)
+    local, at, dom = addr.rpartition('@')
+    if not at:
+        return addr
+    dom = dom.rstrip('.')
+    local = local.split('+', 1)[0] or local
+    if dom in _GMAIL:
+        local, dom = local.replace('.', ''), 'gmail.com'
+    return f'{local}@{dom}'
+
+
+def blocked(addr, entries):
+    """Never Send To: an address blocks the same mailbox written any other
+    way (sam+x@, dots in a Gmail name, a trailing dot); "@domain" blocks that
+    domain and its subdomains. Wider than matches() on purpose: this list
+    only ever stops mail."""
+    c = _canon(addr)
+    dom = c.rpartition('@')[2]
+    for e in entries:
+        e = _norm(e)
+        if not e:
+            continue
+        if e.startswith('@'):
+            d = e[1:].rstrip('.')
+            if d in _GMAIL:
+                d = 'gmail.com'
+            if d and (dom == d or dom.endswith('.' + d)):
+                return True
+        elif c == _canon(e) or _norm(addr) == e:
+            return True
+    return False
+
+
 def _short(s, n):
     t = ' '.join(str(s or '').split())
     return t[:n - 1] + '…' if len(t) > n else t
@@ -179,11 +219,16 @@ class Outbox:
     # ── rules ───────────────────────────────────────────────────────────────
 
     def rules(self):
-        """The owner's rules. Unreadable or missing: drafts only (safe)."""
+        """The owner's rules. Unreadable, missing, or not exactly the keys
+        the package writes (mailService.ts writeSendingRules): drafts only
+        (safe). The exact keys keep out a file the package was tricked into
+        writing here."""
         try:
             with open(self.rules_path) as f:
                 r = json.load(f)
         except (OSError, ValueError):
+            return dict(DEFAULT_RULES)
+        if not isinstance(r, dict) or set(r) != set(DEFAULT_RULES):
             return dict(DEFAULT_RULES)
         out = dict(DEFAULT_RULES)
         if r.get('level') in ('off', 'drafts', 'rules'):
@@ -308,7 +353,7 @@ class Outbox:
             return 'refuse', 'Mail sending is Drafts only'
         if not rcpts:
             return 'refuse', 'the draft has no recipients'
-        never = [a for a in rcpts if matches(a, r['neverTo'])]
+        never = [a for a in rcpts if blocked(a, r['neverTo'])]
         if never:
             return 'refuse', f'Never send to: {", ".join(never)}'
         if kind == 'forward':
@@ -493,7 +538,7 @@ class Outbox:
             return
         raw = base64.b64decode(item['raw'])
         rcpts = recipients(email.message_from_bytes(raw, policy=policy.SMTP))
-        never = [a for a in rcpts if matches(a, self.rules()['neverTo'])]
+        never = [a for a in rcpts if blocked(a, self.rules()['neverTo'])]
         if never:
             self._result(item, 'refused', f'Never send to: {", ".join(never)} (changed after the request)')
             return

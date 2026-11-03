@@ -8,9 +8,19 @@ a tool answer, the health line or the activity log. Only the name does.
 Feeds are fetched when a tool needs them, at most every CACHE_S seconds
 per link (with If-None-Match / If-Modified-Since). When a fetch fails, the
 last good copy keeps answering and the error is reported with it.
+
+Where a fetch may go (since 2026.10.1:26), checked on the address actually
+connected to, so a name that resolves somewhere else later changes nothing:
+never this machine (loopback), link-local or other special addresses; your
+own network (private addresses) only when the link itself is there, never
+by a redirect from a server outside it. A whole download takes at most
+TIMEOUT_S seconds, however slowly the server sends.
 """
 
+import http.client
+import ipaddress
 import re
+import socket
 import threading
 import time
 import urllib.error
@@ -25,6 +35,71 @@ MAX_REDIRECTS = 5
 LINK_PREFIX = 'link:'
 
 
+class AddressRefused(OSError):
+    """A connection to an address the links may not reach."""
+
+
+_hop = threading.local()  # per download: where its first connection went
+
+
+def _kind(ip):
+    """'blocked', 'lan' or 'public' for a connected peer address."""
+    a = ipaddress.ip_address(ip.split('%', 1)[0])
+    if getattr(a, 'ipv4_mapped', None):
+        a = a.ipv4_mapped
+    if (a.is_loopback or a.is_link_local or a.is_multicast or a.is_unspecified
+            or a.is_reserved):
+        return 'blocked'
+    if a.is_private or (a.version == 4 and a in ipaddress.ip_network('100.64.0.0/10')):
+        return 'lan'
+    return 'public'
+
+
+def _checked_connection(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, *a, **k):
+    sock = socket.create_connection(address, timeout, source_address, *a, **k)
+    watch = getattr(_hop, 'watch', None)
+    if watch is not None:
+        watch['socks'].append(sock)
+        if watch['killed']:
+            sock.close()
+            raise TimeoutError('timed out')
+    try:
+        kind = _kind(sock.getpeername()[0])
+        first = getattr(_hop, 'first', None)
+        if kind == 'blocked':
+            raise AddressRefused('the calendar link pointed at this server itself or a special address; refused')
+        if first is None:
+            _hop.first = kind
+        elif kind == 'lan' and first != 'lan':
+            raise AddressRefused('the calendar link redirected into your own network; refused')
+    except BaseException:
+        sock.close()
+        raise
+    return sock
+
+
+class _HTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._create_connection = _checked_connection
+
+
+class _HTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._create_connection = _checked_connection
+
+
+class _HTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_HTTPConnection, req)
+
+
+class _HTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_HTTPSConnection, req, context=self._context)
+
+
 class _Redirects(urllib.request.HTTPRedirectHandler):
     """Follow redirects only to http(s), and only a few."""
     max_redirections = MAX_REDIRECTS
@@ -37,7 +112,11 @@ class _Redirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-_OPENER = urllib.request.build_opener(_Redirects)
+# No proxy handler: a fetch always goes straight to the address checked.
+_OPENER = urllib.request.OpenerDirector()
+for _h in (urllib.request.UnknownHandler(), _HTTPHandler(), _HTTPSHandler(), urllib.request.HTTPDefaultErrorHandler(),
+           _Redirects(), urllib.request.HTTPErrorProcessor()):
+    _OPENER.add_handler(_h)
 
 
 def normalize_url(url):
@@ -106,11 +185,28 @@ class Link:
         if self.feed is not None and self._modified:
             headers['If-Modified-Since'] = self._modified
         req = urllib.request.Request(self.url, headers=headers)
+        # The whole exchange (connecting, redirects, headers, body) ends at
+        # TIMEOUT_S: a timer shuts the connections down, however slowly the
+        # server sends (a per-read timeout alone never ends a slow drip).
+        watch = {'socks': [], 'killed': False}
+        _hop.first, _hop.watch = None, watch
+        timer = threading.Timer(TIMEOUT_S, _kill, [watch])
+        timer.daemon = True
+        timer.start()
         try:
             with _OPENER.open(req, timeout=TIMEOUT_S) as r:
-                data = r.read(MAX_FEED + 1)
-                if len(data) > MAX_FEED:
-                    raise ValueError(f'the calendar is larger than {MAX_FEED // (1024 * 1024)} MB')
+                chunks, size = [], 0
+                while True:
+                    part = r.read(65536)
+                    if not part:
+                        break
+                    chunks.append(part)
+                    size += len(part)
+                    if size > MAX_FEED:
+                        raise ValueError(f'the calendar is larger than {MAX_FEED // (1024 * 1024)} MB')
+                if watch['killed']:
+                    raise TimeoutError('timed out')
+                data = b''.join(chunks)
                 self._etag = r.headers.get('ETag') or ''
                 self._modified = r.headers.get('Last-Modified') or ''
                 charset = r.headers.get_content_charset() or 'utf-8'
@@ -118,10 +214,28 @@ class Link:
             if e.code == 304 and self.feed is not None:
                 return None
             raise
+        except (OSError, http.client.HTTPException) as e:
+            if watch['killed']:
+                raise TimeoutError('timed out') from None
+            if isinstance(e, http.client.HTTPException):
+                raise ValueError('the calendar link gave an answer that could not be read') from None
+            raise
+        finally:
+            timer.cancel()
+            _hop.watch = None
         try:
             return data.decode(charset, 'replace')
         except LookupError:
             return data.decode('utf-8', 'replace')
+
+
+def _kill(watch):
+    watch['killed'] = True
+    for sock in watch['socks']:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
 
 
 def _why(e):
@@ -131,8 +245,12 @@ def _why(e):
             return (f'the calendar link was refused (HTTP {e.code}); it may have been reset or made private, '
                     'so copy the current secret address again')
         return f'the calendar link answered HTTP {e.code}'
+    if isinstance(e, AddressRefused):
+        return str(e)
     if isinstance(e, urllib.error.URLError):
         r = e.reason
+        if isinstance(r, AddressRefused):
+            return str(r)
         if isinstance(r, str) and 'redirect' in r:
             return r
         return f'the calendar link could not be reached ({r.__class__.__name__ if not isinstance(r, str) else "network error"})'

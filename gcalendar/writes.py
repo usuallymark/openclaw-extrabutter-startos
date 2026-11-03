@@ -25,6 +25,7 @@ passed.
 
 import json
 import os
+import re
 import threading
 import time
 import urllib.parse
@@ -247,7 +248,10 @@ class Writer:
 
     def _own_event(self, event_id):
         eid = str(event_id or '').strip()
-        if not eid or len(eid) > 1024:
+        # Google's event ids are letters, digits and "_" (base32hex, plus
+        # "_<time>" for one date of a recurring event): nothing else ever
+        # goes into the request path (no "..", no "/").
+        if not eid or len(eid) > 1024 or not re.fullmatch(r'[A-Za-z0-9_]+', eid):
             raise ToolError('event_id: the id from create, list or search (on the calendar "' + self.name + '")')
         try:
             return self.svc.google.call('GET', self._events_path(eid))

@@ -16,6 +16,14 @@ owner who approves the mail. So:
   The same for srcset, background= and url(...) in CSS (data: images are
   allowed; they are already inside the mail).
 - Links (http, https, mailto) are allowed and listed with their domains.
+  A link a browser would read differently from the list (a backslash, a
+  space, a user name before "@" in the address) is refused, and an
+  international domain is listed in its xn-- form, so a look-alike shows.
+- CSS a mail client could still load something from: escapes (\\75rl(),
+  image-set(), @font-face and @import are refused, whatever the spelling.
+- Comments may not hold markup: Outlook shows what is inside
+  <!--[if mso]> … <![endif]-->, and a checker that skips comments would
+  never see it.
 - Hidden text (text a person would not see) is counted and searched for
   instructions to an AI, with the same checks as incoming mail.
 
@@ -71,6 +79,13 @@ class _Scan(HTMLParser):
             self.problems.append(text)
 
     def _css(self, css, where):
+        css = re.sub(r'/\*.*?(\*/|$)', ' ', css, flags=re.S)
+        if '\\' in css:
+            self._problem(f'a backslash (CSS escape) in {where}: write the CSS without escapes')
+        if re.search(r'image-set\s*\(', css, re.I):
+            self._problem(f'image-set() in {where} (can load an image from outside)')
+        if re.search(r'@font-face', css, re.I):
+            self._problem(f'@font-face in {where} (loads a font from outside)')
         if re.search(r'@import', css, re.I):
             self._problem(f'CSS @import in {where} (loads a style sheet from outside)')
         if re.search(r'expression\s*\(|behavior\s*:|-moz-binding', css, re.I):
@@ -134,6 +149,10 @@ class _Scan(HTMLParser):
                 if not u or u.startswith('#'):
                     continue
                 if low.startswith(('http:', 'https:', 'mailto:')):
+                    why = _link_problem(u)
+                    if why:
+                        self._problem(f'the link "{u[:60]}" {why}')
+                        continue
                     self.links.append(u)
                     continue
                 self._problem(f'a link to "{u[:60]}": only http, https and mailto links are allowed')
@@ -154,12 +173,53 @@ class _Scan(HTMLParser):
         if self.in_style:
             self._css(data, '<style>')
 
+    def handle_comment(self, data):
+        if '<' in data or '>' in data or re.match(r'\s*\[\s*if\b', data, re.I):
+            self._problem('a comment with markup in it (Outlook shows <!--[if mso]> blocks): '
+                          'leave comments out, or keep them to plain words')
+
+
+def _link_problem(url):
+    """Why a link would be read differently by a browser than by this
+    list, or ''."""
+    if '\\' in url:
+        return 'has a backslash (browsers read it as a slash)'
+    if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in url):
+        return 'has a space or control character'
+    if url.lower().startswith('mailto:'):
+        return ''
+    rest = url.split(':', 1)[1]
+    if not rest.startswith('//'):
+        return 'has no address after the scheme'
+    authority = re.split(r'[/?#]', rest[2:], maxsplit=1)[0]
+    if '@' in authority:
+        return 'has a user name before "@" (the address it opens is after the @)'
+    try:
+        if not urlsplit(url).hostname:
+            return 'has no domain'
+    except ValueError:
+        return 'cannot be read'
+    return ''
+
+
+def _show_host(host):
+    """A domain as Review Agent Actions lists it: an international one in
+    its xn-- form with a note, so a look-alike of a familiar name shows."""
+    host = (host or '?').lower().rstrip('.')
+    try:
+        ascii_host = host.encode('idna').decode('ascii')
+    except UnicodeError:
+        return f'{host} (unreadable international name)'
+    if ascii_host != host or any(p.startswith('xn--') for p in ascii_host.split('.')):
+        return f'{ascii_host} (international name; check it is the one you expect)'
+    return host
+
 
 def _domain(url):
     if url.lower().startswith('mailto:'):
-        return 'mailto:' + url[7:].split('?')[0].split('@')[-1].lower()
+        return 'mailto:' + _show_host(url[7:].split('?')[0].split('@')[-1])
     try:
-        return (urlsplit(url).hostname or '?').lower()
+        return _show_host(urlsplit(url).hostname)
     except ValueError:
         return '?'
 

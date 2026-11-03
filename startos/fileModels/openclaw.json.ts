@@ -1,5 +1,6 @@
 import { FileHelper, z } from '@start9labs/start-sdk'
 import { sdk } from '../sdk'
+import { linkSafe } from '../noLinks'
 
 const telegramChannelShape = z.looseObject({
   enabled: z.boolean(),
@@ -158,7 +159,11 @@ const shape = z.looseObject({
     .catch(undefined),
 })
 
-export const openclawJson = FileHelper.json(
+const openclawJsonRaw = FileHelper.json(
   { base: sdk.volumes.main, subpath: '.openclaw/openclaw.json' },
   shape,
 )
+
+// Writes clear any link on the way first (noLinks.ts): the folder is the
+// gateway user's.
+export const openclawJson = linkSafe(openclawJsonRaw, '.openclaw/openclaw.json')

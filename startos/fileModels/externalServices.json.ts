@@ -1,5 +1,6 @@
 import { FileHelper, z } from '@start9labs/start-sdk'
 import { sdk } from '../sdk'
+import { linkSafe } from '../noLinks'
 
 // A credential is either fetched from Vaultwarden at runtime or entered manually.
 const credentialShape = z
@@ -95,7 +96,14 @@ const shape = z.looseObject({
   gitea: urlWithKeyShape.catch(OFF),
 })
 
-export const externalServicesJson = FileHelper.json(
+const externalServicesJsonRaw = FileHelper.json(
   { base: sdk.volumes.main, subpath: '.openclaw/external-services.json' },
   shape,
+)
+
+// Writes clear any link on the way first (noLinks.ts): the folder is the
+// gateway user's.
+export const externalServicesJson = linkSafe(
+  externalServicesJsonRaw,
+  '.openclaw/external-services.json',
 )

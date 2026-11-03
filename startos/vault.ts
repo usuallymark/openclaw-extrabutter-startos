@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'fs/promises'
 import { dirname } from 'path'
 import { sdk } from './sdk'
+import { clearLinksAt } from './noLinks'
 
 // ── Paths (inside the openclaw subcontainer; /data = main volume) ───────────
 export const RBW_DIR = '/data/.openclaw/rbw'
@@ -28,6 +29,7 @@ export const RBW_ENV = {
  */
 export async function writeMasterPassword(password: string) {
   const exact = password.replace(/\r?\n$/, '')
+  await clearLinksAt(credentialsVolumePath)
   await mkdir(dirname(credentialsVolumePath), { recursive: true })
   await writeFile(credentialsVolumePath, exact, { mode: 0o600 })
 }

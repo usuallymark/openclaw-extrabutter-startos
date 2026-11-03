@@ -1,6 +1,7 @@
 import { chmod, mkdir, writeFile } from 'fs/promises'
 import { dirname } from 'path'
 import { sdk } from './sdk'
+import { clearLinksAt } from './noLinks'
 
 // Secrets for the gateway (provider API keys, manually entered service
 // keys, gog's keyring password) do not go on the daemon's command line.
@@ -19,6 +20,7 @@ const shQuote = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`
 
 /** Write the gateway's secret environment (rewritten at every start). */
 export async function writeGatewaySecrets(vars: Record<string, string>) {
+  await clearLinksAt(secretsPath)
   await mkdir(dirname(secretsPath), { recursive: true })
   const lines = Object.entries(vars)
     .filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))

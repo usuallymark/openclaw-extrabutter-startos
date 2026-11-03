@@ -22,6 +22,7 @@ import secrets
 import time
 
 ID = re.compile(r'[0-9]{14}-[0-9a-f]{6}')
+DECISION_KEYS = {'decision', 'mailing'}
 
 
 class ApprovalQueue:
@@ -67,8 +68,11 @@ class ApprovalQueue:
                 continue
         return out
 
-    def decision(self, qid):
-        """'approve', 'reject' or None (not decided yet)."""
+    def _record(self, qid):
+        """The owner's decision record exactly as agentctl writes it
+        ({"decision": ..., optionally "mailing": ...}), or None. Anything
+        else (other keys, another shape) is not a decision: a file the
+        package was tricked into writing there would not look like one."""
         if not self.decisions_dir or not ID.fullmatch(qid):
             return None
         try:
@@ -76,19 +80,22 @@ class ApprovalQueue:
                 d = json.load(f)
         except (OSError, ValueError):
             return None
-        return d.get('decision') if d.get('decision') in ('approve', 'reject') else None
+        if (not isinstance(d, dict) or not set(d) <= DECISION_KEYS
+                or d.get('decision') not in ('approve', 'reject')
+                or not isinstance(d.get('mailing', ''), str)):
+            return None
+        return d
+
+    def decision(self, qid):
+        """'approve', 'reject' or None (not decided yet)."""
+        d = self._record(qid)
+        return d['decision'] if d else None
 
     def decision_extra(self, qid):
         """The rest of the owner's decision record (e.g. a mailing to make
         of a mail item), {} when there is none."""
-        if not self.decisions_dir or not ID.fullmatch(qid):
-            return {}
-        try:
-            with open(os.path.join(self.decisions_dir, f'{qid}.json')) as f:
-                d = json.load(f)
-        except (OSError, ValueError):
-            return {}
-        return {k: v for k, v in d.items() if k != 'decision'} if isinstance(d, dict) else {}
+        d = self._record(qid)
+        return {k: v for k, v in d.items() if k != 'decision'} if d else {}
 
     def resolve(self, item, outcome, detail='', **extra):
         """Record the outcome and remove the item from the queue."""

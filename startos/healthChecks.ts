@@ -969,3 +969,33 @@ export async function probeCalendar(
       }
   }
 }
+
+/**
+ * Whether start-cli is signed in (Login to StartOS). Signed in, the main
+ * agent can run start-cli as root on the whole server (package attach), so
+ * nothing in this package (the separate users of the email and calendar
+ * services, their rules and approvals) holds against it. Said plainly in
+ * the health line, so whoever turns it on sees what it costs.
+ */
+export async function probeServerAccess(sub: Sub): Promise<Result> {
+  try {
+    const res = await sub.exec(['start-cli', 'auth', 'session', 'list'], {
+      user: 'node',
+      env: { HOME: '/data' },
+      timeout: 20_000,
+    })
+    if (res.exitCode === 0) {
+      return {
+        result: 'success',
+        message:
+          'Warning: start-cli is signed in, so the agent has root on this whole server. The email and calendar rules and your approvals do not hold against it. Sign out (start-cli auth logout) unless this server is for development.',
+      }
+    }
+    return {
+      result: 'success',
+      message: 'start-cli not signed in: the agent cannot manage the server',
+    }
+  } catch {
+    return { result: 'success', message: 'start-cli status unknown' }
+  }
+}

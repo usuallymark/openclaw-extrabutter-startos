@@ -27,29 +27,56 @@ class Launcher:
         self.say(msg)
         sys.exit(1)
 
-    def own_dir(self, path, uid, gid, mode):
-        """Make path a real directory with this owner and mode (never a link)."""
+    @staticmethod
+    def walk(path):
+        """A descriptor for directory path, opened from / one component at a
+        time without following any link (a link anywhere on the way is an
+        error, so a folder the gateway user owns cannot redirect us)."""
+        fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
         try:
-            st = os.lstat(path)
-        except FileNotFoundError:
-            os.mkdir(path, mode)
-            st = os.lstat(path)
-        if not stat.S_ISDIR(st.st_mode):
-            self.fail(f'{path} is not a directory (a link or file is in its place); refusing to start')
-        os.chown(path, uid, gid, follow_symlinks=False)
-        os.chmod(path, mode)
+            for part in path.strip('/').split('/'):
+                if not part:
+                    continue
+                nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                os.close(fd)
+                fd = nfd
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
+    def own_dir(self, path, uid, gid, mode):
+        """Make path a real directory with this owner and mode (never a link,
+        here or on the way): changed through its descriptor only."""
+        try:
+            pfd = self.walk(os.path.dirname(path))
+        except OSError as e:
+            self.fail(f'{os.path.dirname(path)} cannot be opened without following a link ({e.strerror}); refusing')
+        name = os.path.basename(path)
+        try:
+            try:
+                os.mkdir(name, mode, dir_fd=pfd)
+            except FileExistsError:
+                pass
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=pfd)
+            except OSError:
+                self.fail(f'{path} is not a directory (a link or file is in its place); refusing to start')
+            try:
+                os.fchown(fd, uid, gid)
+                os.fchmod(fd, mode)
+            finally:
+                os.close(fd)
+        finally:
+            os.close(pfd)
 
     @staticmethod
     def open_dir_fd(path, uid, gid):
         """Open a folder as root, component by component, following no link
         on the way, check its owner, and return an inheritable descriptor
         for the service (which then uses dir_fd only, never the path)."""
-        fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+        fd = Launcher.walk(path)
         try:
-            for part in path.strip('/').split('/'):
-                nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
-                os.close(fd)
-                fd = nfd
             st = os.fstat(fd)
             if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid or st.st_gid != gid:
                 raise OSError(f'{path} does not have the expected owner')
@@ -64,6 +91,18 @@ class Launcher:
         root, or by the uid the package passed in owner_env (in case the
         package runtime is not uid 0), never by the gateway user. Returns
         the owner uid."""
+        # The folder's parent (/data) must be root's with the sticky bit, or
+        # the gateway user could rename this folder away and put its own in
+        # its place (with its own rules and approvals) while we run.
+        parent = os.path.dirname(root.rstrip('/')) or '/'
+        try:
+            pst = os.lstat(parent)
+        except OSError as e:
+            self.fail(f'{parent} cannot be checked ({e.strerror}); refusing to start')
+        if (not stat.S_ISDIR(pst.st_mode) or pst.st_uid != 0
+                or (pst.st_mode & 0o002) or not (pst.st_mode & stat.S_ISVTX)):
+            self.fail(f'{parent} is not owned by root with the sticky bit set (the package\'s chown step sets it); '
+                      'refusing to start. Restart the service.')
         try:
             st = os.lstat(root)
         except FileNotFoundError:

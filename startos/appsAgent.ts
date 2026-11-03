@@ -14,6 +14,7 @@ import {
   APPS_SOUL_MD,
   VIA_APPS_MARKER,
 } from './appsAgentFiles'
+import { clearLinksAt } from './noLinks'
 
 // The apps agent (since 2026.10.1:20): the one agent the main agent asks
 // about mail and calendars. It passes each job to the email or calendar
@@ -133,6 +134,8 @@ export async function writeAppsAgentWorkspace(
   apps: { mail: boolean; calendar: boolean; calendarWrite: boolean },
   settings: AppsAgentSettings | null,
 ) {
+  for (const f of ['memory', 'AGENTS.md', 'SOUL.md', 'IDENTITY.md'])
+    await clearLinksAt(ws(f))
   await mkdir(ws('memory'), { recursive: true })
   await writeFile(ws('AGENTS.md'), renderAppsAgentsMd(apps, settings))
   for (const [f, text] of [

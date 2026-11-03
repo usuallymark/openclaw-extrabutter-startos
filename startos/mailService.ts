@@ -14,6 +14,7 @@ import { usesMailService } from './email'
 import { AGENTS_MD, IDENTITY_MD, SOUL_MD } from './mailAgentFiles'
 import { isolateAgent } from './isolatedAgents'
 import { VIA_APPS_MARKER, VIA_APPS_RULE } from './appsAgentFiles'
+import { clearLinksAt } from './noLinks'
 
 // The mail service and the email agent (DESIGN-email-security; reading and
 // drafts since :8, sending since :10).
@@ -279,6 +280,8 @@ const ws = (f: string) =>
  * email agent a name and tone there); the rules in AGENTS.md win.
  */
 export async function writeEmailAgentWorkspace(settings: EmailSettings) {
+  for (const f of ['memory', 'AGENTS.md', 'SOUL.md', 'IDENTITY.md'])
+    await clearLinksAt(ws(f))
   await mkdir(ws('memory'), { recursive: true })
   const extra = (settings.agent?.extraInstructions ?? '').trim()
   const trusted = settings.agent?.trustedSenders ?? []

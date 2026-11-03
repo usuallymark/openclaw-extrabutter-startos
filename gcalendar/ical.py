@@ -29,6 +29,13 @@ except ImportError:  # pragma: no cover
 MAX_EVENTS = 20000          # VEVENTs read from one feed
 MAX_PERIODS = 20000         # recurrence periods looked at for one event
 MAX_INSTANCES = 5000        # instances of one event in one range
+# Recurrence work for one query (candidate times looked at, all events
+# together, about 7 µs each): a feed whose rules repeat absurdly often
+# (COUNT, BYHOUR×BYMINUTE from 1970 …) cannot keep the service busy for
+# minutes per question. A year of hundreds of daily events stays well below.
+MAX_WORK = 1_000_000
+MAX_WORK_FIND = 200_000
+WORK_PROBLEM = 'recurring events repeat too often to work out in full; some times may be missing'
 MAX_PROBLEMS = 20
 
 UTC = timezone.utc
@@ -190,12 +197,13 @@ class Feed:
     def instances(self, start, end, display_tz):
         """Every instance overlapping [start, end) (aware datetimes)."""
         out = []
+        budget = [MAX_WORK]
         for ev in self.events:
             if ev['status'] == 'CANCELLED':
                 continue
             over = self.overrides.get(ev['uid'], {})
             if ev.get('rrule') or ev.get('rdates'):
-                for inst in _expand(ev, start, end, display_tz, self):
+                for inst in _expand(ev, start, end, display_tz, self, budget):
                     if inst['key'] in over or inst['key'] in ev['exdates']:
                         continue
                     out.append(inst)
@@ -226,7 +234,7 @@ class Feed:
             t = _key_time(key)
             if t is None:
                 return None
-            for inst in _expand(ev, t - timedelta(days=2), t + timedelta(days=2), display_tz, self):
+            for inst in _expand(ev, t - timedelta(days=2), t + timedelta(days=2), display_tz, self, [MAX_WORK_FIND]):
                 if inst['key'] == key:
                     return inst
         return None
@@ -597,8 +605,11 @@ def _localize(d, t, tz):
     return datetime.combine(d, t).replace(tzinfo=tz)
 
 
-def _expand(ev, start, end, display_tz, feed):
-    """Instances of a recurring event overlapping [start, end)."""
+def _expand(ev, start, end, display_tz, feed, budget=None):
+    """Instances of a recurring event overlapping [start, end). budget: a
+    one-item list, the work left for this query (shared by all events)."""
+    if budget is None:
+        budget = [MAX_WORK]
     s0 = ev['start']
     timed = isinstance(s0, datetime)
     tz = s0.tzinfo if timed else None
@@ -635,6 +646,8 @@ def _expand(ev, start, end, display_tz, feed):
         add(rd)
     if not rule or rule.get('unsupported'):
         return out[:MAX_INSTANCES]
+    if budget[0] <= 0:
+        return out
 
     times = [t0]
     if timed and (rule['byhour'] or rule['byminute']):
@@ -660,6 +673,10 @@ def _expand(ev, start, end, display_tz, feed):
             break
         if rule['bymonth'] and rule['freq'] != 'YEARLY':
             days = [d for d in days if d.month in rule['bymonth']]
+        budget[0] -= 1 + len(days) * len(times)
+        if budget[0] < 0:
+            feed.problem(WORK_PROBLEM)
+            break
         cands = sorted(_localize(d, t, tz) if timed else d for d in days for t in times)
         if rule['bysetpos']:
             n = len(cands)
