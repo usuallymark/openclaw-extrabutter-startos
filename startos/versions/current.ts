@@ -1,14 +1,13 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:28',
+  version: '2026.10.1:29',
   releaseNotes: {
-    en_US: `Invitations by mail: add events to your calendars without Google.
+    en_US: `Configure Calendar: switching modes without surprises.
 
-- **New Calendar choice in Configure Calendar: "Read + invitations by mail"** (without a Google account). When you ask for an event, the calendar agent sends a normal calendar invitation by email to its guests (you and the people on your trusted lists), and their calendar apps put it on their calendars. Changes and cancellations go out as updates.
-- **Your mail rules decide:** invitations are sent by the mail service like any other mail. Never Send To always wins, addresses on Send Automatically To get them straight away, anyone else waits for you in Review Agent Actions, and "Hold Every New Event" holds them all. The calendar service never gets the email password.
-- **Answers are filed:** your guests' replies (accepted, declined) to these invitations are moved out of the Inbox into the folder "Calendar Replies".
-- **Time Zone** setting in Configure Calendar for use without a Google account.`,
+- **The Calendar choice now shows only the fields that mode needs.** Read only asks for the Google sign-in or none, Read + write (Google) for the sign-in and the own calendar's name, Read + invitations by mail (no Google) for the time zone. A half-finished switch can no longer be saved.
+- **Switching back keeps what you had.** Each mode's fields keep their saved values (sign-in choice, own calendar name, time zone, hold setting) and come back as you left them.
+- **Invitations by mail is greyed out until Configure Email can send them,** and the description says what is missing, instead of an error after Save.`,
   },
   migrations: {
     up: async () => {},

@@ -32,36 +32,152 @@ const SIGN_IN_HELP = `A Google sign-in made once on your computer with the scrip
 
 const LINK_RE = '^(https?|webcals?)://\\S+$'
 
-const signIn = Value.union({
-  name: 'Google Sign-in',
-  description: `${SIGN_IN_HELP}\n\nFetch from Vaultwarden: item "${CALENDAR_VAULT.item}", a hidden custom field "${CALENDAR_VAULT.field}" holding the whole line the script printed. Fetched at every start (requires Vaultwarden in Configure External Services); a new sign-in saved there is picked up within 10 minutes.\nPaste here: stored once, encrypted, on this server only.\nNo Google account: read only the Calendar Links below (simplest; nothing to set up at Google).`,
-  default: 'from-vaultwarden',
-  variants: Variants.of({
-    none: {
-      name: 'No Google account (calendar links only)',
-      spec: InputSpec.of({}),
-    },
-    'from-vaultwarden': {
-      name: 'Fetch from Vaultwarden',
-      spec: InputSpec.of({}),
-    },
-    manual: {
-      name: 'Paste here',
-      spec: InputSpec.of({
-        value: Value.textarea({
-          name: 'Sign-in (JSON)',
-          description:
-            'The whole line printed by google-signin.py. Leave blank to keep the sign-in already saved.',
-          required: false,
-          default: null,
-          minRows: 3,
-          maxRows: 8,
-          placeholder:
-            'Leave blank to keep the saved sign-in. {"type":"openclaw-google-signin","account":"…","refresh_token":"…",…}',
-        }),
+// The saved settings, for defaults of fields in a Calendar choice that is
+// not the saved one (StartOS shows a choice's defaults when you switch to
+// it; these keep what you entered for that mode before).
+const saved = () =>
+  calendarSettingsJson
+    .read()
+    .once()
+    .catch(() => null)
+
+const SIGN_IN_VARIANTS = {
+  'from-vaultwarden': {
+    name: 'Fetch from Vaultwarden',
+    spec: InputSpec.of({}),
+  },
+  manual: {
+    name: 'Paste here',
+    spec: InputSpec.of({
+      value: Value.textarea({
+        name: 'Sign-in (JSON)',
+        description:
+          'The whole line printed by google-signin.py. Leave blank to keep the sign-in already saved.',
+        required: false,
+        default: null,
+        minRows: 3,
+        maxRows: 8,
+        placeholder:
+          'Leave blank to keep the saved sign-in. {"type":"openclaw-google-signin","account":"…","refresh_token":"…",…}',
       }),
-    },
-  }),
+    }),
+  },
+}
+
+const SIGN_IN_DESCRIPTION = `${SIGN_IN_HELP}\n\nFetch from Vaultwarden: item "${CALENDAR_VAULT.item}", a hidden custom field "${CALENDAR_VAULT.field}" holding the whole line the script printed. Fetched at every start (requires Vaultwarden in Configure External Services); a new sign-in saved there is picked up within 10 minutes.\nPaste here: stored once, encrypted, on this server only.`
+
+/** Google Sign-in for Read only: a Google account, or none (calendar
+ * links only). */
+const readSignIn = Value.dynamicUnion(async () => {
+  const src = (await saved())?.token?.source ?? 'none'
+  return {
+    name: 'Google Sign-in',
+    description: `No Google account: read only the Calendar Links (simplest; nothing to set up at Google).\n${SIGN_IN_DESCRIPTION}`,
+    default: src,
+    disabled: false,
+    variants: Variants.of({
+      none: {
+        name: 'No Google account (calendar links only)',
+        spec: InputSpec.of({}),
+      },
+      ...SIGN_IN_VARIANTS,
+    }),
+  }
+})
+
+/** Google Sign-in for Read + write on its own calendar: required. */
+const writeSignIn = Value.dynamicUnion(async () => {
+  const src = (await saved())?.token?.source
+  return {
+    name: 'Google Sign-in',
+    description: `${SIGN_IN_DESCRIPTION}\nWriting needs a sign-in with the extra permission (google-signin.py --scopes calendar.readonly,calendar.app.created).`,
+    default: src === 'manual' ? 'manual' : 'from-vaultwarden',
+    disabled: false,
+    variants: Variants.of(SIGN_IN_VARIANTS),
+  }
+})
+
+const calendarName = Value.dynamicText(async () => ({
+  name: 'Own Calendar Name',
+  description:
+    "The name of the calendar the agent writes to, created in the Google account on the first start (for example your assistant's name). It is also how the agent refers to it. To rename it later, rename the calendar in Google Calendar and change it here too: the agent keeps the calendar it made first, whatever it is called.",
+  required: false,
+  default: (await saved())?.calendarName || 'Assistant',
+  masked: false,
+  placeholder: 'Assistant',
+}))
+
+const holdAll = (what: string) =>
+  Value.dynamicToggle(async () => ({
+    name: 'Hold Every New Event for My Approval',
+    description: what,
+    default: (await saved())?.holdAll ?? false,
+  }))
+
+const timeZone = Value.dynamicText(async () => ({
+  name: 'Time Zone',
+  description:
+    "Your time zone, for the times the agent reads and sends (an IANA name, e.g. America/Chicago or Europe/Berlin). Blank: the first calendar link's zone, else UTC. (With a Google account its calendar's zone is used.)",
+  required: false,
+  default: (await saved())?.timeZone || null,
+  masked: false,
+  placeholder: 'America/Chicago',
+}))
+
+/** Whether Configure Email can send invitations: Gmail or IMAP, sending by
+ * rules. The reason when not. */
+async function emailReadyForInvites(): Promise<string> {
+  const email = await emailSettingsJson
+    .read()
+    .once()
+    .catch(() => null)
+  const m = email?.account?.mode
+  if (m !== 'gmail' && m !== 'imap')
+    return 'Configure Email is not set to Gmail or IMAP'
+  if ((email?.sending?.level ?? 'drafts') !== 'rules')
+    return 'Configure Email → Sending is not "Send by rules"'
+  return ''
+}
+
+const calendarMode = Value.dynamicUnion(async () => {
+  const s = await saved()
+  const notReady = await emailReadyForInvites()
+  return {
+    name: 'Calendar',
+    description:
+      'Off: no calendar service, no calendar agent.\nRead only: the calendar agent lists, searches and reads events of the Calendar Links and, with a Google account, of that account (including calendars shared with it). It cannot change anything.\nRead + write on its own calendar (Google): also adds, changes and cancels events on one calendar of its own in the Google account, and can invite you and the people on the trusted lists; anything with guests waits for your approval before Google emails them.\nRead + invitations by mail (no Google): adding, changing or cancelling an event sends an invitation by email to its guests (you and the people on the trusted lists); their calendar apps put it on their calendars. The mail goes out under your Configure Email rules, and the answers are moved to the mail folder "Calendar Replies". Needs at least one Calendar Link, and Configure Email with Gmail or IMAP and sending "Send by rules".' +
+      (notReady && s?.mode !== 'invite'
+        ? `\n\nInvitations by mail cannot be chosen yet: ${notReady}.`
+        : ''),
+    default: s?.mode ?? 'off',
+    disabled: notReady && s?.mode !== 'invite' ? ['invite'] : false,
+    variants: Variants.of({
+      off: { name: 'Off', spec: InputSpec.of({}) },
+      read: {
+        name: 'Read only',
+        spec: InputSpec.of({ signIn: readSignIn, timeZone }),
+      },
+      write: {
+        name: 'Read + write on its own calendar (Google)',
+        spec: InputSpec.of({
+          signIn: writeSignIn,
+          calendarName,
+          holdAll: holdAll(
+            'Off: events without guests are added (and changed or cancelled) directly, and only those with guests wait for you. On: every change waits for your approval in Review Agent Actions.',
+          ),
+        }),
+      },
+      invite: {
+        name: 'Read + invitations by mail (no Google)',
+        spec: InputSpec.of({
+          timeZone,
+          holdAll: holdAll(
+            'Off: invitations follow your Configure Email rules (sent straight away to Send Automatically To, anyone else waits for you). On: every invitation waits for your approval in Review Agent Actions.',
+          ),
+        }),
+      },
+    }),
+  }
 })
 
 const links = Value.list(
@@ -69,7 +185,7 @@ const links = Value.list(
     {
       name: 'Calendar Links',
       description:
-        'Calendars read through their secret address in iCal format, no Google sign-in needed: in Google Calendar, Settings → (the calendar) → Integrate calendar → "Secret address in iCal format"; in iCloud, share the calendar as a Public Calendar and copy its link; in Outlook, Settings → Calendar → Shared calendars → Publish a calendar → the ICS link. Read only: the agent can list, search and read these events, never change them. The address is a password in all but name (anyone who has it sees the calendar): it is kept on this server, never shown to the agents, and if it leaks you can reset it where you copied it.',
+        'Needed for Read + invitations by mail, and for Read only without a Google account (at least one). Calendars read through their secret address in iCal format, no Google sign-in needed: in Google Calendar, Settings → (the calendar) → Integrate calendar → "Secret address in iCal format"; in iCloud, share the calendar as a Public Calendar and copy its link; in Outlook, Settings → Calendar → Shared calendars → Publish a calendar → the ICS link. Read only: the agent can list, search and read these events, never change them. The address is a password in all but name (anyone who has it sees the calendar): it is kept on this server, never shown to the agents, and if it leaks you can reset it where you copied it.',
       default: [],
     },
     {
@@ -147,22 +263,11 @@ const agentModel = Value.dynamicSelect(async () => {
 })
 
 const inputSpec = InputSpec.of({
-  mode: Value.select({
-    name: 'Calendar',
-    description:
-      "Read only: the calendar agent can list, search and read the events of this Google account, including calendars shared with it, and of the Calendar Links. It cannot change anything.\nRead + write on its own calendar (needs the Google sign-in): it also adds, changes and cancels events on one calendar of its own (named below), and can invite you and the people on the trusted lists. Anything with guests waits for your approval (Review Agent Actions) before Google emails them. It never changes your calendars or anyone else's, and cannot answer invitations. Needs a sign-in with the extra permission (google-signin.py --scopes calendar.readonly,calendar.app.created).\nRead + invitations by mail (without a Google account): adding, changing or cancelling an event sends an invitation by email to its guests (you and the people on the trusted lists), and their calendar apps put it on their calendars. The mail goes out under your Configure Email rules (Never Send To, Send Automatically To, approvals in Review Agent Actions); the guests' answers are moved to the mail folder 'Calendar Replies'. Needs Configure Email (Gmail or IMAP) with sending by rules, and Google Sign-in set to No Google account.\nOff: no calendar service, no calendar agent.",
-    default: 'off',
-    values: {
-      off: 'Off',
-      read: 'Read only',
-      write: 'Read + write on its own calendar',
-      invite: 'Read + invitations by mail',
-    },
-  }),
+  mode: calendarMode,
   account: Value.text({
-    name: 'Google Account',
+    name: 'Account',
     description:
-      'The Google account the sign-in is for (shown in the health line). Filled in from a pasted sign-in when left blank. Without a Google account: optional, the address the calendar links know you by, so your own events and answers are recognised.',
+      'With Google: the Google account the sign-in is for (shown in the health line; filled in from a pasted sign-in when left blank). Without Google: optional, your address as the calendar links know you, so your own events and answers are recognised.',
     required: false,
     default: null,
     masked: false,
@@ -175,7 +280,6 @@ const inputSpec = InputSpec.of({
       },
     ],
   }),
-  signIn,
   links,
   trustedOrganizers: Value.list(
     sdk.List.text(
@@ -203,30 +307,6 @@ const inputSpec = InputSpec.of({
     description:
       "The Trusted Senders in Configure Email count as Trusted Organizers too, so you don't type your own and your family's addresses twice. In write mode, the trusted addresses are also the only ones that may be invited.",
     default: true,
-  }),
-  calendarName: Value.text({
-    name: 'Own Calendar Name',
-    description:
-      "Write mode: the name of the calendar the agent writes to, created in the Google account on the first start (for example your assistant's name). It is also how the agent refers to it. To rename it later, rename the calendar in Google Calendar and change it here too: the agent keeps the calendar it made first, whatever it is called.",
-    required: false,
-    default: 'Assistant',
-    masked: false,
-    placeholder: 'Assistant',
-  }),
-  timeZone: Value.text({
-    name: 'Time Zone',
-    description:
-      "Without a Google account: your time zone, for the times the agent reads and sends (an IANA name, e.g. America/Chicago or Europe/Berlin). Blank: the first calendar link's zone, else UTC. With a Google account its calendar's zone is used.",
-    required: false,
-    default: null,
-    masked: false,
-    placeholder: 'America/Chicago',
-  }),
-  holdAll: Value.toggle({
-    name: 'Hold Every New Event for My Approval',
-    description:
-      'Write mode: off, events without guests are added (and changed or cancelled) directly, and only those with guests wait for you. On, every change waits for your approval in Review Agent Actions.',
-    default: false,
   }),
   agentModel,
   extraInstructions: Value.textarea({
@@ -262,16 +342,36 @@ export const configureCalendar = sdk.Action.withInput(
       .once()
       .catch(() => null)
     const source = s?.token?.source ?? 'from-vaultwarden'
+    const mode = s?.mode ?? 'off'
+    // The saved sign-in is never shown; blank keeps it.
+    const signIn =
+      source === 'manual'
+        ? { selection: 'manual', value: { value: null } }
+        : source === 'none' && mode !== 'write'
+          ? { selection: 'none', value: {} }
+          : { selection: 'from-vaultwarden', value: {} }
+    const zone = s?.timeZone || null
+    const hold = s?.holdAll ?? false
     return {
-      mode: s?.mode ?? 'off',
+      mode:
+        mode === 'read'
+          ? { selection: 'read', value: { signIn, timeZone: zone } }
+          : mode === 'write'
+            ? {
+                selection: 'write',
+                value: {
+                  signIn,
+                  calendarName: s?.calendarName || 'Assistant',
+                  holdAll: hold,
+                },
+              }
+            : mode === 'invite'
+              ? {
+                  selection: 'invite',
+                  value: { timeZone: zone, holdAll: hold },
+                }
+              : { selection: 'off', value: {} },
       account: s?.account || null,
-      // The saved sign-in is never shown; blank keeps it.
-      signIn:
-        source === 'manual'
-          ? { selection: 'manual', value: { value: null } }
-          : source === 'none'
-            ? { selection: 'none', value: {} }
-            : { selection: 'from-vaultwarden', value: {} },
       // Saved addresses are never shown; blank keeps them.
       links: (s?.links ?? []).map((l) => ({
         name: l.name,
@@ -280,16 +380,27 @@ export const configureCalendar = sdk.Action.withInput(
       })),
       trustedOrganizers: s?.trustedOrganizers ?? [],
       includeEmailTrusted: s?.includeEmailTrusted ?? true,
-      calendarName: s?.calendarName || 'Assistant',
-      holdAll: s?.holdAll ?? false,
-      timeZone: s?.timeZone || null,
       agentModel: s?.agent?.model || 'default',
       extraInstructions: s?.agent?.extraInstructions || null,
     } as any
   },
 
   async ({ effects, input }) => {
-    const i = input as any
+    // The Calendar choice carries its own fields; the rest are shared.
+    const raw = input as any
+    const sel = raw.mode?.selection ?? 'off'
+    const v = raw.mode?.value ?? {}
+    const i = {
+      ...raw,
+      mode: sel,
+      signIn:
+        sel === 'read' || sel === 'write'
+          ? v.signIn
+          : { selection: sel === 'invite' ? 'none' : undefined },
+      timeZone: v.timeZone,
+      holdAll: v.holdAll,
+      calendarName: v.calendarName,
+    }
     const prior = await calendarSettingsJson
       .read()
       .once()
@@ -344,6 +455,9 @@ export const configureCalendar = sdk.Action.withInput(
       }
     } else if (i.signIn?.selection === 'none') {
       token = { source: 'none' }
+    } else if (sel === 'off') {
+      // Off: keep whatever sign-in choice was saved, for switching back.
+      token = prior?.token ?? { source: 'from-vaultwarden' }
     } else {
       token = { source: 'from-vaultwarden' }
     }
@@ -379,7 +493,9 @@ export const configureCalendar = sdk.Action.withInput(
     }
     if (i.mode !== 'off' && token.source === 'none' && !linkList.length) {
       throw new Error(
-        'Without a Google account, add at least one Calendar Link (or choose a Google sign-in).',
+        i.mode === 'invite'
+          ? 'Read + invitations by mail needs at least one Calendar Link (to read your calendar); add one under Calendar Links.'
+          : 'Without a Google account, add at least one Calendar Link (or choose a Google sign-in).',
       )
     }
     const zone = String(i.timeZone ?? '').trim()
@@ -391,29 +507,18 @@ export const configureCalendar = sdk.Action.withInput(
       throw new Error(
         `Time Zone: "${zone}" is not a time zone name (for example America/Chicago).`,
       )
-    if (i.mode === 'invite') {
-      if (token.source !== 'none')
-        throw new Error(
-          'Read + invitations by mail is for use without a Google account: set Google Sign-in to "No Google account (calendar links only)", or choose Read + write on its own calendar.',
-        )
-      const email = await emailSettingsJson
-        .read()
-        .once()
-        .catch(() => null)
-      const emode = email?.account?.mode
-      if (emode !== 'gmail' && emode !== 'imap')
-        throw new Error(
-          'Read + invitations by mail sends the invitations through the mail service: set up Configure Email with Gmail or IMAP first.',
-        )
-      if ((email?.sending?.level ?? 'drafts') !== 'rules')
-        throw new Error(
-          'Read + invitations by mail needs mail sending: in Configure Email → Sending, set it to "Send by rules" first.',
-        )
-    }
-    if (i.mode === 'write' && token.source === 'none') {
+    if (i.mode === 'write' && token.source === 'none')
       throw new Error(
-        'Read + write needs the Google sign-in (the calendar links are read only). Choose Read only, or a Google sign-in.',
+        'Read + write on its own calendar needs the Google sign-in.',
       )
+    if (i.mode === 'invite') {
+      // The choice is disabled while this is so; this catches a change in
+      // Configure Email made while the form was open.
+      const notReady = await emailReadyForInvites()
+      if (notReady)
+        throw new Error(
+          `Read + invitations by mail sends the invitations through the mail service, but ${notReady}. Change that in Configure Email first.`,
+        )
     }
     const trusted = Array.from(
       new Set(
@@ -428,14 +533,22 @@ export const configureCalendar = sdk.Action.withInput(
         i.mode === 'read' || i.mode === 'write' || i.mode === 'invite'
           ? i.mode
           : 'off',
-      timeZone: zone || undefined,
+      // Fields of the other choices keep their saved values, for switching
+      // back.
+      timeZone:
+        sel === 'read' || sel === 'invite'
+          ? zone || undefined
+          : prior?.timeZone,
       account: account || prior?.account || undefined,
       token,
       trustedOrganizers: trusted,
       includeEmailTrusted: i.includeEmailTrusted !== false,
       calendarName:
         String(i.calendarName ?? '').trim() || prior?.calendarName || undefined,
-      holdAll: i.holdAll === true,
+      holdAll:
+        sel === 'write' || sel === 'invite'
+          ? i.holdAll === true
+          : (prior?.holdAll ?? false),
       links: linkList,
       agent: {
         ...(prior?.agent ?? {}),

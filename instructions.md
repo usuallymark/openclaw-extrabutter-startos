@@ -377,10 +377,12 @@ sending *Send by rules*), the calendar agent can also put events on your
 and your family's calendars by sending a normal calendar invitation by
 email, the kind every calendar app understands.
 
-1. **Configure Calendar**: **Calendar** *Read + invitations by mail*,
-   **Google Sign-in** *No Google account*, your **Time Zone** (e.g.
-   `America/Chicago`). Your own and your family's addresses under
-   **Trusted Organizers** are the only ones it may invite. Save.
+1. **Configure Calendar**: **Calendar** *Read + invitations by mail (no
+   Google)*, then its **Time Zone** (e.g. `America/Chicago`); at least one
+   entry under **Calendar Links**. Your own and your family's addresses
+   under **Trusted Organizers** are the only ones it may invite. Save. (The
+   choice is greyed out until Configure Email is set to Gmail or IMAP with
+   *Send by rules*; the description says which is missing.)
 2. Ask your assistant, e.g. "Put the dentist on my calendar on Tuesday at 10 for
    45 minutes". It sends an invitation to you; your calendar app shows it
    (Gmail adds invitations by itself unless *Add invitations to my
