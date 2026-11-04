@@ -37,6 +37,8 @@ OUTBOX = f'{WORKSPACE}/mail-outbox'
 RULES = f'{MAIL_ROOT}/rules.json'
 DECISIONS = f'{MAIL_ROOT}/decisions'
 SERVICE = '/opt/openclaw-mail/mailservice.py'
+CAL_SETTINGS = '/data/.openclaw-calendar/settings.json'
+CAL_USER = 'openclaw-calendar'
 MAIL_USER = 'openclaw-mail'
 GMAIL = {'imap': {'host': 'imap.gmail.com', 'port': 993, 'security': 'tls'},
          'smtp': {'host': 'smtp.gmail.com', 'port': 465, 'security': 'tls'}}
@@ -159,6 +161,24 @@ def main():
     if error:
         say(error)
 
+    # Invitations by mail (since :28): only while Configure Calendar is set to
+    # "Read + invitations by mail"; then only the calendar service's user may
+    # ask for one (read as root; that file is the package's).
+    invites, cal_uid = False, None
+    try:
+        cst = os.lstat(CAL_SETTINGS)
+        if stat.S_ISREG(cst.st_mode) and cst.st_uid in (0, owner) and cst.st_uid != node.pw_uid:
+            with open(CAL_SETTINGS) as f:
+                invites = (json.load(f) or {}).get('mode') == 'invite'
+    except (OSError, ValueError, AttributeError):
+        invites = False
+    if invites:
+        try:
+            cal_uid = pwd.getpwnam(CAL_USER).pw_uid
+        except KeyError:
+            invites = False
+            say(f'user {CAL_USER} is missing from the image; invitations by mail are off')
+
     agent = settings.get('agent') or {}
     payload = {
         'mode': mode,
@@ -180,6 +200,8 @@ def main():
         'outboxFd': outbox_fd,
         'rulesPath': RULES,
         'decisionsDir': DECISIONS,
+        'invites': invites,
+        'inviteCallerUid': cal_uid,
         'passwordSource': source,
         'password': password,
         'passwordError': error,

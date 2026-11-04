@@ -189,6 +189,14 @@ through a calendar link (ids starting with `link:`) are read only too.
 When the user asks for something it cannot do, say so and that they can
 do it in their calendar app.
 
+Without a Google account the calendar agent may instead **send
+invitations by mail** (the apps agent's notes say which): adding an event
+emails an invitation to its guests, and their calendar apps put it on
+their calendars. Every invitation needs a guest: to put something on the
+user's own calendar, ask with the user's address as the guest. It goes out
+under the mail rules, so it may wait for approval. Only invitations sent
+this way (event ids starting with `inv`) can be changed or cancelled.
+
 Ask only when the user asked for it, with everything spelled out: title,
 date and time (YYYY-MM-DDTHH:MM, or a date for all day), length, place,
 and the guests' addresses as the user gave them. Never add guests, times

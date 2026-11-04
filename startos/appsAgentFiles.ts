@@ -103,13 +103,17 @@ export const APPS_EMAIL_LINE = `- **email agent** (agent id \`email\`, wait 180 
   saves drafts and sends them under the owner's rules, reads and saves
   attachments.`
 
-export const APPS_CALENDAR_LINE = (write: boolean) =>
+export const APPS_CALENDAR_LINE = (write: boolean, invite = false) =>
   `- **calendar agent** (agent id \`calendar\`, wait 120 s): the calendars.
   Lists, searches and reads events${
-    write
-      ? `; adds, changes and cancels events on its own
+    invite
+      ? `; adds, changes and cancels events by sending
+  invitations by mail to guests from the owner's allowed list (to put
+  something on the owner's calendar, the owner is the guest)`
+      : write
+        ? `; adds, changes and cancels events on its own
   calendar under the owner's rules`
-      : ' (read only: it cannot change anything)'
+        : ' (read only: it cannot change anything)'
   }.`
 
 export const APPS_NONE_LINE =

@@ -46,6 +46,7 @@ from gapi import READ_SCOPES, WRITE_SCOPES, ApiError, Google, SignInRefused, Unr
 from mcp import MAX_EVENTS  # noqa: E402
 from links import LINK_PREFIX, Links  # noqa: E402
 from writes import Writer  # noqa: E402
+from invites import InviteWriter  # noqa: E402
 from sanitize import clean_line, content_flags, hidden_flags, html_parts, wrap_untrusted  # noqa: E402
 
 try:
@@ -79,7 +80,8 @@ class Service:
         self._log = svcutil.ActivityLog(os.path.join(self.state_dir, 'activity.jsonl'), LOG_MAX_BYTES)
         self._calls = []
         self._calls_lock = threading.Lock()
-        self.writer = Writer(self, cfg) if cfg.get('mode') == 'write' and token else None
+        self.writer = (Writer(self, cfg) if cfg.get('mode') == 'write' and token
+                       else InviteWriter(self, cfg) if cfg.get('mode') == 'invite' else None)
         self.links = Links(cfg.get('links'))
         # A Google sign-in that was wanted but could not be had, while the
         # calendar links still work: a warning, not a stopped service.
@@ -373,7 +375,12 @@ class Tools:
         for c in self._calendars():
             if c.get('primary'):
                 return _zone(c.get('timeZone'))
-        # No Google account: the first calendar link that names its zone.
+        # No Google account: the owner's zone from Configure Calendar (since
+        # :28), else the first calendar link that names its zone.
+        if self.svc.cfg.get('timeZone'):
+            z = _zone(self.svc.cfg['timeZone'])
+            if z is not timezone.utc or self.svc.cfg['timeZone'] in ('UTC', 'Etc/UTC'):
+                return z
         for x in self.svc.links.items:
             f = x.get(timezone.utc)
             if f is not None and f.zone_name:

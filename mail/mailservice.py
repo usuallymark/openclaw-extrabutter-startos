@@ -50,6 +50,7 @@ from extract import attachment_text  # noqa: E402
 from imapmail import AuthRefused, MailError, Mailbox  # noqa: E402
 from outbox import Outbox, SmtpRefused, recipients  # noqa: E402
 import htmlout  # noqa: E402
+import invite  # noqa: E402
 from sanitize import clean_line, clean_text, wrap_untrusted  # noqa: E402
 
 VERSION = mcp.VERSION
@@ -76,6 +77,8 @@ class Service:
         self.trusted = [t.lower() for t in cfg.get('trustedSenders') or []]
         self.box = Mailbox(cfg, password) if password else None
         self.outbox = Outbox(self, cfg, password) if password else None
+        # Invitations by mail for the calendar service (since :28).
+        self.invites = invite.SentInvites(self.state_dir)
         self._fp = self._fingerprint(password) if password else None
         self._calls = []
         self._calls_lock = threading.Lock()
@@ -795,8 +798,17 @@ class Tools:
             self.svc.log({'event': 'send_refused', 'draft_id': did, 'rule': 'not made by the draft tool'})
             return {'result': 'refused', 'rule': 'only drafts made with the draft tool can be sent',
                     'detail': 'The draft stays in Drafts; the user can send it from their mail app.'}
+        return self._send_marked(did, drafts, raw, msg, kind, str(a.get('mailing') or '').strip())
+
+    def _send_marked(self, did, drafts, raw, msg, kind, mname='', hold='', requester='email agent'):
+        """Judge a marked draft by the owner's rules, then send, queue or
+        refuse it (t_send, and invitations from the calendar service)."""
+        ob = self.svc.outbox
         rcpts = recipients(msg)
-        atts = [clean_line(p.get_filename() or 'attachment', 120) for p in msg.iter_attachments()]
+        # An invitation's own calendar file is the invitation, not an
+        # attachment someone added (the marker proves the service made it).
+        atts = [clean_line(p.get_filename() or 'attachment', 120) for p in msg.iter_attachments()
+                if not (kind == 'invite' and invite.is_own_ics(p))]
         mid = str(msg['Message-ID'] or '').strip()
         base = {'draft_id': did, 'to': str(msg['To'] or ''), 'cc': str(msg['Cc'] or ''),
                 'bcc': str(msg['Bcc'] or ''), 'subject': clean_line(str(msg['Subject'] or ''), 120)}
@@ -810,8 +822,9 @@ class Tools:
             # A routine mailing (since :22): naming one only asks for the
             # check against the owner's definition; never past a refusal.
             mailing, mnote = None, ''
-            mname = str(a.get('mailing') or '').strip()
-            if mname and decision != 'refuse':
+            if hold and decision == 'send':
+                decision, rule = 'queue', hold
+            if mname and decision != 'refuse' and kind != 'invite':
                 mailing = ob.mailing(mname)
                 if mailing is None:
                     mnote = f'there is no routine mailing "{clean_line(mname, 60)}" (Configure Email); the normal rules applied'
@@ -827,7 +840,8 @@ class Tools:
                         'detail': 'Nothing was sent. The draft stays in Drafts; the user can send it from their mail app.'}
             if decision == 'queue':
                 qid = ob.enqueue(raw, msg, kind, rule, did, drafts['name'], atts,
-                                 mailing=mailing['id'] if mailing else None, requested=mname or None)
+                                 mailing=mailing['id'] if mailing else None, requested=mname or None,
+                                 requester=requester)
                 self.svc.log({'event': 'send_queued', **base, 'queue_id': qid, 'rule': rule})
                 return {'result': 'waiting for approval', 'queue_id': qid, 'rule': rule,
                         **({'note': mnote} if mnote else {}),
@@ -852,6 +866,113 @@ class Tools:
         return {'result': 'sent', 'rule': rule, 'to': base['to'], 'cc': base['cc'], 'bcc': base['bcc'],
                 'subject': base['subject'], 'detail': 'Sent; the draft was removed from Drafts' + cleanup,
                 **({'note': mnote} if mnote else {})}
+
+    # invitations for the calendar service (invite.py; not an MCP tool)
+
+    def invite_request(self, req):
+        """One invitation from the calendar service: build it here, save it
+        as a marked draft, then the same rules as any mail."""
+        s = self.svc
+        if not s.cfg.get('invites'):
+            return {'result': 'refused', 'rule': 'invitations by mail are off (Configure Calendar)'}
+        if s.state not in ('ok', 'unreachable') or not s.outbox:
+            return {'result': 'failed', 'detail': self._unavailable()}
+        if not s.cfg.get('smtp'):
+            return {'result': 'refused', 'rule': 'no outgoing (SMTP) server is set in Configure Email'}
+        try:
+            ev = invite.check_request(req)
+        except invite.InviteRefused as e:
+            return {'result': 'refused', 'rule': f'not a valid invitation: {e}'}
+        level = s.outbox.rules()['level']
+        if level != 'rules':
+            return {'result': 'refused', 'rule': 'Mail sending is ' + ('Off (read only)' if level == 'off' else 'Drafts only')
+                    + ' in Configure Email, so no invitation can be sent'}
+        if not s.rate_ok():
+            return {'result': 'failed', 'detail': f'too many mail requests (more than {CALLS_PER_MINUTE} a minute)'}
+        m = invite.build(s.cfg, ev)
+        s.outbox.mark(m, 'invite')
+        try:
+            def save():
+                drafts = self._drafts()
+                return drafts, self.box.append(drafts, '(\\Draft \\Seen)', m.as_bytes())
+            drafts, did = self.box.run(save)
+            if not did:
+                return {'result': 'failed', 'detail': 'the mail server did not return the draft id; the invitation is '
+                                                      'in Drafts but was not sent'}
+            raw = m.as_bytes()
+            s.log({'event': 'draft', 'kind': 'invite', 'to': m['To'], 'subject': clean_line(str(m['Subject']), 120),
+                   'draft_id': did})
+            out = self._send_marked(did, drafts, raw, email.message_from_bytes(raw, policy=policy.SMTP), 'invite',
+                                    hold=ev['hold'], requester='calendar agent')
+        except AuthRefused as e:
+            s.record_refusal(str(e))
+            s.set_state('reloading', 'the mailbox refused the password; fetching it again')
+            _schedule_exit(EXIT_RELOAD, 0.5)
+            return {'result': 'failed', 'detail': 'mail service reloading (the mailbox refused the password)'}
+        except ToolError as e:
+            return {'result': 'failed', 'detail': str(e)}
+        except (MailError, imaplib.IMAP4.error, OSError) as e:
+            return {'result': 'failed', 'detail': clean_line(str(e), 200)}
+        if out.get('result') in ('sent', 'waiting for approval'):
+            s.invites.add(ev['uid'], ev['guests'])
+        return {k: out[k] for k in ('result', 'rule', 'queue_id', 'detail') if k in out} | {
+            'subject': clean_line(str(m['Subject']), 200), 'guests': ev['guests']}
+
+    def file_replies(self):
+        """Move the guests' answers to the assistant's invitations out of the
+        Inbox (into invite.REPLY_FOLDER). Only REPLY mails for an invitation
+        sent from here, from one of its guests; nothing else is touched."""
+        s = self.svc
+        seen_path = os.path.join(s.state_dir, 'replies_seen.json')
+        try:
+            with open(seen_path) as f:
+                seen = set(json.load(f))
+        except (OSError, ValueError, TypeError):
+            seen = set()
+        from datetime import date, timedelta
+
+        def go():
+            inbox = self.box.resolve('INBOX')
+            self.box.select(inbox)
+            since = (date.today() - timedelta(days=3)).strftime('%d-%b-%Y')
+            uids = [u for u in self.box.uid_search(['SINCE', since]) if u not in seen][-invite.REPLY_BATCH:]
+            if not uids:
+                return [], []
+            sizes = self.box.fetch(uids, '(UID RFC822.SIZE)')
+            small = [u for u in uids if (sizes.get(u) or {}).get('size', invite.REPLY_MAX_BYTES + 1) <= invite.REPLY_MAX_BYTES]
+            got = self.box.fetch(small, '(UID BODY.PEEK[])') if small else {}
+            move = []
+            for u in small:
+                data = (got.get(u) or {}).get('data')
+                if not data:
+                    continue
+                msg = email.message_from_bytes(data, policy=policy.default)
+                rep = invite.reply_of(msg)
+                if not rep:
+                    continue
+                guests = s.invites.guests_of(rep[0])
+                sender = {a.lower() for _, a in getaddresses([str(msg.get('From') or '')])}
+                if guests is None or not ({rep[1]} | sender) & guests:
+                    continue
+                move.append(u)
+            if move:
+                dest = None
+                for c in self.box.folders():
+                    if c['name'].lower() == invite.REPLY_FOLDER.lower():
+                        dest = c
+                if dest is None:
+                    self.box.create_folder(invite.REPLY_FOLDER)
+                    dest = self.box.resolve(invite.REPLY_FOLDER)
+                self.box.select(inbox, readonly=False)
+                self.box.move(move, dest)
+            return uids, move
+        scanned, moved = self.box.run(go)
+        if scanned:
+            keep = sorted(seen | set(scanned))[-2000:]
+            svcutil.write_private(seen_path, json.dumps(keep).encode())
+        if moved:
+            s.log({'event': 'replies_filed', 'count': len(moved), 'folder': invite.REPLY_FOLDER})
+        return moved
 
     # queue hooks (outbox.process)
 
@@ -943,12 +1064,16 @@ def serve_worker(svc, tools, path):
 
 def _queue_loop(svc, tools):
     """Act on the owner's decisions (written by the package) and expire
-    old requests."""
+    old requests; with invitations on, file the guests' replies."""
+    last_replies = 0
     while True:
         time.sleep(QUEUE_POLL_S)
         if svc.state not in ('ok', 'unreachable'):
             continue
         try:
+            if svc.cfg.get('invites') and time.time() - last_replies > invite.REPLY_SCAN_S:
+                last_replies = time.time()
+                tools.file_replies()
             svc.outbox.process(tools)
         except (MailError, imaplib.IMAP4.error, OSError) as e:
             svc.log({'event': 'queue_error', 'detail': clean_line(str(e), 200)})
@@ -983,6 +1108,12 @@ def main():
     srv = serve_worker(svc, tools, cfg.get('socket') or os.path.join(cfg['stateDir'], 'worker.sock'))
     if svc.outbox and not exit_after:
         threading.Thread(target=_queue_loop, args=(svc, tools), daemon=True).start()
+    cal_uid = cfg.get('inviteCallerUid')
+    if cfg.get('invites') and isinstance(cal_uid, int) and not exit_after:
+        try:
+            invite.serve(tools.invite_request, cal_uid, svc.log)
+        except OSError as e:
+            svc.log({'event': 'invite_socket', 'detail': f'could not listen for the calendar service: {e.strerror or e}'})
     if exit_after:
         _schedule_exit(0, exit_after)
         print(f'mail service: {svc.state}: {svc.reason}; checking again in {exit_after // 60} min', flush=True)

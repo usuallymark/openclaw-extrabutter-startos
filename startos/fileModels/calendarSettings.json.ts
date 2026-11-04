@@ -9,7 +9,9 @@ import { sdk } from '../sdk'
 
 export const CAL_ROOT_SUBPATH = '.openclaw-calendar'
 export const CAL_SETTINGS_SUBPATH = `${CAL_ROOT_SUBPATH}/settings.json`
-export const calendarModes = ['off', 'read', 'write'] as const
+// 'invite' (since :28): read, and write by invitations sent by mail (no
+// Google sign-in).
+export const calendarModes = ['off', 'read', 'write', 'invite'] as const
 
 const shape = z.looseObject({
   mode: z.enum(calendarModes).catch('off'),
@@ -33,6 +35,9 @@ const shape = z.looseObject({
   // whether every new event (not only those with guests) waits.
   calendarName: z.string().optional().catch(undefined),
   holdAll: z.boolean().catch(false),
+  // Since :28: the owner's time zone (IANA) for times without a Google
+  // account; blank: the first calendar link's zone, else UTC.
+  timeZone: z.string().optional().catch(undefined),
   // Calendar links (since :24): secret iCal addresses read by the calendar
   // service, read only. The address is pasted (url) or fetched at start
   // from Vaultwarden (field "url" of item).

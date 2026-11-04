@@ -106,12 +106,19 @@ const ws = (f: string) =>
 
 /** AGENTS.md as written for these settings (exported for tests). */
 export function renderAppsAgentsMd(
-  apps: { mail: boolean; calendar: boolean; calendarWrite: boolean },
+  apps: {
+    mail: boolean
+    calendar: boolean
+    calendarWrite: boolean
+    calendarInvite?: boolean
+  },
   settings: AppsAgentSettings | null,
 ): string {
   const lines = [
     ...(apps.mail ? [APPS_EMAIL_LINE] : []),
-    ...(apps.calendar ? [APPS_CALENDAR_LINE(apps.calendarWrite)] : []),
+    ...(apps.calendar
+      ? [APPS_CALENDAR_LINE(apps.calendarWrite, !!apps.calendarInvite)]
+      : []),
   ]
   const extra = (settings?.extraInstructions ?? '').trim()
   const fill: Record<string, string> = {
@@ -131,7 +138,12 @@ export function renderAppsAgentsMd(
  * IDENTITY.md are created once and then belong to the owner (a persona
  * goes there). */
 export async function writeAppsAgentWorkspace(
-  apps: { mail: boolean; calendar: boolean; calendarWrite: boolean },
+  apps: {
+    mail: boolean
+    calendar: boolean
+    calendarWrite: boolean
+    calendarInvite?: boolean
+  },
   settings: AppsAgentSettings | null,
 ) {
   for (const f of ['memory', 'AGENTS.md', 'SOUL.md', 'IDENTITY.md'])

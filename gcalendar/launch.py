@@ -73,11 +73,13 @@ def main():
         L.fail(f'the calendar settings cannot be read: {e}')
 
     mode = settings.get('mode')
-    if mode not in ('read', 'write'):
+    if mode not in ('read', 'write', 'invite'):
         L.fail('Calendar is off in Configure Calendar; nothing to run')
 
     tok = settings.get('token') or {}
     note = ''
+    if mode == 'invite' and tok.get('source') != 'none':
+        L.fail('"Read + invitations by mail" is only for use without a Google sign-in; open Configure Calendar')
     if tok.get('source') == 'none':
         token, error, source = None, '', 'none'
     elif tok.get('source') == 'manual':
@@ -155,6 +157,7 @@ def main():
         'note': note,
         'endpoints': endpoints,
         'links': links,
+        'timeZone': str(settings.get('timeZone') or ''),
     }
     del token, links
     L.exec_service(cal, SERVICE, payload, STATE, 'the calendar settings are too large')

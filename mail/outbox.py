@@ -44,6 +44,7 @@ from email.utils import getaddresses
 from approvals import ApprovalQueue
 from sanitize import clean_line, clean_text
 import htmlout
+import invite
 
 EXPIRE_S = 5 * 24 * 3600
 MARKER = 'X-OpenClaw-Draft'
@@ -406,7 +407,7 @@ class Outbox:
     def marked_kind(self, msg):
         """The kind of a draft made here, or None (a draft from elsewhere)."""
         v = str(msg.get(MARKER) or '')
-        m = re.fullmatch(r'\s*(new|reply|reply_all|forward);\s*([0-9a-f]{32})\s*', v)
+        m = re.fullmatch(r'\s*(new|reply|reply_all|forward|invite);\s*([0-9a-f]{32})\s*', v)
         if not m:
             return None
         mid = str(msg['Message-ID'] or '')
@@ -463,7 +464,7 @@ class Outbox:
     # ── queue ───────────────────────────────────────────────────────────────
 
     def enqueue(self, raw, msg, kind, rule, draft_uid, draft_folder, attachment_names, mailing=None,
-                requested=None):
+                requested=None, requester='email agent'):
         qid = self.q.new_id()
         body = ''
         try:
@@ -476,15 +477,17 @@ class Outbox:
         opening = clean_text(body)[:600]
         rcpts = sorted(set(recipients(msg)))
         item = {
-            'id': qid, 'action': 'send', 'rule': rule, 'requester': 'email agent',
+            'id': qid, 'action': 'send', 'rule': rule, 'requester': requester,
             # What Review Agent Actions shows.
-            'summary': f'Email to {_short(", ".join(rcpts) or to, 60)}: {_short(subject, 50) or "(no subject)"}',
+            'summary': (f'{"Calendar invitation" if kind == "invite" else "Email"} to {_short(", ".join(rcpts) or to, 60)}: '
+                        f'{_short(subject, 50) or "(no subject)"}'),
             'details': [
                 f'To: {to or "—"}',
                 *([f'Cc: {cc}'] if cc else []),
                 *([f'Bcc: {bcc}'] if bcc else []),
                 f'Subject: {subject or "(none)"}',
-                f'Kind: {"forward" if kind == "forward" else "reply" if kind.startswith("reply") else "new message"}',
+                *(invite.review_lines(msg) if kind == 'invite' else
+                  [f'Kind: {"forward" if kind == "forward" else "reply" if kind.startswith("reply") else "new message"}']),
                 f'Attachments: {", ".join(attachment_names) if attachment_names else "none"}',
                 *html_lines(msg),
                 f'Opening lines: {_short(opening, 400) or "(empty)"}',

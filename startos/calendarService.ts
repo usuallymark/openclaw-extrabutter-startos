@@ -14,6 +14,7 @@ import { isolateAgent } from './isolatedAgents'
 import {
   CAL_AGENTS_MD,
   CAL_IDENTITY_MD,
+  CAL_INVITE_RULES,
   CAL_READ_ONLY_RULES,
   CAL_SOUL_MD,
   CAL_WRITE_RULES,
@@ -49,7 +50,7 @@ const calRoot = sdk.volumes.main.subpath(CAL_ROOT_SUBPATH)
 const settingsPath = sdk.volumes.main.subpath(CAL_SETTINGS_SUBPATH)
 
 export const calendarOn = (s: CalendarSettings | null | undefined) =>
-  s?.mode === 'read' || s?.mode === 'write'
+  s?.mode === 'read' || s?.mode === 'write' || s?.mode === 'invite'
 
 /** Init (install, update, restore): the folder exists and is the
  * package's; settings default to Calendar off. */
@@ -226,7 +227,11 @@ export async function writeCalendarAgentWorkspace(
   // The write rules first (they hold {{CALENDAR_NAME}}), then every
   // placeholder; a function replacer keeps "$" in the owner's text literal.
   const agents = CAL_AGENTS_MD.replace('{{WRITE_RULES}}', () =>
-    settings.mode === 'write' ? CAL_WRITE_RULES : CAL_READ_ONLY_RULES,
+    settings.mode === 'write'
+      ? CAL_WRITE_RULES
+      : settings.mode === 'invite'
+        ? CAL_INVITE_RULES
+        : CAL_READ_ONLY_RULES,
   ).replace(
     /\{\{(EXTRA_INSTRUCTIONS|TRUSTED_ORGANIZERS|ACCOUNT|CALENDAR_NAME|VIA_APPS|SOURCES)\}\}/g,
     (m) => fill[m] ?? m,

@@ -316,6 +316,14 @@ class Mailbox:
         if typ != 'OK':
             raise MailError('the copy was made, but the originals could not be removed from the source folder')
 
+    def create_folder(self, name):
+        """Create a top-level folder (Gmail: a label) by its display name."""
+        typ, data = self._cmd('CREATE', quote(mutf7_encode(name)))
+        if typ != 'OK':
+            raise MailError(f'the server refused to create the folder "{name}": '
+                            f'{data[0].decode(errors="replace") if data and data[0] else ""}')
+        self._folders = None
+
     def append(self, folder, flags, raw):
         self.conn.literal = imaplib.MapCRLF.sub(imaplib.CRLF, raw)
         typ, data = self._cmd('APPEND', quote(folder['raw']), flags, imaplib.Time2Internaldate(time.time()))

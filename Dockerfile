@@ -114,7 +114,7 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 # copied next to each service's own code.
 RUN useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin openclaw-mail
 COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py agentsvc/approvals.py /opt/openclaw-mail/
-COPY mail/launch.py mail/front.py mail/mcp.py mail/mailservice.py mail/imapmail.py mail/message.py mail/sanitize.py mail/extract.py mail/outbox.py mail/htmlout.py /opt/openclaw-mail/
+COPY mail/launch.py mail/front.py mail/mcp.py mail/mailservice.py mail/imapmail.py mail/message.py mail/sanitize.py mail/extract.py mail/outbox.py mail/htmlout.py mail/invite.py /opt/openclaw-mail/
 RUN chmod 755 /opt/openclaw-mail && chmod 644 /opt/openclaw-mail/*.py \
     && python3 -m compileall -q /opt/openclaw-mail \
     && cd /tmp && python3 -I -c 'import sys; sys.path.insert(0, "/opt/openclaw-mail"); import mailservice, launch, front'
@@ -125,10 +125,10 @@ RUN chmod 755 /opt/openclaw-mail && chmod 644 /opt/openclaw-mail/*.py \
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/* \
     && useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin openclaw-calendar
 COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py agentsvc/approvals.py mail/sanitize.py /opt/openclaw-calendar/
-COPY gcalendar/launch.py gcalendar/front.py gcalendar/mcp.py gcalendar/calservice.py gcalendar/gapi.py gcalendar/writes.py gcalendar/ical.py gcalendar/links.py /opt/openclaw-calendar/
+COPY gcalendar/launch.py gcalendar/front.py gcalendar/mcp.py gcalendar/calservice.py gcalendar/gapi.py gcalendar/writes.py gcalendar/ical.py gcalendar/links.py gcalendar/invites.py /opt/openclaw-calendar/
 RUN chmod 755 /opt/openclaw-calendar && chmod 644 /opt/openclaw-calendar/*.py \
     && python3 -m compileall -q /opt/openclaw-calendar \
-    && cd /tmp && python3 -I -c 'import sys; sys.path.insert(0, "/opt/openclaw-calendar"); import calservice, launch, front, writes, ical, links' \
+    && cd /tmp && python3 -I -c 'import sys; sys.path.insert(0, "/opt/openclaw-calendar"); import calservice, launch, front, writes, ical, links, invites' \
     && python3 -I -c 'import zoneinfo; zoneinfo.ZoneInfo("America/Chicago")'
 
 # Owner-side helper for every isolated service's approval queue and log

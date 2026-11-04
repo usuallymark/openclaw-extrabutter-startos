@@ -1,5 +1,6 @@
 import { sdk } from '../sdk'
 import { openclawJson } from '../fileModels/openclaw.json'
+import { emailSettingsJson } from '../fileModels/emailSettings.json'
 import {
   CalendarSettings,
   calendarSettingsJson,
@@ -149,12 +150,13 @@ const inputSpec = InputSpec.of({
   mode: Value.select({
     name: 'Calendar',
     description:
-      "Read only: the calendar agent can list, search and read the events of this Google account, including calendars shared with it, and of the Calendar Links. It cannot change anything.\nRead + write on its own calendar (needs the Google sign-in): it also adds, changes and cancels events on one calendar of its own (named below), and can invite you and the people on the trusted lists. Anything with guests waits for your approval (Review Agent Actions) before Google emails them. It never changes your calendars or anyone else's, and cannot answer invitations. Needs a sign-in with the extra permission (google-signin.py --scopes calendar.readonly,calendar.app.created).\nOff: no calendar service, no calendar agent.",
+      "Read only: the calendar agent can list, search and read the events of this Google account, including calendars shared with it, and of the Calendar Links. It cannot change anything.\nRead + write on its own calendar (needs the Google sign-in): it also adds, changes and cancels events on one calendar of its own (named below), and can invite you and the people on the trusted lists. Anything with guests waits for your approval (Review Agent Actions) before Google emails them. It never changes your calendars or anyone else's, and cannot answer invitations. Needs a sign-in with the extra permission (google-signin.py --scopes calendar.readonly,calendar.app.created).\nRead + invitations by mail (without a Google account): adding, changing or cancelling an event sends an invitation by email to its guests (you and the people on the trusted lists), and their calendar apps put it on their calendars. The mail goes out under your Configure Email rules (Never Send To, Send Automatically To, approvals in Review Agent Actions); the guests' answers are moved to the mail folder 'Calendar Replies'. Needs Configure Email (Gmail or IMAP) with sending by rules, and Google Sign-in set to No Google account.\nOff: no calendar service, no calendar agent.",
     default: 'off',
     values: {
       off: 'Off',
       read: 'Read only',
       write: 'Read + write on its own calendar',
+      invite: 'Read + invitations by mail',
     },
   }),
   account: Value.text({
@@ -210,6 +212,15 @@ const inputSpec = InputSpec.of({
     default: 'Assistant',
     masked: false,
     placeholder: 'Assistant',
+  }),
+  timeZone: Value.text({
+    name: 'Time Zone',
+    description:
+      "Without a Google account: your time zone, for the times the agent reads and sends (an IANA name, e.g. America/Chicago or Europe/Berlin). Blank: the first calendar link's zone, else UTC. With a Google account its calendar's zone is used.",
+    required: false,
+    default: null,
+    masked: false,
+    placeholder: 'America/Chicago',
   }),
   holdAll: Value.toggle({
     name: 'Hold Every New Event for My Approval',
@@ -271,6 +282,7 @@ export const configureCalendar = sdk.Action.withInput(
       includeEmailTrusted: s?.includeEmailTrusted ?? true,
       calendarName: s?.calendarName || 'Assistant',
       holdAll: s?.holdAll ?? false,
+      timeZone: s?.timeZone || null,
       agentModel: s?.agent?.model || 'default',
       extraInstructions: s?.agent?.extraInstructions || null,
     } as any
@@ -370,6 +382,34 @@ export const configureCalendar = sdk.Action.withInput(
         'Without a Google account, add at least one Calendar Link (or choose a Google sign-in).',
       )
     }
+    const zone = String(i.timeZone ?? '').trim()
+    if (
+      zone &&
+      !Intl.supportedValuesOf('timeZone').includes(zone) &&
+      zone !== 'UTC'
+    )
+      throw new Error(
+        `Time Zone: "${zone}" is not a time zone name (for example America/Chicago).`,
+      )
+    if (i.mode === 'invite') {
+      if (token.source !== 'none')
+        throw new Error(
+          'Read + invitations by mail is for use without a Google account: set Google Sign-in to "No Google account (calendar links only)", or choose Read + write on its own calendar.',
+        )
+      const email = await emailSettingsJson
+        .read()
+        .once()
+        .catch(() => null)
+      const emode = email?.account?.mode
+      if (emode !== 'gmail' && emode !== 'imap')
+        throw new Error(
+          'Read + invitations by mail sends the invitations through the mail service: set up Configure Email with Gmail or IMAP first.',
+        )
+      if ((email?.sending?.level ?? 'drafts') !== 'rules')
+        throw new Error(
+          'Read + invitations by mail needs mail sending: in Configure Email → Sending, set it to "Send by rules" first.',
+        )
+    }
     if (i.mode === 'write' && token.source === 'none') {
       throw new Error(
         'Read + write needs the Google sign-in (the calendar links are read only). Choose Read only, or a Google sign-in.',
@@ -384,7 +424,11 @@ export const configureCalendar = sdk.Action.withInput(
     )
     const settings: CalendarSettings = {
       ...(prior ?? {}),
-      mode: i.mode === 'read' || i.mode === 'write' ? i.mode : 'off',
+      mode:
+        i.mode === 'read' || i.mode === 'write' || i.mode === 'invite'
+          ? i.mode
+          : 'off',
+      timeZone: zone || undefined,
       account: account || prior?.account || undefined,
       token,
       trustedOrganizers: trusted,
@@ -411,6 +455,9 @@ export const configureCalendar = sdk.Action.withInput(
             (linkList.length
               ? `, including whether each of the ${linkList.length} calendar link${linkList.length > 1 ? 's' : ''} can be read.`
               : '.') +
+            (settings.mode === 'invite'
+              ? ' Invitations by mail: they go out under your Configure Email rules, so mail to anyone not on Send Automatically To waits in Review Agent Actions.'
+              : '') +
             (settings.mode === 'write'
               ? ` Write mode: on the first start the agent's own calendar "${settings.calendarName || 'Assistant'}" is created in the Google account; the sign-in must include calendar.app.created (the Calendar Service line warns if it does not).`
               : '')

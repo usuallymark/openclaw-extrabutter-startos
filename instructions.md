@@ -370,6 +370,30 @@ where you copied it (Google: **Reset** next to the secret address) and
 paste the new one. The agent sees changes within about 5 minutes; Google
 itself may take a few hours to update what the link shows.
 
+### Adding events without Google: invitations by mail
+
+With calendar links (above) and Configure Email set up (Gmail or IMAP,
+sending *Send by rules*), the calendar agent can also put events on your
+and your family's calendars by sending a normal calendar invitation by
+email, the kind every calendar app understands.
+
+1. **Configure Calendar**: **Calendar** *Read + invitations by mail*,
+   **Google Sign-in** *No Google account*, your **Time Zone** (e.g.
+   `America/Chicago`). Your own and your family's addresses under
+   **Trusted Organizers** are the only ones it may invite. Save.
+2. Ask your assistant, e.g. "Put the dentist on my calendar on Tuesday at 10 for
+   45 minutes". It sends an invitation to you; your calendar app shows it
+   (Gmail adds invitations by itself unless *Add invitations to my
+   calendar* says otherwise; Apple and Outlook show it to accept).
+3. The mail goes out under your Configure Email rules: to addresses on
+   **Send Automatically To** straight away, to anyone else after you
+   approve it in **Review Agent Actions**; Never Send To always wins. Turn
+   on **Hold Every New Event for My Approval** to see every one first.
+
+It can change or cancel only invitations it sent (the guests get an
+update or a cancellation). Your guests' answers (accepted, declined) are
+moved out of the Inbox into the folder **Calendar Replies**.
+
 ### With a Google account
 
 The calendar agent reads the Google calendars of your assistant's Google

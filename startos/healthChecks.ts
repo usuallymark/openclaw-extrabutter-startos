@@ -954,7 +954,7 @@ export async function probeCalendar(
           }
         return {
           result: linksOk ? 'success' : 'failure',
-          message: `${linksText}; read only${warn}`,
+          message: `${linksText}; ${h.mode === 'invite' ? 'writes by invitations sent by mail' : 'read only'}${warn}`,
         }
       }
       const q = Array.isArray(h.queue) ? h.queue.length : 0

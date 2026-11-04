@@ -47,6 +47,8 @@ const SERVICES: Service[] = [
       send_failed: 'Sending failed',
       send_retry: 'Sending failed, will retry',
       auth_refused: 'Password refused by the mailbox',
+      replies_filed: 'Invitation replies moved to Calendar Replies',
+      invite_refused: 'Invitation request refused',
       error: 'Tool error',
     },
   },
@@ -54,7 +56,10 @@ const SERVICES: Service[] = [
     id: 'calendar',
     label: 'Calendar',
     title: 'Calendar changes',
-    isChange: (ev) => ev.startsWith('write_') || ev.startsWith('own_calendar'),
+    isChange: (ev) =>
+      ev.startsWith('write_') ||
+      ev.startsWith('own_calendar') ||
+      ev.startsWith('invite_'),
     labels: {
       state: 'Calendar service',
       sign_in_refused: 'Sign-in refused by Google',
@@ -66,6 +71,10 @@ const SERVICES: Service[] = [
       own_calendar_gone: 'Own calendar missing',
       own_calendar_zone: 'Own calendar time zone set',
       write_done: 'DONE',
+      invite_sent: 'INVITATION SENT',
+      invite_queued: 'Invitation held for approval (mail)',
+      invite_refused: 'Invitation refused',
+      invite_failed: 'Invitation failed',
       write_queued: 'Held for approval',
       write_rejected: 'Rejected by you',
       write_expired: 'Expired (not decided in time)',

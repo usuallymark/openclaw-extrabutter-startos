@@ -1,17 +1,14 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:27',
+  version: '2026.10.1:28',
   releaseNotes: {
-    en_US: `Security: the vault moves out of the agents' reach.
+    en_US: `Invitations by mail: add events to your calendars without Google.
 
-- **A separate vault service now holds Vaultwarden.** Until now every agent with a shell could read the master password and every vault item, including the email password and the Calendar sign-in, and so could send mail or change your calendar without the email and calendar services' rules and your approvals. Now rbw, its keys and the master password belong to the vault service alone; agents ask it.
-- **Items that belong to a service go only to that service**: the email password (while Configure Email uses Gmail or IMAP), the Calendar sign-in and your calendar links' items (while Calendar is on). Every other item works for every agent as before (NAS, Crawl4AI, n8n, ntfy, Gitea and your own), through getcred and rbw get as before. Agents can no longer add, edit or delete vault items; do that in Vaultwarden.
-- **Configure External Services' settings moved to a folder only the package can read**, so an agent can no longer change the Vaultwarden address it signs in to, your host mappings or your trusted certificates.
-- Agent Activity lists which vault items were asked for and which were refused.
-- The first start signs in to Vaultwarden again from a new place, so Vaultwarden may report a new device.
-
-**After installing, change what the agents could read until now**: the mail app password (then save it in Vaultwarden or Configure Email), the Google Calendar sign-in (sign in again and remove the old access in your Google account), each calendar link's secret address, and your Vaultwarden master password (then enter it in Configure External Services).`,
+- **New Calendar choice in Configure Calendar: "Read + invitations by mail"** (without a Google account). When you ask for an event, the calendar agent sends a normal calendar invitation by email to its guests (you and the people on your trusted lists), and their calendar apps put it on their calendars. Changes and cancellations go out as updates.
+- **Your mail rules decide:** invitations are sent by the mail service like any other mail. Never Send To always wins, addresses on Send Automatically To get them straight away, anyone else waits for you in Review Agent Actions, and "Hold Every New Event" holds them all. The calendar service never gets the email password.
+- **Answers are filed:** your guests' replies (accepted, declined) to these invitations are moved out of the Inbox into the folder "Calendar Replies".
+- **Time Zone** setting in Configure Calendar for use without a Google account.`,
   },
   migrations: {
     up: async () => {},

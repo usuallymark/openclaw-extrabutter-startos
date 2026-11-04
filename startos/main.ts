@@ -399,7 +399,9 @@ export const main = sdk.setupMain(async ({ effects }) => {
       {
         mail: mailOn,
         calendar: calOn,
-        calendarWrite: calSettings?.mode === 'write',
+        calendarWrite:
+          calSettings?.mode === 'write' || calSettings?.mode === 'invite',
+        calendarInvite: calSettings?.mode === 'invite',
       },
       appsSettings,
     )

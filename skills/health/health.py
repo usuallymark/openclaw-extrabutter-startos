@@ -382,7 +382,9 @@ def check_calendar(t):
     links_text = f'{good} of {len(links)} calendar link{"s" if len(links) > 1 else ""} readable'
     if state == 'ok':
         if h.get('google') is False:
-            msg, ok = f'{links_text}; read only (no Google account)', good > 0
+            msg, ok = (f'{links_text}; ' + ('writes by invitations sent by mail (no Google account)'
+                                             if h.get('mode') == 'invite' else 'read only (no Google account)'),
+                       good > 0)
         else:
             mode = ('read + write on its own calendar' if h.get('mode') == 'write' else 'read only')
             msg, ok = f'signed in as {h.get("account") or "?"}; {mode}', True
