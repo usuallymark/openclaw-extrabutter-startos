@@ -394,7 +394,10 @@ email, the kind every calendar app understands.
 
 It can change or cancel only invitations it sent (the guests get an
 update or a cancellation). Your guests' answers (accepted, declined) are
-moved out of the Inbox into the folder **Calendar Replies**.
+moved out of the Inbox into the folder **Calendar Replies**. When the
+assistant's address is a Gmail account and the guest uses Google Calendar
+too, Google keeps the answer inside Google Calendar (the event shows "1
+yes") and sends no reply mail, so nothing arrives to file.
 
 ### With a Google account
 
