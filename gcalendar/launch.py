@@ -24,6 +24,7 @@ import os  # noqa: E402
 import pwd  # noqa: E402
 import stat  # noqa: E402
 
+import knowncontact  # noqa: E402
 from launcher import Launcher, vault_field  # noqa: E402
 
 MAX_LINKS = 20
@@ -159,6 +160,9 @@ def main():
         'endpoints': endpoints,
         'links': links,
         'timeZone': str(settings.get('timeZone') or ''),
+        # Organizer in the owner's contacts (since :33): asked of the
+        # contacts service only while Configure Contacts has a source.
+        'knownContacts': knowncontact.contacts_on(owner, node.pw_uid),
     }
     del token, links
     L.exec_service(cal, SERVICE, payload, STATE, 'the calendar settings are too large')

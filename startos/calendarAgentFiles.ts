@@ -58,8 +58,17 @@ the tool gave; you may add, never drop):
 - \`organizer_trusted\`: the organizer is on the owner's trusted list
   (Configure Calendar):
 {{TRUSTED_ORGANIZERS}}
+- \`known_contact\` (since the owner has an address book, Configure
+  Contacts): the organizer is in the owner's contacts, and Google made the
+  event, so the organizer is that real account. Weaker than trusted: it only
+  means "in the address book". The order is: trusted, then known contact,
+  then external.
 - \`external_organizer\`: anyone else. Say so plainly for a new or unexpected
   event.
+- \`contact_not_verified\` (with \`external_organizer\`): the organizer's
+  address is in the owner's contacts, but it is only what an invitation, a
+  calendar link or a Gmail booking claims, so it may be someone posing as
+  them. Report it like \`organizer_unverifiable\`.
 - \`organizer_unverifiable\`: it came from an emailed invitation; the
   organizer address is only what the invitation claims. An event that claims
   to be from the owner, the family, a bank or a company but has this flag is

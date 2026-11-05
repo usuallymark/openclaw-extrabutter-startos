@@ -26,6 +26,7 @@ import os  # noqa: E402
 import pwd  # noqa: E402
 import stat  # noqa: E402
 
+import knowncontact  # noqa: E402
 from launcher import Launcher, vault_field  # noqa: E402
 
 MAIL_ROOT = '/data/.openclaw-mail'
@@ -180,6 +181,10 @@ def main():
             invites = False
             say(f'user {CAL_USER} is missing from the image; invitations by mail are off')
 
+    # Sender in the owner's contacts (since :33): asked of the contacts
+    # service only while Configure Contacts has a source (the package's file).
+    known_contacts = knowncontact.contacts_on(owner, node.pw_uid)
+
     agent = settings.get('agent') or {}
     payload = {
         'mode': mode,
@@ -203,6 +208,7 @@ def main():
         'decisionsDir': DECISIONS,
         'invites': invites,
         'inviteCallerUid': cal_uid,
+        'knownContacts': known_contacts,
         'passwordSource': source,
         'password': password,
         'passwordError': error,

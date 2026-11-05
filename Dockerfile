@@ -113,7 +113,7 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 # (agentsvc/: MCP server, front door, launcher steps, approval queue) are
 # copied next to each service's own code.
 RUN groupadd --system --gid 999 openclaw-mail && useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --uid 999 --gid 999 openclaw-mail
-COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py agentsvc/approvals.py /opt/openclaw-mail/
+COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py agentsvc/approvals.py agentsvc/knowncontact.py /opt/openclaw-mail/
 COPY mail/launch.py mail/front.py mail/mcp.py mail/mailservice.py mail/imapmail.py mail/message.py mail/sanitize.py mail/extract.py mail/outbox.py mail/htmlout.py mail/invite.py /opt/openclaw-mail/
 RUN chmod 755 /opt/openclaw-mail && chmod 644 /opt/openclaw-mail/*.py \
     && python3 -m compileall -q /opt/openclaw-mail \
@@ -124,7 +124,7 @@ RUN chmod 755 /opt/openclaw-mail && chmod 644 /opt/openclaw-mail/*.py \
 # tzdata: event times are given in each calendar's own time zone.
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 998 openclaw-calendar && useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --uid 998 --gid 998 openclaw-calendar
-COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py agentsvc/approvals.py mail/sanitize.py /opt/openclaw-calendar/
+COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py agentsvc/approvals.py agentsvc/knowncontact.py mail/sanitize.py /opt/openclaw-calendar/
 COPY gcalendar/launch.py gcalendar/front.py gcalendar/mcp.py gcalendar/calservice.py gcalendar/gapi.py gcalendar/writes.py gcalendar/ical.py gcalendar/links.py gcalendar/invites.py /opt/openclaw-calendar/
 RUN chmod 755 /opt/openclaw-calendar && chmod 644 /opt/openclaw-calendar/*.py \
     && python3 -m compileall -q /opt/openclaw-calendar \
@@ -134,7 +134,7 @@ RUN chmod 755 /opt/openclaw-calendar && chmod 644 /opt/openclaw-calendar/*.py \
 # Contacts service (Configure Contacts, since 2026.10.1:31): read only, built
 # like the calendar service, as its own user. See startos/contactsService.ts.
 RUN groupadd --system --gid 995 openclaw-contacts && useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --uid 995 --gid 995 openclaw-contacts
-COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py mail/sanitize.py /opt/openclaw-contacts/
+COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py agentsvc/knowncontact.py mail/sanitize.py /opt/openclaw-contacts/
 COPY gcontacts/launch.py gcontacts/front.py gcontacts/mcp.py gcontacts/contactsservice.py gcontacts/people.py gcontacts/vcard.py gcontacts/importvcf.py /opt/openclaw-contacts/
 RUN chmod 755 /opt/openclaw-contacts && chmod 644 /opt/openclaw-contacts/*.py \
     && python3 -m compileall -q /opt/openclaw-contacts \

@@ -20,6 +20,12 @@ caller.
   this account, on the owner's trusted list, or someone else, and whether
   the event came from an emailed invitation (whose organizer is only
   claimed). Calendar has nothing like the mail sender checks.
+- An outside organizer found in the owner's contacts (since :33,
+  knowncontact.py: the contacts service answers only yes or no) is marked
+  known_contact instead of external_organizer when Google made the event
+  (the organizer is then a real Google account), and gets
+  contact_not_verified next to external_organizer when the organizer is
+  only claimed (an emailed invitation, a link feed, Gmail's bookings).
 - The sign-in lives in this process's memory only. When Google refuses it,
   the service waits and exits every 10 minutes, so the launcher fetches it
   again (a new sign-in saved in Vaultwarden is picked up by itself); the
@@ -40,6 +46,7 @@ import time  # noqa: E402
 import urllib.parse  # noqa: E402
 from datetime import date, datetime, timedelta, timezone  # noqa: E402
 
+import knowncontact  # noqa: E402
 import mcp  # noqa: E402
 import svcutil  # noqa: E402
 from gapi import READ_SCOPES, WRITE_SCOPES, ApiError, Google, SignInRefused, Unreachable  # noqa: E402
@@ -78,6 +85,7 @@ class Service:
         self.account = (token or {}).get('account') or cfg.get('account') or ''
         self._fp = self._fingerprint(token['refresh_token']) if token else None
         self._log = svcutil.ActivityLog(os.path.join(self.state_dir, 'activity.jsonl'), LOG_MAX_BYTES)
+        self.contacts = knowncontact.Checker(cfg.get('knownContacts'), self.log)
         self._calls = []
         self._calls_lock = threading.Lock()
         self.writer = (Writer(self, cfg) if cfg.get('mode') == 'write' and token
@@ -218,6 +226,7 @@ class Service:
             'google': bool(self.google),
             'links': self.links.health(),
             'trustedOrganizers': len(self.trusted), 'version': VERSION,
+            'contactsCheck': self.contacts.status(),
             'note': self.cfg.get('note') or '',
             # Summary only (no event text beyond the title): the package
             # raises the Review Agent Actions task from it.
@@ -406,7 +415,8 @@ class Tools:
 
     def t_status(self, a):
         h = self.svc.health()
-        out = {k: h[k] for k in ('state', 'reason', 'since', 'account', 'mode', 'scopes', 'warnings', 'trustedOrganizers')}
+        out = {k: h[k] for k in ('state', 'reason', 'since', 'account', 'mode', 'scopes', 'warnings', 'trustedOrganizers',
+                                 'contactsCheck')}
         out['google'] = h['google']
         if self.svc.links:
             # Each calendar link by name and id, whether it can be read now
@@ -500,12 +510,12 @@ class Tools:
                 and cre != (self.svc.account or '').lower()):
             flags.append('creator_differs')
         name = clean_line(org.get('displayName') or '', 80)
-        return (f'{name} <{addr}>' if name and addr else addr or name or 'unknown'), flags
+        return (f'{name} <{addr}>' if name and addr else addr or name or 'unknown'), flags, addr
 
     def _brief(self, e, cal):
         start, all_day = _when(e.get('start'))
         end, _ = _when(e.get('end'))
-        organizer, flags = self._organizer(e, cal)
+        organizer, flags, addr = self._organizer(e, cal)
         title = clean_line(e.get('summary') or '(no title)', 200)
         flags += [f for f in content_flags(title) if f not in flags]
         me = next((x for x in e.get('attendees') or [] if x.get('self')), None)
@@ -517,6 +527,7 @@ class Tools:
             'attendees': len(e.get('attendees') or []),
             'recurring': bool(e.get('recurringEventId')),
             'flags': flags,
+            '_contact': addr if 'external_organizer' in flags else '',
         }
 
     def _events(self, a, text=None, back_days=0, ahead_days=7, default_limit=50):
@@ -550,6 +561,7 @@ class Tools:
         if self._gerr:
             errors.insert(0, self._gerr)
         events.sort(key=lambda x: (_sort_key(x['start']), x['title']))
+        self._mark_contacts(events[:limit])
         out = {'from': start.isoformat(), 'to': end.isoformat(), 'events': events[:limit],
                'more': len(events) > limit}
         if errors:
@@ -600,11 +612,11 @@ class Tools:
         if addr and 'organizer_self' not in flags and not (feed.from_google and ev['uid'].endswith('@google.com')):
             flags.append('organizer_unverifiable')
         name = clean_line(org.get('name') or '', 80)
-        return (f'{name} <{addr}>' if name and addr else addr or name or 'none named'), flags
+        return (f'{name} <{addr}>' if name and addr else addr or name or 'none named'), flags, addr
 
     def _link_brief(self, inst, cal, link, feed, tz):
         ev = inst['event']
-        organizer, flags = self._link_organizer(ev, feed)
+        organizer, flags, addr = self._link_organizer(ev, feed)
         title = clean_line(ev['summary'] or '(no title)', 200)
         flags += [f for f in content_flags(title) if f not in flags]
         acct = (self.svc.account or '').lower()
@@ -617,7 +629,30 @@ class Tools:
             'attendees': len(ev['attendees']),
             'recurring': bool(ev['rrule'] or ev['rdates'] or ev['recurrence_id'] is not None),
             'flags': flags,
+            '_contact': addr if 'external_organizer' in flags else '',
         }
+
+    def _mark_contacts(self, briefs):
+        """Takes each brief's internal '_contact' (an outside organizer's
+        address) and, when the owner's contacts have it, marks the event:
+        known_contact in place of external_organizer when the organizer is a
+        real Google account (an event made in Google, or a shared
+        calendar's owner); contact_not_verified next to external_organizer
+        when it is only claimed (an emailed invitation, a link feed, Gmail)."""
+        pending = [(b, b.pop('_contact', '')) for b in briefs]
+        addrs = sorted({a for _, a in pending if a})
+        known = self.svc.contacts.known(addrs) if addrs else None
+        if not known:
+            return
+        for b, a in pending:
+            if not a or not known.get(knowncontact.normalize(a)):
+                continue
+            flags = b['flags']
+            if 'organizer_unverifiable' in flags or 'from_gmail' in flags:
+                if 'contact_not_verified' not in flags:
+                    flags.append('contact_not_verified')
+            else:
+                b['flags'] = ['known_contact' if f == 'external_organizer' else f for f in flags]
 
     def t_list(self, a):
         out = self._events(a)
@@ -644,6 +679,7 @@ class Tools:
         cal = next((c for c in self._calendars() if c.get('id') == cal_id), {'id': cal_id})
         e = self.svc.google.get(f'/calendars/{urllib.parse.quote(cal_id, safe="")}/events/{urllib.parse.quote(ev_id, safe="")}')
         brief = self._brief(e, cal)
+        self._mark_contacts([brief])
         attendees = [{'email': _addr(x), 'name': clean_line(x.get('displayName') or '', 80),
                       'response': x.get('responseStatus'), 'organizer': bool(x.get('organizer')),
                       'optional': bool(x.get('optional')), 'self': bool(x.get('self'))}
@@ -667,6 +703,7 @@ class Tools:
             raise ToolError('not found (wrong event id, or it is no longer on that calendar)')
         ev = inst['event']
         brief = self._link_brief(inst, {'id': cal_id}, link, f, tz)
+        self._mark_contacts([brief])
         org = (ev['organizer'] or {}).get('email') or ''
         acct = (self.svc.account or '').lower()
         attendees = [{'email': x['email'], 'name': clean_line(x['name'], 80),

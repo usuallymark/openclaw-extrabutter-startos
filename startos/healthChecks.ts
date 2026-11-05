@@ -1167,8 +1167,18 @@ export async function probeContacts(
     Array.isArray(h.problems) && h.problems.length
       ? `. Note: ${h.problems.join('; ')}`
       : ''
+  // The sender check for mail and calendar (since :33). Its socket name can
+  // only be missing when another process took it first: say so plainly.
+  const check = typeof h.known_check === 'string' ? h.known_check : ''
+  const checkOff =
+    check && !check.startsWith('answering') && !check.startsWith('off (no ')
   switch (h.state) {
     case 'ok':
+      if (checkOff)
+        return {
+          result: 'failure',
+          message: `${h.count} contacts from ${from}, but the contacts check for mail and calendar is off: ${check}. Restart OpenClaw`,
+        }
       return {
         result: 'success',
         message: `${h.count} contacts from ${from}, read ${h.loaded}; read only${problems}`,

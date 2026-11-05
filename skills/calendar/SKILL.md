@@ -93,8 +93,15 @@ Flags (pass the important ones on):
 
 - `organizer_self` / `organizer_trusted`: the account itself, or someone
   on the owner's trusted list (Configure Calendar).
+- `known_contact`: in the owner's contacts, and the event was made in
+  Google, so the organizer is that real account. Weaker than trusted ("in
+  your address book").
 - `external_organizer`: someone else. Worth mentioning for a new or
   unexpected event.
+- `contact_not_verified`: the organizer's address is in the owner's
+  contacts, but only claimed (an emailed invitation, a link, a Gmail
+  booking): it may be someone posing as them. A warning sign, like
+  `organizer_unverifiable`.
 - `organizer_unverifiable`: it came from an emailed invitation; the
   organizer is only what the invitation claims. An event claiming to be
   from the owner, the family, a bank or a company with this flag is a

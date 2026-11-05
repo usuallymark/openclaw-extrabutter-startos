@@ -14,6 +14,9 @@ front.py; only the contacts agent has those tools.
   someone else): they are cleaned, and the note is wrapped as untrusted
   content with heuristic flags.
 - The activity log has counts only: never a name, address or number.
+- Since :33 the mail and calendar services ask whether an address is in
+  the contacts (knowncontact.py, a socket only their users may use): the
+  answer is yes or no for each address, nothing else.
 """
 
 import sys
@@ -27,6 +30,7 @@ import threading  # noqa: E402
 import time  # noqa: E402
 from datetime import date, datetime, timedelta  # noqa: E402
 
+import knowncontact  # noqa: E402
 import mcp  # noqa: E402
 import svcutil  # noqa: E402
 import vcard  # noqa: E402
@@ -65,6 +69,9 @@ class Service:
         self.reason = ''
         self.since = _now()
         self.contacts = []
+        self.emails = frozenset()
+        self.known_check = 'starting'
+        self._refreshing = False
         self.loaded = ''
         self.problems = []
         self._mtime = None
@@ -110,7 +117,7 @@ class Service:
         try:
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         except OSError:
-            self.contacts = []
+            self._set_contacts([])
             self.set_state('unavailable', 'no contacts file yet; import one in Configure Contacts')
             return
         try:
@@ -130,7 +137,8 @@ class Service:
         except ValueError as e:
             self.set_state('unavailable', str(e))
             return
-        self.contacts, self.problems = contacts, problems
+        self._set_contacts(contacts)
+        self.problems = problems
         self._mtime = (st.st_mtime_ns, st.st_size)
         self.loaded = _now()
         self.set_state('ok')
@@ -154,16 +162,48 @@ class Service:
         except ApiError as e:
             self.set_state('error', str(e))
             return
-        self.contacts = [to_contact(p, _clean) for p in people]
+        self._set_contacts([to_contact(p, _clean) for p in people])
         self.problems = []
         self._loaded_at = time.time()
         self.loaded = _now()
         self.set_state('ok')
         self.log({'event': 'loaded', 'source': 'google', 'count': len(self.contacts)})
 
+    def _set_contacts(self, contacts):
+        self.contacts = contacts
+        self.emails = frozenset(e['address'] for c in contacts for e in c['emails'] if e.get('address'))
+
+    # ── "is this address known?" for the mail and calendar services ───────
+
+    def known(self, addresses):
+        """Yes/no for each (normalized) address. Never waits for Google:
+        a stale Google copy is refreshed in the background."""
+        if self.source == 'vcard':
+            self.load()
+        else:
+            self._refresh_soon()
+        if self.state != 'ok' and not self.contacts:
+            raise knowncontact.Unavailable(f'contacts service {self.state}: {self.reason}'.rstrip(': '))
+        emails = self.emails
+        return [bool(a) and a in emails for a in addresses]
+
+    def _refresh_soon(self):
+        with self._lock:
+            if self._refreshing or self.google is None or time.time() - self._loaded_at < GOOGLE_CACHE_S:
+                return
+            self._refreshing = True
+
+        def go():
+            try:
+                self.load()
+            finally:
+                self._refreshing = False
+        threading.Thread(target=go, daemon=True).start()
+
     def health(self):
         return {'state': self.state, 'since': self.since, 'reason': self.reason, 'source': self.source,
                 'account': self.account, 'count': len(self.contacts), 'loaded': self.loaded,
+                'known_check': self.known_check,
                 'problems': self.problems[:5], 'scopes': self.google.scopes if self.google else [],
                 'version': mcp.VERSION}
 
@@ -206,7 +246,7 @@ class Tools:
     def t_status(self, a):
         self.svc.load()
         h = self.svc.health()
-        return {k: h[k] for k in ('state', 'reason', 'source', 'account', 'count', 'loaded', 'problems')}
+        return {k: h[k] for k in ('state', 'reason', 'source', 'account', 'count', 'loaded', 'problems', 'known_check')}
 
     def t_search(self, a):
         text = clean_line(a.get('text') or '', 200).lower()
@@ -322,6 +362,15 @@ def main():
     del token
     tools = Tools(svc)
     svc.load(force=True)
+    callers = {int(k): str(v) for k, v in (cfg.get('knownCallers') or {}).items()}
+    if callers:
+        ksrv, why = knowncontact.serve(svc.known, callers, svc.log)
+        svc.known_check = f'answering {", ".join(sorted(callers.values()))}' if ksrv else why
+        if not ksrv:
+            print(f'contacts service: {why}', file=sys.stderr, flush=True)
+            svc.log({'event': 'known_check_off', 'detail': why})
+    else:
+        svc.known_check = 'off (no mail or calendar service user in this image)'
     srv = svcutil.serve_unix(cfg.get('socket') or os.path.join(cfg['stateDir'], 'worker.sock'),
                              mcp.make_handler(lambda rid, params: mcp.run_tool(rid, params, tools.call, svc.log),
                                               svc.health))

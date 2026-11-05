@@ -22,7 +22,7 @@ TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {}}},
     {'name': 'folders', 'description': 'List the mailbox folders and their roles (inbox, drafts, sent, archive, trash, spam).',
      'inputSchema': {'type': 'object', 'properties': {}}},
-    {'name': 'list', 'description': 'Newest messages in a folder: id, from, subject, date, read/flagged, attachment hint. Does not mark anything read.',
+    {'name': 'list', 'description': 'Newest messages in a folder: id, from, from_verified, subject, date, read/flagged, attachment hint, sender flags. Does not mark anything read.',
      'inputSchema': {'type': 'object', 'properties': {
          'folder': FOLDER,
          'limit': {'type': 'integer', 'minimum': 1, 'maximum': MAX_LIST, 'description': 'Default 20.'},

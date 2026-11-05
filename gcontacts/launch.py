@@ -9,7 +9,9 @@
    from Vaultwarden item "google-contacts" (field "token") through the
    vault service, as root (the agents cannot read that item).
 3. Become the openclaw-contacts user and replace this process with the
-   worker, handing it the settings and sign-in on stdin.
+   worker, handing it the settings and sign-in on stdin, and the user ids
+   of the mail and calendar services, the only callers its "is this address
+   known?" socket answers (since :33, knowncontact.py).
 """
 
 import sys
@@ -21,6 +23,7 @@ import os  # noqa: E402
 import pwd  # noqa: E402
 import stat  # noqa: E402
 
+import knowncontact  # noqa: E402
 from launcher import Launcher, vault_field  # noqa: E402
 
 ROOT = '/data/.openclaw-contacts'
@@ -125,6 +128,7 @@ def main():
         'token': token,
         'tokenError': error,
         'endpoints': endpoints,
+        'knownCallers': {str(uid): name for uid, name in knowncontact.allowed_callers().items()},
     }
     del token
     L.exec_service(svc_user, SERVICE, payload, STATE, 'the contacts settings are too large')

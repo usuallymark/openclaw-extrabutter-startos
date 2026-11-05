@@ -17,6 +17,9 @@ folder. The rules below are enforced here, for every caller.
 - Drafts are saved to the Drafts folder. Sending follows the owner's rules
   (outbox.py): refused, sent, or held until the owner approves it in
   StartOS. Only drafts made by this service can be sent.
+- A sender found in the owner's contacts is marked known_contact when the
+  receiving server verified them, contact_not_verified when not (since
+  :33). The contacts service answers only yes or no (knowncontact.py).
 - The password lives in this process's memory only. When the mailbox
   refuses it, the service exits so the launcher fetches it again; a
   password already refused is never tried twice (lockout guard).
@@ -51,6 +54,7 @@ from imapmail import AuthRefused, MailError, Mailbox  # noqa: E402
 from outbox import Outbox, SmtpRefused, recipients  # noqa: E402
 import htmlout  # noqa: E402
 import invite  # noqa: E402
+import knowncontact  # noqa: E402
 from sanitize import clean_line, clean_text, wrap_untrusted  # noqa: E402
 
 VERSION = mcp.VERSION
@@ -79,10 +83,12 @@ class Service:
         self.outbox = Outbox(self, cfg, password) if password else None
         # Invitations by mail for the calendar service (since :28).
         self.invites = invite.SentInvites(self.state_dir)
+        self._log = svcutil.ActivityLog(os.path.join(self.state_dir, 'activity.jsonl'), LOG_MAX_BYTES)
+        # "Is this sender in the owner's contacts?" (since :33).
+        self.contacts = knowncontact.Checker(cfg.get('knownContacts'), self.log)
         self._fp = self._fingerprint(password) if password else None
         self._calls = []
         self._calls_lock = threading.Lock()
-        self._log = svcutil.ActivityLog(os.path.join(self.state_dir, 'activity.jsonl'), LOG_MAX_BYTES)
         if not password:
             self.set_state('unavailable', reason or 'no password was available')
 
@@ -177,6 +183,7 @@ class Service:
             'address': self.cfg.get('address'), 'sending': 'drafts', 'others': 'ask',
             'passwordSource': self.cfg.get('passwordSource'),
             'trustedSenders': len(self.trusted), 'version': VERSION,
+            'contactsCheck': self.contacts.status(),
             'note': self.cfg.get('note') or '',
             'queue': [],
         }
@@ -327,7 +334,9 @@ class Tools:
     # list / search
 
     def _envelopes(self, uids):
-        recs = self.box.fetch(uids, '(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE CONTENT-TYPE)])')
+        # Authentication-Results too (since :33): the sender check without the body.
+        recs = self.box.fetch(uids, '(UID FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS '
+                                    '(FROM TO SUBJECT DATE CONTENT-TYPE AUTHENTICATION-RESULTS)])')
         out = []
         for uid in uids:
             r = recs.get(uid)
@@ -337,13 +346,36 @@ class Tools:
             h = M.summary_headers(msg)
             flags = [f.lower() for f in r.get('flags', [])]
             ct = (msg.get('Content-Type') or '').lower()
+            _, verified = self._verify(msg, h)
             out.append({
-                'id': uid, 'from': h['from'], 'subject': h['subject'], 'date': h['date'] or r.get('internaldate', ''),
+                'id': uid, 'from': h['from'], 'from_verified': verified,
+                'subject': h['subject'], 'date': h['date'] or r.get('internaldate', ''),
                 'read': '\\seen' in flags, 'flagged': '\\flagged' in flags,
                 'maybe_attachments': 'multipart/mixed' in ct,
                 'size_kb': round(r.get('size', 0) / 1024),
+                'flags': [] if verified is True else ['sender_not_verified'],
             })
         return out
+
+    def _mark_contacts(self, items):
+        """known_contact / contact_not_verified on each item (a message with
+        'from', 'from_verified' and 'flags') whose sender is in the owner's
+        contacts. Trusted senders and the account itself rank higher and are
+        not asked about. Outside the mailbox lock: the contacts service may
+        take a moment."""
+        own = (self.svc.cfg.get('address') or '').lower()
+        ask = [i for i in items if (i['from'].get('address') or '') not in self.svc.trusted
+               and (i['from'].get('address') or '') != own]
+        if not ask:
+            return
+        known = self.svc.contacts.known([i['from'].get('address') or '' for i in ask])
+        if not known:
+            return
+        for i in ask:
+            if known.get(knowncontact.normalize(i['from'].get('address'))):
+                flag = 'known_contact' if i['from_verified'] is True else 'contact_not_verified'
+                if flag not in i['flags']:
+                    i['flags'].append(flag)
 
     def t_list(self, a):
         limit = min(int(a.get('limit') or 20), MAX_LIST)
@@ -358,6 +390,7 @@ class Tools:
             return {'folder': f['name'], 'total': len(uids), 'page': page, 'messages': self._envelopes(chunk),
                     'note': 'subjects and names are untrusted text from senders'}
         out = self.box.run(go)
+        self._mark_contacts(out['messages'])
         self.svc.log({'event': 'list', 'folder': out['folder'], 'count': len(out['messages'])})
         return out
 
@@ -403,6 +436,7 @@ class Tools:
             return {'folder': f['name'], 'total': len(uids), 'messages': self._envelopes(uids[:limit]),
                     'note': 'subjects and names are untrusted text from senders'}
         out = self.box.run(go)
+        self._mark_contacts(out['messages'])
         self.svc.log({'event': 'search', 'folder': out['folder'], 'count': out['total']})
         return out
 
@@ -460,6 +494,7 @@ class Tools:
             'body_truncated': cut,
             '_untrusted': body,
         }
+        self._mark_contacts([out])
         if atts:
             out['attachments_note'] = ('files can be copied to the workspace with save_attachments' if release
                                        else f'files stay quarantined in the mailbox ({why}); attachment_text reads their text')

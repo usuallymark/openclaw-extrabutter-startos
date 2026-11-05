@@ -370,6 +370,17 @@ Contacts).
 The **Contacts Service** line on the service page says how many contacts it
 read and from where.
 
+**Known senders and organizers.** With an address book connected, your
+assistant also tells you when an email's sender or an event's organizer is
+in your contacts ("in your contacts"). That is weaker than your trusted
+lists in Configure Email and Configure Calendar, and it is only said when
+the sender is checked: a mail the mail server verified, or an event made
+in Google. When the address is in your contacts but not checked (an
+unverified mail, an emailed invitation), your assistant warns you instead,
+because someone may be posing as that contact. The email and calendar
+services only ever learn "yes" or "no" for an address, never your
+contacts.
+
 ## Calendar Setup
 
 The calendar agent reads your calendars in one of two ways, or both:
