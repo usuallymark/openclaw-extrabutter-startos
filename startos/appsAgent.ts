@@ -5,9 +5,11 @@ import { openclawJson } from './fileModels/openclaw.json'
 import { AppsAgentSettings } from './fileModels/appsAgent.json'
 import { EMAIL_AGENT_DENY, MAIL_TOOLS } from './mailService'
 import { CALENDAR_TOOLS } from './calendarService'
+import { CONTACTS_TOOLS } from './contactsService'
 import {
   APPS_AGENTS_MD,
   APPS_CALENDAR_LINE,
+  APPS_CONTACTS_LINE,
   APPS_EMAIL_LINE,
   APPS_IDENTITY_MD,
   APPS_NONE_LINE,
@@ -42,6 +44,7 @@ export const APPS_AGENT_DENY = [
   ...EMAIL_AGENT_DENY.filter((g) => g !== 'group:sessions'),
   MAIL_TOOLS,
   CALENDAR_TOOLS,
+  CONTACTS_TOOLS,
 ]
 
 /**
@@ -111,6 +114,7 @@ export function renderAppsAgentsMd(
     calendar: boolean
     calendarWrite: boolean
     calendarInvite?: boolean
+    contacts?: boolean
   },
   settings: AppsAgentSettings | null,
 ): string {
@@ -119,6 +123,7 @@ export function renderAppsAgentsMd(
     ...(apps.calendar
       ? [APPS_CALENDAR_LINE(apps.calendarWrite, !!apps.calendarInvite)]
       : []),
+    ...(apps.contacts ? [APPS_CONTACTS_LINE] : []),
   ]
   const extra = (settings?.extraInstructions ?? '').trim()
   const fill: Record<string, string> = {
@@ -143,6 +148,7 @@ export async function writeAppsAgentWorkspace(
     calendar: boolean
     calendarWrite: boolean
     calendarInvite?: boolean
+    contacts?: boolean
   },
   settings: AppsAgentSettings | null,
 ) {

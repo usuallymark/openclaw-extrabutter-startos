@@ -94,6 +94,7 @@ export async function writeVaultFiles(
   mailSettings: EmailSettings | null | undefined,
   calSettings: any,
   calOn: boolean,
+  contactsSettings: any = null,
 ) {
   await ensurePackageDir(VAULT_ROOT_SUBPATH, 0o711)
   const settings = {
@@ -118,6 +119,12 @@ export async function writeVaultFiles(
         items[item.toLowerCase()] = 'calendar'
     }
   }
+  // Since :31: the contacts service's Google sign-in.
+  if (
+    contactsSettings?.source === 'google' &&
+    contactsSettings?.token?.source !== 'manual'
+  )
+    items['google-contacts'] = 'contacts'
   await rm(vol(`${VAULT_ROOT_SUBPATH}/owners.json`), { force: true })
   await writeFile(
     vol(`${VAULT_ROOT_SUBPATH}/owners.json`),

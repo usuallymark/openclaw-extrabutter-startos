@@ -131,6 +131,15 @@ RUN chmod 755 /opt/openclaw-calendar && chmod 644 /opt/openclaw-calendar/*.py \
     && cd /tmp && python3 -I -c 'import sys; sys.path.insert(0, "/opt/openclaw-calendar"); import calservice, launch, front, writes, ical, links, invites' \
     && python3 -I -c 'import zoneinfo; zoneinfo.ZoneInfo("America/Chicago")'
 
+# Contacts service (Configure Contacts, since 2026.10.1:31): read only, built
+# like the calendar service, as its own user. See startos/contactsService.ts.
+RUN useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin openclaw-contacts
+COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py mail/sanitize.py /opt/openclaw-contacts/
+COPY gcontacts/launch.py gcontacts/front.py gcontacts/mcp.py gcontacts/contactsservice.py gcontacts/people.py gcontacts/vcard.py gcontacts/importvcf.py /opt/openclaw-contacts/
+RUN chmod 755 /opt/openclaw-contacts && chmod 644 /opt/openclaw-contacts/*.py \
+    && python3 -m compileall -q /opt/openclaw-contacts \
+    && cd /tmp && python3 -I -c 'import sys; sys.path.insert(0, "/opt/openclaw-contacts"); import contactsservice, launch, front, people, vcard, importvcf'
+
 # Owner-side helper for every isolated service's approval queue and log
 # (Review Agent Actions, Email Activity): run as root by the package's
 # actions, never by an agent.

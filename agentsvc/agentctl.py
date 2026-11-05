@@ -33,6 +33,8 @@ from email.utils import getaddresses
 SERVICES = {
     'mail': {'root': '/data/.openclaw-mail', 'label': 'Email'},
     'calendar': {'root': '/data/.openclaw-calendar', 'label': 'Calendar'},
+    # No approvals either (read only, since :31); its log has counts only.
+    'contacts': {'root': '/data/.openclaw-contacts', 'label': 'Contacts'},
     # No approvals; its activity log (since :27) says which items the
     # agents asked for and which were refused.
     'vault': {'root': '/data/.openclaw-vault', 'label': 'Vault'},
@@ -352,12 +354,16 @@ def _jobs():
             lc = col.lower()
             if any(w in lc for w in ('prompt', 'message', 'text', 'payload', 'body', 'instruction', 'token')):
                 continue
-            if lc in ('id', 'job_id'):
+            if lc in ('id', 'job_id') and 'id' not in want:
                 want['id'] = col
             elif 'name' in lc and 'name' not in want:
                 want['name'] = col
-            elif ('schedule' in lc or lc in ('cron', 'expr', 'every')) and 'schedule' not in want:
+            elif ('schedule' in lc or lc in ('cron', 'expr', 'every')) and 'schedule' not in want \
+                    and lc != 'schedule_identity':
                 want['schedule'] = col
+            elif lc == 'job_json':
+                # Holds the job's prompt too: only its "schedule" is read.
+                want['job'] = col
             elif lc == 'agent_id':
                 want['agent'] = col
             elif 'enabled' in lc and 'enabled' not in want:
@@ -378,14 +384,27 @@ def _jobs():
         for row in c.execute(f'select {sel} from cron_jobs'):
             d = dict(zip(want.keys(), row))
             sched = d.get('schedule')
+            if not sched and isinstance(d.get('job'), str):
+                try:
+                    sched = json.dumps((json.loads(d['job']) or {}).get('schedule') or '')
+                except (ValueError, AttributeError):
+                    sched = None
+            d.pop('job', None)
             if isinstance(sched, str) and sched[:1] == '{':
                 try:
                     sj = json.loads(sched)
-                    sched = sj.get('expr') or sj.get('cron') or (f'every {sj.get("everyMs") // 60000} min' if sj.get('everyMs') else sj.get('kind'))
+                    if isinstance(sj, dict):
+                        sched = (sj.get('expr') or sj.get('cron')
+                                 or (f'every {int(sj["everyMs"]) // 60000} min' if sj.get('everyMs') else None)
+                                 or (f'once at {sj.get("at")}' if sj.get('at') else sj.get('kind')))
+                        if sj.get('tz') and (sj.get('expr') or sj.get('cron')):
+                            sched = f'{sched} ({sj["tz"]})'
+                    else:
+                        sched = str(sj or '')
                 except (ValueError, TypeError):
                     pass
             out.append({'name': _short(d.get('name') or d.get('id'), 60), 'schedule': _short(sched, 40),
-                        'agent': _short(d.get('agent'), 30), 'enabled': d.get('enabled'),
+                        'agent': _short(d.get('agent'), 30) or 'default (main)', 'enabled': d.get('enabled'),
                         'runs7d': runs.get(str(d.get('id')), 0)})
     except sqlite3.Error:
         pass

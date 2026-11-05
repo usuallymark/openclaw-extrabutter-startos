@@ -47,6 +47,15 @@ import {
 import { emailSettingsJson } from './fileModels/emailSettings.json'
 import { withGatewaySecrets, writeGatewaySecrets } from './secretEnv'
 import { calendarSettingsJson } from './fileModels/calendarSettings.json'
+import { contactsSettingsJson } from './fileModels/contactsSettings.json'
+import {
+  CONTACTS_IMPORT_DIR,
+  CONTACTS_PORT,
+  applyContactsConfig,
+  contactsOn as contactsIsOn,
+  contactsRootOwner,
+  writeContactsAgentWorkspace,
+} from './contactsService'
 import { vaultRootOwner, writeVaultFiles } from './vaultService'
 import {
   CALENDAR_PORT,
@@ -86,6 +95,8 @@ import {
   vaultAnswers,
   probeCalendar,
   calendarAnswers,
+  contactsAnswers,
+  probeContacts,
   mailAnswers,
   probeVault,
   vaultTrigger,
@@ -153,6 +164,7 @@ for p in /data/* /data/.[!.]* /data/..?*; do
   [ -e "$p" ] || [ -L "$p" ] || continue
   [ "$p" = /data/.openclaw-mail ] && continue
   [ "$p" = /data/.openclaw-calendar ] && continue
+  [ "$p" = /data/.openclaw-contacts ] && continue
   [ "$p" = /data/.openclaw-vault ] && continue
   [ "$p" = /data/.openclaw-package ] && continue
   chown -R node:node "$p"
@@ -353,6 +365,25 @@ export const main = sdk.setupMain(async ({ effects }) => {
     )
   const calOwner = calOn ? await calendarRootOwner() : null
 
+  // Contacts (Configure Contacts, since :31): the contacts service and the
+  // contacts agent, read only (contactsService.ts). After the calendar
+  // wiring: the contacts agent's deny names the mail and calendar tools.
+  const contactsSettings = await contactsSettingsJson
+    .read()
+    .once()
+    .catch(() => null)
+  const contactsOn = contactsIsOn(contactsSettings)
+  await applyContactsConfig(effects, contactsSettings)
+  if (contactsOn && contactsSettings)
+    await writeContactsAgentWorkspace(contactsSettings)
+  const contactsOwner = contactsOn ? await contactsRootOwner() : null
+  // Where a vCard file is put to be imported (the gateway user's; the
+  // chown step gives it to node).
+  await mkdir(
+    sdk.volumes.main.subpath(`.openclaw/workspace/${CONTACTS_IMPORT_DIR}`),
+    { recursive: true },
+  ).catch(() => {})
+
   // The vault service's settings and which items belong to which service
   // (vaultService.ts). The master password: once from the legacy settings
   // field (<= :1) if there is none yet, and that field then removed.
@@ -380,6 +411,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
     mailSettings,
     calSettings,
     calOn,
+    contactsSettings,
   )
   if (owned.length)
     console.info(`Vault items only their service may read: ${owned.join(', ')}`)
@@ -388,7 +420,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
   // The apps agent (appsAgent.ts, since :20): while mail or calendar is on,
   // the main agent asks it, with one skill, and it asks the email and
   // calendar agents. Rewritten at every start.
-  const appsOn = mailOn || calOn
+  const appsOn = mailOn || calOn || contactsOn
   const appsSettings = await appsAgentJson
     .read()
     .once()
@@ -403,6 +435,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
         calendarWrite:
           calSettings?.mode === 'write' || calSettings?.mode === 'invite',
         calendarInvite: calSettings?.mode === 'invite',
+        contacts: contactsOn,
       },
       appsSettings,
     )
@@ -452,6 +485,16 @@ export const main = sdk.setupMain(async ({ effects }) => {
   // What /opt/skills/health/health.py checks: the same targets as the
   // StartOS health list (externalTargets is shared with externalChecks).
   const healthTargets: HealthTarget[] = [
+    ...(contactsOn
+      ? [
+          {
+            key: 'contacts',
+            label: 'Contacts Service',
+            kind: 'contacts' as const,
+            url: `http://127.0.0.1:${CONTACTS_PORT}/healthz`,
+          },
+        ]
+      : []),
     ...(calOn
       ? [
           {
@@ -1104,9 +1147,63 @@ export const main = sdk.setupMain(async ({ effects }) => {
         })
     : withMail
 
-  if (!webchatEnabled) return logStops(effects, withCal)
+  // The contacts service (contactsService.ts, gcontacts/), like calendar.
+  const withContacts = contactsOn
+    ? (withCal as typeof daemons)
+        .addDaemon('contacts-front', {
+          subcontainer: openclawSub,
+          exec: {
+            command: ['python3', '-I', '/opt/openclaw-contacts/front.py'],
+            user: 'root',
+            env: { CONTACTS_PORT: String(CONTACTS_PORT) },
+          },
+          ready: {
+            display: null,
+            fn: () =>
+              sdk.healthCheck.checkPortListening(effects, CONTACTS_PORT, {
+                successMessage: 'Contacts endpoint listening',
+                errorMessage: 'Contacts endpoint not listening',
+              }),
+            gracePeriod: 30_000,
+          },
+          requires: ['chown'],
+        })
+        .addDaemon('contacts', {
+          subcontainer: openclawSub,
+          exec: {
+            command: ['python3', '-I', '/opt/openclaw-contacts/launch.py'],
+            user: 'root',
+            env: {
+              CONTACTS_ROOT_UID:
+                contactsOwner === null ? '' : String(contactsOwner),
+            },
+          },
+          ready: {
+            display: null,
+            fn: () => contactsAnswers(openclawSub),
+            gracePeriod: 180_000,
+          },
+          requires: [
+            'chown',
+            'network-setup',
+            'vault-service',
+            'contacts-front',
+          ],
+        })
+        .addHealthCheck('contacts-status', {
+          ready: {
+            display: 'Contacts Service',
+            fn: () => probeContacts(openclawSub),
+            trigger: externalTrigger,
+            gracePeriod: 0,
+          },
+          requires: ['contacts'],
+        })
+    : withCal
 
-  const all = (withCal as typeof daemons).addDaemon('webchat', {
+  if (!webchatEnabled) return logStops(effects, withContacts)
+
+  const all = (withContacts as typeof daemons).addDaemon('webchat', {
     subcontainer: openclawSub,
     exec: {
       command: ['node', '/opt/webchat/server.mjs'],

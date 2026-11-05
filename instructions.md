@@ -333,6 +333,43 @@ step 2 and update the Vaultwarden fields or paste the new token.
 
 ---
 
+## Contacts Setup
+
+The contacts agent looks up your address book for your assistant ("Sam's
+number", "who is this address?", "birthdays this month"). Read only: it
+never changes a contact. Like the email and calendar agents it has only
+its own tools.
+
+**From a vCard file (any provider, simplest).**
+
+1. Export your contacts as a vCard file (.vcf): Google Contacts → Export →
+   vCard; iPhone or iCloud → Contacts → select all → Export vCard; Outlook
+   → People → Manage contacts → Export.
+2. Give the file to your assistant and ask it to save it in the folder
+   `contacts-import` of its workspace (or copy it there yourself).
+3. **Configure Contacts**: **Contacts** *vCard file*, choose the file under
+   **Address Book File**, Save. It is copied into the contacts service's own
+   folder and (unless you switch that off) removed from the workspace.
+4. To update it later, export again and import the new file the same way.
+
+**From the assistant's Google account.** Google does not share one
+account's contacts with another, so this reads the contacts kept in the
+assistant's own account (you can import a vCard file there in Google
+Contacts).
+
+1. In the Google Cloud project of the calendar sign-in, enable the
+   **People API** (APIs & Services → Library → People API → Enable).
+2. On your computer, as the assistant's Google account:
+   `python3 google-signin.py --scopes contacts.readonly ~/Downloads/client_secret_*.json > ~/Downloads/contacts-signin.json`
+3. Put the contents in Vaultwarden, item `google-contacts`, hidden custom
+   field `token` (only the contacts service can fetch it), then delete the
+   file.
+4. **Configure Contacts**: **Contacts** *Google account*, the sign-in from
+   Vaultwarden, the account's address. Save.
+
+The **Contacts Service** line on the service page says how many contacts it
+read and from where.
+
 ## Calendar Setup
 
 The calendar agent reads your calendars in one of two ways, or both:

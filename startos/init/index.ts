@@ -7,6 +7,7 @@ import { sdk } from '../sdk'
 import { initializeService } from './initializeService'
 import { initEmailSettings } from '../mailService'
 import { initCalendarSettings } from '../calendarService'
+import { initContactsSettings } from '../contactsService'
 import { initPackageSettings } from '../vaultService'
 import { installTasks } from './installTasks'
 import { taskConfigureApi } from './taskConfigureApi'
@@ -26,6 +27,7 @@ export const init = sdk.setupInit(
   initializeService,
   initEmailSettings,
   initCalendarSettings,
+  initContactsSettings,
 )
 
 export const uninit = sdk.setupUninit(versionGraph)

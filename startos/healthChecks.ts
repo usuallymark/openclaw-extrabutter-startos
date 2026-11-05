@@ -3,6 +3,7 @@ import { sdk } from './sdk'
 import { EmailConfig, googleSignInStatus, usesMailService } from './email'
 import { MAIL_URL } from './mailService'
 import { CALENDAR_URL } from './calendarService'
+import { CONTACTS_URL } from './contactsService'
 import { APPS_AGENT_ID, APPS_SESSION } from './appsAgent'
 import { reviewAgentActions } from './actions/reviewAgentActions'
 import {
@@ -225,6 +226,7 @@ export type HealthTarget =
   | { key: string; label: string; kind: 'google'; address: string }
   | { key: string; label: string; kind: 'mail'; url: string }
   | { key: string; label: string; kind: 'calendar'; url: string }
+  | { key: string; label: string; kind: 'contacts'; url: string }
   | { key: string; label: string; kind: 'missing'; message: string }
 
 // Health path per HTTP service, appended to the configured URL.
@@ -1106,4 +1108,77 @@ export async function probeSpending(
   }
   spendingCache = { at: Date.now(), result }
   return result
+}
+
+// ── Contacts service (since :31) ────────────────────────────────────────────
+
+const CONTACTS_SESSION = 'agent:contacts:main'
+let contactsSideJob: Promise<void> | null = null
+
+async function contactsHealthz(sub: Sub): Promise<any | null> {
+  try {
+    const res = await sub.exec(
+      ['curl', '-sS', '--max-time', '5', `${CONTACTS_URL}/healthz`],
+      { user: 'node', timeout: 15_000 },
+    )
+    if (res.exitCode !== 0) return null
+    return JSON.parse(String(res.stdout))
+  } catch {
+    return null
+  }
+}
+
+/** The contacts daemon's readiness: the service answers (in any state). */
+export async function contactsAnswers(
+  sub: Sub,
+): Promise<Result | { result: 'starting'; message: string }> {
+  return (await contactsHealthz(sub))
+    ? { result: 'success', message: 'Contacts service answering' }
+    : { result: 'starting', message: 'Contacts service starting' }
+}
+
+/** The "Contacts Service" line; clears the contacts agent's (and the apps
+ * agent's) conversation after 15 idle minutes, as a side job. */
+export async function probeContacts(
+  sub: Sub,
+): Promise<Result | { result: 'starting'; message: string }> {
+  const h = await contactsHealthz(sub)
+  if (!h) return { result: 'starting', message: 'Contacts service starting' }
+  if (!contactsSideJob)
+    contactsSideJob = (async () => {
+      try {
+        await within(
+          150_000,
+          resetIdleSession(sub, 'contacts', CONTACTS_SESSION, 'Contacts'),
+          'contacts session reset',
+        )
+        await resetIdleAppsSession(sub)
+      } catch (e) {
+        console.warn(`contacts session reset: ${(e as Error)?.message}`)
+      }
+    })().finally(() => {
+      contactsSideJob = null
+    })
+  const from =
+    h.source === 'google'
+      ? `the Google account${h.account ? ` ${h.account}` : ''}`
+      : 'the imported vCard file'
+  const problems =
+    Array.isArray(h.problems) && h.problems.length
+      ? `. Note: ${h.problems.join('; ')}`
+      : ''
+  switch (h.state) {
+    case 'ok':
+      return {
+        result: 'success',
+        message: `${h.count} contacts from ${from}, read ${h.loaded}; read only${problems}`,
+      }
+    case 'starting':
+      return { result: 'starting', message: 'Contacts service starting' }
+    default:
+      return {
+        result: 'failure',
+        message: `Contacts (${from}): ${h.reason || h.state}`,
+      }
+  }
 }

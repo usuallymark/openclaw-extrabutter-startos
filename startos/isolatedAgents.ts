@@ -5,7 +5,7 @@
 // listed with them: it has no service tools, but it is never the main agent
 // either.
 
-export const ISOLATED_AGENT_IDS = ['email', 'calendar', 'apps']
+export const ISOLATED_AGENT_IDS = ['email', 'calendar', 'contacts', 'apps']
 
 export const isIsolatedAgent = (id: string) => ISOLATED_AGENT_IDS.includes(id)
 

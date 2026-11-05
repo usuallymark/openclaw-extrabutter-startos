@@ -6,6 +6,7 @@ import { configureEmail } from './configureEmail'
 import { agentActivity } from './agentActivity'
 import { spendingAlert, usageAndCost } from './usageAndCost'
 import { configureCalendar } from './configureCalendar'
+import { configureContacts } from './configureContacts'
 import { configureAppsAgent } from './configureAppsAgent'
 import { reviewAgentActions } from './reviewAgentActions'
 import { configureExternalServices } from './configureExternalServices'
@@ -29,6 +30,7 @@ export const actions = sdk.Actions.of()
   .addAction(usageAndCost)
   .addAction(spendingAlert)
   .addAction(configureCalendar)
+  .addAction(configureContacts)
   .addAction(configureAppsAgent)
   .addAction(configureExternalServices)
   .addAction(configureWebchat)

@@ -1,13 +1,14 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:30',
+  version: '2026.10.1:31',
   releaseNotes: {
-    en_US: `Usage and Cost: see what the AI models cost.
+    en_US: `Contacts, read only.
 
-- **New action: Usage and Cost.** The model cost per agent (today, 7 and 30 days, with tokens and the model each uses), per day for the last two weeks, and how often each scheduled job ran. The numbers are the ones OpenClaw records for every model call with the provider's prices; no message text is shown.
-- **New Spending line** on the service page: today's and the week's cost, checked every 10 minutes.
-- **New action: Spending Alert.** Set a daily limit; above it the Spending line turns red and you get one notification (and ntfy) that day.`,
+- **New: Configure Contacts.** Your assistant can look up your address book ("Sam's number", "who is this address?", "birthdays this month") through a new contacts agent, the only agent that reads contacts. Read only: nothing is ever changed.
+- **Two sources:** a vCard file exported from any app (Google, iPhone, Outlook), imported into the contacts service's own folder where the agents cannot read it; or the contacts of the assistant's own Google account, with a sign-in that can only read contacts.
+- New **Contacts Service** line on the service page.
+- Usage and Cost: scheduled jobs now show their schedule, and jobs without an agent show "default (main)".`,
   },
   migrations: {
     up: async () => {},

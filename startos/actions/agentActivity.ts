@@ -10,7 +10,7 @@ import { agentctl } from '../agentActions'
 type Entry = Record<string, unknown> & { ts?: string; event?: string }
 
 type Service = {
-  id: 'mail' | 'calendar' | 'vault'
+  id: 'mail' | 'calendar' | 'contacts' | 'vault'
   label: string
   /** The section title for this service's changes or refusals. */
   title: string
@@ -85,6 +85,22 @@ const SERVICES: Service[] = [
     },
   },
   {
+    // Since :31: counts only (never a name, address or number).
+    id: 'contacts',
+    label: 'Contacts',
+    title: 'Contacts service',
+    isChange: (ev) => ev === 'state' || ev === 'loaded',
+    labels: {
+      state: 'Contacts service',
+      loaded: 'Address book read',
+      search: 'Searched',
+      lookup: 'Looked up',
+      read: 'Read a contact',
+      birthdays: 'Listed birthdays',
+      error: 'Tool error',
+    },
+  },
+  {
     // Since :27: which Vaultwarden items were asked for, by the package or
     // an agent, and which were refused (names only, never values).
     id: 'vault',
@@ -120,6 +136,7 @@ function line(svc: Service, e: Entry): string {
     add('subject', e.subject ? `"${String(e.subject)}"` : '')
     add('ids', e.ids ?? e.id ?? e.draft_id)
     add('count', e.count)
+    add('from', e.source)
     add('files', e.files)
     add('attachments', e.attachments)
     add('flags', e.flags)
@@ -178,7 +195,7 @@ export const agentActivity = sdk.Action.withoutInput(
   async () => ({
     name: 'Agent Activity',
     description:
-      "The email, calendar and vault services' logs, newest first: what the agents read, filed, drafted, sent, added, changed and cancelled, what your rules refused or held for approval, your decisions, and which Vaultwarden items were given or refused. No message text, event descriptions or secrets are logged.",
+      "The email, calendar, contacts and vault services' logs, newest first: what the agents read, filed, drafted, sent, added, changed and cancelled, what your rules refused or held for approval, your decisions, and which Vaultwarden items were given or refused. No message text, event descriptions or secrets are logged.",
     warning: null,
     allowedStatuses: 'any',
     group: null,

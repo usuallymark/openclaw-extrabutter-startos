@@ -288,6 +288,15 @@ The calendars and the calendar agent (since :15, read only; writing to its own c
 
 Configure Agents (since :22) also sets OpenClaw's `skills.workshop.autonomous.mode`: **Propose, I approve** (`propose`, recommended), **Automatic** (`auto`, OpenClaw's default) or **Off**. On the box, automatic self-learning rewrote a Workshop skill mid-failure; skills in the workspace's `skills/` folder take precedence over Workshop skills and are never changed by it.
 
+### Configure Contacts
+
+The address book and the contacts agent (since :31, read only; `startos/actions/configureContacts.ts`, `startos/contactsService.ts`, `gcontacts/`). Built like the calendar service, on the same shared parts.
+
+- **Settings:** `/data/.openclaw-contacts/settings.json` (root, 0600; the folder root:openclaw-contacts 0710, skipped by the chown step, made with `ensurePackageDir`). **Cost:** the service restarts.
+- **Sources:** *vCard file*: a `.vcf` put in the workspace folder `contacts-import` is imported by `importvcf.py` (run as root: the folder opened component by component without following links, the file with `O_NOFOLLOW`, checked to parse, written as `contacts.vcf` root:openclaw-contacts 0640; the workspace copy removed unless kept); `gcontacts/vcard.py` reads vCard 2.1/3.0/4.0 (folding, quoted-printable, charsets, grouped properties; photos skipped). *Google account*: the assistant's own contacts through the People API (`people/me/connections` only, not Other contacts), with its own sign-in (`google-signin.py --scopes contacts.readonly`, Vaultwarden item `google-contacts` field `token`, claimed by the contacts service in `owners.json`, or pasted); read every 15 minutes at most.
+- **Contacts service**, user `openclaw-contacts`, daemons `contacts-front` (MCP on `127.0.0.1:18807/mcp`, `mcp.servers.contacts` → `contacts__*`) and `contacts` (`gcontacts/launch.py` as root → `contactsservice.py`). Tools: `status`, `search` (words in names, emails, phones, organization, groups; brief entries), `lookup` (exact email or phone, any formatting), `read` (one contact; its note wrapped as untrusted content, with flags), `birthdays` (a range, default 30 days, with the age when the year is known). Rate limit 120 a minute. Activity log with counts only.
+- **Contacts agent** `agents.entries.contacts`: `allow: ["contacts__*"]`, the email agent's deny list plus `mail__*`, `calendar__*`; every other agent has `contacts__*` denied (`isolatedAgents.ts`); acts only on `[via apps]` requests; told to pass on only the fields asked for. The apps agent lists it and returns its report as `contacts`.
+
 ### Configure Apps Agent
 
 Name, model and extra instructions of the apps agent (`.startos/apps-agent.json`; since :20). The agent itself exists while Configure Email uses Gmail/IMAP or Configure Calendar is on. A persona goes in its own `SOUL.md`/`IDENTITY.md`; its reports stay JSON.
@@ -391,6 +400,7 @@ Four, two of them blocking (a SimpleX plugin task may also appear when the bundl
 | `mail-status`   | "Mail Service"           | The mail service's `/healthz` every minute: signed in, password refused (since when, why), Vaultwarden unavailable, server unreachable; sending level, a warning for Anyone Else: Send automatically, messages waiting for approval (raises/clears the Review Agent Actions task) |
 | `calendar`      | (hidden)                 | Ready once the calendar service's `/healthz` answers (any state) |
 | `calendar-status` | "Calendar Service"     | The calendar service's `/healthz` every minute: signed in (account, read only, scope warnings), sign-in refused (why, what to do), Vaultwarden unavailable, Google unreachable; calendar links readable (N of M, each failing link as a warning; links only: failure when none can be read) |
+| `contacts-status` | "Contacts Service"     | Since :31: the contacts service's `/healthz` every minute: how many contacts from which source, when read; no file yet, sign-in refused, Google unreachable |
 | `spending`        | "Spending"             | Since :30: today's and the last 7 days' model cost (OpenClaw's records), every 10 minutes; fails above the Spending Alert limit, with one notification + ntfy that day |
 | `ext-email`     | "Google account"         | Google account only: a stored sign-in for the address (local, no network) |
 

@@ -263,6 +263,8 @@ def _apps_problems(entries):
     for g in ('group:runtime', 'group:fs', 'group:web', 'mail__*', 'calendar__*'):
         if g not in (tools.get('deny') or []):
             problems.append(f'the apps agent does not have {g} denied')
+    if 'contacts' in entries and 'contacts__*' not in (tools.get('deny') or []):
+        problems.append('the apps agent does not have contacts__* denied')
     if (tools.get('codeMode') or {}).get('enabled') is not False:
         problems.append('code mode is not switched off for the apps agent')
     return problems
@@ -369,6 +371,57 @@ def _calendar_boundary():
     return problems + _apps_problems(entries)
 
 
+def _contacts_boundary():
+    """Problems with the contacts isolation in openclaw.json ([] when intact)."""
+    try:
+        with open('/data/.openclaw/openclaw.json') as f:
+            cfg = json.load(f)
+    except (OSError, ValueError) as e:
+        return [f'openclaw.json could not be read ({e.__class__.__name__})']
+    problems = []
+    server = ((cfg.get('mcp') or {}).get('servers') or {}).get('contacts') or {}
+    if server.get('enabled') is False:
+        problems.append('the contacts MCP server is switched off in openclaw.json')
+    entries = (cfg.get('agents') or {}).get('entries') or {}
+    agent = entries.get('contacts')
+    if not agent:
+        problems.append('the contacts agent is missing from openclaw.json')
+    else:
+        tools = agent.get('tools') or {}
+        if tools.get('allow') != ['contacts__*']:
+            problems.append(f'the contacts agent may use {tools.get("allow")}, not only contacts__*')
+        for g in ('group:runtime', 'group:fs', 'group:web', 'group:sessions', 'group:messaging', 'mail__*', 'calendar__*'):
+            if g not in (tools.get('deny') or []):
+                problems.append(f'the contacts agent does not have {g} denied')
+        if (tools.get('codeMode') or {}).get('enabled') is not False:
+            problems.append('code mode is not switched off for the contacts agent')
+    for aid, e in entries.items():
+        if aid == 'contacts' or not isinstance(e, dict):
+            continue
+        if 'contacts__*' not in ((e.get('tools') or {}).get('deny') or []):
+            problems.append(f'agent {aid} does not have contacts__* denied')
+    return problems + _apps_problems(entries)
+
+
+def check_contacts(t):
+    """The contacts service's own state, and the isolation around it."""
+    try:
+        with urllib.request.urlopen(t['url'], timeout=8) as r:
+            h = json.loads(r.read() or b'{}')
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return False, f'the contacts service does not answer ({e.__class__.__name__}); it may be starting or restarting'
+    src = 'the Google account' + (f' {h["account"]}' if h.get('account') else '') if h.get('source') == 'google' \
+        else 'the imported vCard file'
+    if h.get('state') == 'ok':
+        msg, ok = f'{h.get("count", 0)} contacts from {src}; read only', True
+    else:
+        msg, ok = f'{h.get("state")}: {h.get("reason") or ""}'.rstrip(': '), False
+    problems = _contacts_boundary()
+    if problems:
+        return False, msg + '; ISOLATION PROBLEM: ' + '; '.join(problems) + ' (a restart of OpenClaw rewrites it)'
+    return ok, msg + '; contacts agent limited to the contacts tools, every other agent denied them'
+
+
 def check_calendar(t):
     """The calendar service's own state, and the isolation around it."""
     try:
@@ -442,7 +495,8 @@ def check_missing(t):
 
 
 CHECKS = {'http': check_http, 'tcp': check_tcp, 'vault': check_vault, 'memory': check_memory,
-          'google': check_google, 'mail': check_mail, 'calendar': check_calendar, 'missing': check_missing}
+          'google': check_google, 'mail': check_mail, 'calendar': check_calendar,
+          'contacts': check_contacts, 'missing': check_missing}
 
 
 def run_check(t):
