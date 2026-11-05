@@ -4,6 +4,7 @@ import { configureAgents } from './configureAgents'
 import { configureApiCredentials } from './configureApiCredentials'
 import { configureEmail } from './configureEmail'
 import { agentActivity } from './agentActivity'
+import { spendingAlert, usageAndCost } from './usageAndCost'
 import { configureCalendar } from './configureCalendar'
 import { configureAppsAgent } from './configureAppsAgent'
 import { reviewAgentActions } from './reviewAgentActions'
@@ -25,6 +26,8 @@ export const actions = sdk.Actions.of()
   .addAction(configureEmail)
   .addAction(reviewAgentActions)
   .addAction(agentActivity)
+  .addAction(usageAndCost)
+  .addAction(spendingAlert)
   .addAction(configureCalendar)
   .addAction(configureAppsAgent)
   .addAction(configureExternalServices)

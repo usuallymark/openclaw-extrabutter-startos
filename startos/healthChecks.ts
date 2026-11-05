@@ -12,6 +12,8 @@ import {
   taskSynced,
 } from './agentActions'
 import { LocalKey, notInstalledMessage } from './localServices'
+import { usageSettingsJson } from './fileModels/usageSettings.json'
+import { dollars } from './actions/usageAndCost'
 
 // Health checks for the vault and external services.
 //
@@ -1031,4 +1033,77 @@ export async function vaultAnswers(
   } catch {
     return { result: 'starting', message: 'Vault service starting' }
   }
+}
+
+// ── Spending (since :30) ────────────────────────────────────────────────────
+
+// Today's and the week's model cost (agentctl.py usage, OpenClaw's own
+// records), read at most every 10 minutes: the agent databases are large.
+// Above the owner's daily limit (Spending Alert) the line fails and one
+// notification (and ntfy) goes out that day.
+const SPENDING_EVERY_MS = 10 * 60_000
+let spendingCache: { at: number; result: Result } | null = null
+let spendingAlerted = ''
+
+export async function probeSpending(
+  effects: T.Effects,
+  sub: Sub,
+): Promise<Result> {
+  if (spendingCache && Date.now() - spendingCache.at < SPENDING_EVERY_MS)
+    return spendingCache.result
+  let result: Result
+  try {
+    const res = await sub.exec(
+      ['python3', '-I', '/opt/openclaw-services/agentctl.py', 'usage', '7'],
+      { user: 'root', timeout: 60_000 },
+    )
+    if (res.exitCode !== 0) throw new Error('usage could not be read')
+    const u = JSON.parse(String(res.stdout))
+    const limit =
+      (await usageSettingsJson
+        .read((s) => s.dailyLimit)
+        .once()
+        .catch(() => null)) ?? null
+    const today = Number(u?.total?.today ?? 0)
+    const week = Number(u?.total?.d7 ?? 0)
+    const text = `Today ${dollars(today)} · last 7 days ${dollars(week)} (Usage and Cost has the details)`
+    if (limit && today > limit) {
+      result = {
+        result: 'failure',
+        message: `Over your daily limit of ${dollars(limit)}: ${text}`,
+      }
+      if (spendingAlerted !== String(u.today)) {
+        spendingAlerted = String(u.today)
+        const msg = `The models cost ${dollars(today)} today (${u.zone}), above your limit of ${dollars(limit)}. Open Actions → Usage and Cost to see which agent.`
+        await within(
+          20_000,
+          sdk.notification.create(effects, {
+            level: 'warning',
+            title: 'Model cost above your daily limit',
+            message: msg,
+          }),
+          'notification',
+        ).catch(() => {})
+        await sub
+          .exec(
+            [
+              'notify',
+              '--title',
+              'OpenClaw spending',
+              '--tags',
+              'warning',
+              msg,
+            ],
+            { user: 'node', env: { HOME: '/data' }, timeout: 30_000 },
+          )
+          .catch(() => {})
+      }
+    } else {
+      result = { result: 'success', message: text }
+    }
+  } catch {
+    result = { result: 'success', message: 'Spending not known yet' }
+  }
+  spendingCache = { at: Date.now(), result }
+  return result
 }

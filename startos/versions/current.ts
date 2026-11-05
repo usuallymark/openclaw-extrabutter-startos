@@ -1,13 +1,13 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:29',
+  version: '2026.10.1:30',
   releaseNotes: {
-    en_US: `Configure Calendar: switching modes without surprises.
+    en_US: `Usage and Cost: see what the AI models cost.
 
-- **The Calendar choice now shows only the fields that mode needs.** Read only asks for the Google sign-in or none, Read + write (Google) for the sign-in and the own calendar's name, Read + invitations by mail (no Google) for the time zone. A half-finished switch can no longer be saved.
-- **Switching back keeps what you had.** Each mode's fields keep their saved values (sign-in choice, own calendar name, time zone, hold setting) and come back as you left them.
-- **Invitations by mail is greyed out until Configure Email can send them,** and the description says what is missing, instead of an error after Save.`,
+- **New action: Usage and Cost.** The model cost per agent (today, 7 and 30 days, with tokens and the model each uses), per day for the last two weeks, and how often each scheduled job ran. The numbers are the ones OpenClaw records for every model call with the provider's prices; no message text is shown.
+- **New Spending line** on the service page: today's and the week's cost, checked every 10 minutes.
+- **New action: Spending Alert.** Set a daily limit; above it the Spending line turns red and you get one notification (and ntfy) that day.`,
   },
   migrations: {
     up: async () => {},

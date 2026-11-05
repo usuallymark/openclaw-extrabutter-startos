@@ -300,6 +300,10 @@ Approve or reject what an isolated agent wanted to do that the owner's rules hol
 
 - **Cost:** none (no restart).
 
+### Usage and Cost, Spending Alert
+
+Since :30. **Usage and Cost** (`startos/actions/usageAndCost.ts`, `agentctl.py usage 30`): the model cost per agent (today, 7, 30 days; calls; tokens in / out / cache read / cache write; the agent's model; the email, calendar and apps agents marked), per day for 14 days, and the scheduled jobs with their runs in 7 days (names, schedules, agents; never prompts). The numbers are OpenClaw's own: every model call's `usage` with `cost.total` (provider prices) in each agent's database (`agents/*/agent/openclaw-agent.sqlite`, table `transcript_events`, opened read only, only `usage` objects parsed). On the box they matched the provider's weekly figure within 1.3% (the `trajectory_runtime_events` table counts calls more than once and is not used). Days in Configure Calendar's Time Zone, else UTC. **Spending Alert**: a daily limit in dollars (`.openclaw-package/usage.json`, root only); the **Spending** health line (every 10 minutes) shows today and 7 days, fails above the limit and sends one notification + ntfy that day.
+
 ### Agent Activity
 
 The isolated services' activity logs (`agentctl.py activity mail` and `… calendar`; *Email Activity*, mail only, until :17), as a multi-line result with copy and download (`agent-activity.txt`): email sending outcomes and calendar changes (writes, holds, decisions, own calendar created) on top, then both logs merged, newest first, each line marked `[Email]` or `[Calendar]`, with the flags a read set. No message bodies or event descriptions are logged.
@@ -387,6 +391,7 @@ Four, two of them blocking (a SimpleX plugin task may also appear when the bundl
 | `mail-status`   | "Mail Service"           | The mail service's `/healthz` every minute: signed in, password refused (since when, why), Vaultwarden unavailable, server unreachable; sending level, a warning for Anyone Else: Send automatically, messages waiting for approval (raises/clears the Review Agent Actions task) |
 | `calendar`      | (hidden)                 | Ready once the calendar service's `/healthz` answers (any state) |
 | `calendar-status` | "Calendar Service"     | The calendar service's `/healthz` every minute: signed in (account, read only, scope warnings), sign-in refused (why, what to do), Vaultwarden unavailable, Google unreachable; calendar links readable (N of M, each failing link as a warning; links only: failure when none can be read) |
+| `spending`        | "Spending"             | Since :30: today's and the last 7 days' model cost (OpenClaw's records), every 10 minutes; fails above the Spending Alert limit, with one notification + ntfy that day |
 | `ext-email`     | "Google account"         | Google account only: a stored sign-in for the address (local, no network) |
 
 The external checks test reachability only; the `health` skill (`/opt/skills/health/health.py`) also tests the n8n, Trilium and Gitea API keys (Gitea: names the token's account), the mail and calendar services' state plus the isolation in `openclaw.json` (each isolated agent limited to its own tools, every other agent denied them), the Google sign-in (Google refreshes the token) and memory search. **None of them says anything about the model**: a wrong API key, a rate limit, or a local backend that is running but not loaded all show green checks and an error in the chat.

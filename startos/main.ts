@@ -82,6 +82,7 @@ import {
   probeHttp,
   probeMail,
   probeServerAccess,
+  probeSpending,
   vaultAnswers,
   probeCalendar,
   calendarAnswers,
@@ -862,6 +863,15 @@ export const main = sdk.setupMain(async ({ effects }) => {
         gracePeriod: 0,
       },
       requires: ['check-login'],
+    })
+    .addHealthCheck('spending', {
+      ready: {
+        display: 'Spending',
+        fn: () => probeSpending(effects, openclawSub),
+        trigger: externalTrigger,
+        gracePeriod: 0,
+      },
+      requires: ['primary'],
     })
     .addOneshot('check-simplex-plugin', {
       subcontainer: openclawSub,
