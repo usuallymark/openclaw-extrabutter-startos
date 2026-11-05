@@ -47,6 +47,10 @@ ToolError = mcp.ToolError
 CALLS_PER_MINUTE = 120
 LOG_MAX_BYTES = 2 * 1024 * 1024
 GOOGLE_CACHE_S = 900
+# A contacts check that finds the Google copy stale waits this long for the
+# refresh (the client gives up after knowncontact.TIMEOUT_S).
+KNOWN_WAIT_S = 3
+RETRY_S = 60
 MAX_FILE = 64 * 1024 * 1024
 WAIT_REFUSED_S = 600
 _now = svcutil.now_text
@@ -71,7 +75,7 @@ class Service:
         self.contacts = []
         self.emails = frozenset()
         self.known_check = 'starting'
-        self._refreshing = False
+        self._refresh = None
         self.loaded = ''
         self.problems = []
         self._mtime = None
@@ -176,29 +180,50 @@ class Service:
     # ── "is this address known?" for the mail and calendar services ───────
 
     def known(self, addresses):
-        """Yes/no for each (normalized) address. Never waits for Google:
-        a stale Google copy is refreshed in the background."""
+        """Yes/no for each (normalized) address. The Google copy is kept
+        fresh by refresh_loop; one found stale anyway is refreshed, and the
+        answer waits up to KNOWN_WAIT_S for it (since :34: until then a check
+        answered from the old copy, so a contact added since was not known
+        while the contacts agent, a moment later, found it)."""
         if self.source == 'vcard':
             self.load()
         else:
-            self._refresh_soon()
+            t = self._refresh_soon()
+            if t is not None:
+                t.join(KNOWN_WAIT_S)
         if self.state != 'ok' and not self.contacts:
             raise knowncontact.Unavailable(f'contacts service {self.state}: {self.reason}'.rstrip(': '))
         emails = self.emails
         return [bool(a) and a in emails for a in addresses]
 
     def _refresh_soon(self):
+        """The thread refreshing a stale Google copy (a running one, or one
+        started now), or None when the copy is fresh."""
         with self._lock:
-            if self._refreshing or self.google is None or time.time() - self._loaded_at < GOOGLE_CACHE_S:
-                return
-            self._refreshing = True
+            if self._refresh is not None and self._refresh.is_alive():
+                return self._refresh
+            if self.google is None or time.time() - self._loaded_at < GOOGLE_CACHE_S:
+                return None
+            self._refresh = threading.Thread(target=self.load, daemon=True)
+            self._refresh.start()
+            return self._refresh
 
-        def go():
-            try:
-                self.load()
-            finally:
-                self._refreshing = False
-        threading.Thread(target=go, daemon=True).start()
+    def refresh_loop(self):
+        """Google source: read the contacts again every GOOGLE_CACHE_S
+        whether or not anyone asks (since :34), so a check is never answered
+        from a copy older than that; after a failed read, again in RETRY_S.
+        Stops once Google refused the sign-in (the service then exits and
+        the launcher fetches it again; a refused one is not sent twice)."""
+        while self.state != 'refused':
+            age = time.time() - self._loaded_at
+            if age < GOOGLE_CACHE_S:
+                time.sleep(GOOGLE_CACHE_S - age)
+                continue
+            t = self._refresh_soon()
+            if t is not None:
+                t.join()
+            if time.time() - self._loaded_at >= GOOGLE_CACHE_S and self.state != 'refused':
+                time.sleep(RETRY_S)
 
     def health(self):
         return {'state': self.state, 'since': self.since, 'reason': self.reason, 'source': self.source,
@@ -362,6 +387,8 @@ def main():
     del token
     tools = Tools(svc)
     svc.load(force=True)
+    if cfg.get('source') == 'google' and svc.google is not None:
+        threading.Thread(target=svc.refresh_loop, daemon=True).start()
     callers = {int(k): str(v) for k, v in (cfg.get('knownCallers') or {}).items()}
     if callers:
         ksrv, why = knowncontact.serve(svc.known, callers, svc.log)
