@@ -56,6 +56,7 @@ def main():
     os.chown(CAL_ROOT, owner, cal.pw_gid)
     os.chmod(CAL_ROOT, 0o710)
     L.own_dir(STATE, cal.pw_uid, cal.pw_gid, 0o700)
+    L.own_tree(STATE, cal.pw_uid, cal.pw_gid)
     # The owner's approvals (Review Agent Actions): written by the package
     # as root, readable by the service, never writable by it.
     L.own_dir(DECISIONS, owner, cal.pw_gid, 0o750)

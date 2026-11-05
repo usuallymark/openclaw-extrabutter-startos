@@ -1,14 +1,11 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:31',
+  version: '2026.10.1:32',
   releaseNotes: {
-    en_US: `Contacts, read only.
+    en_US: `Fix: the vault after 2026.10.1:31.
 
-- **New: Configure Contacts.** Your assistant can look up your address book ("Sam's number", "who is this address?", "birthdays this month") through a new contacts agent, the only agent that reads contacts. Read only: nothing is ever changed.
-- **Two sources:** a vCard file exported from any app (Google, iPhone, Outlook), imported into the contacts service's own folder where the agents cannot read it; or the contacts of the assistant's own Google account, with a sign-in that can only read contacts.
-- New **Contacts Service** line on the service page.
-- Usage and Cost: scheduled jobs now show their schedule, and jobs without an agent show "default (main)".`,
+- **The vault found no master password after updating to :31.** The new contacts service's user was added to the image before the vault's, which changed the vault user's number, so its saved files (including the master password) no longer counted as its own. The service users now have fixed numbers (the same as before :31; contacts gets its own), and each service gives the files in its own folder back to its user at start. Nothing needs to be entered again.`,
   },
   migrations: {
     up: async () => {},

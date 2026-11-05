@@ -49,6 +49,7 @@ def main():
     os.chown(ROOT, owner, svc_user.pw_gid)
     os.chmod(ROOT, 0o710)
     L.own_dir(STATE, svc_user.pw_uid, svc_user.pw_gid, 0o700)
+    L.own_tree(STATE, svc_user.pw_uid, svc_user.pw_gid)
     try:
         sst = os.lstat(SETTINGS)
         if not stat.S_ISREG(sst.st_mode) or sst.st_uid != owner:

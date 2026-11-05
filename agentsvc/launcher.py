@@ -70,6 +70,35 @@ class Launcher:
         finally:
             os.close(pfd)
 
+    def own_tree(self, path, uid, gid):
+        """Give everything inside the service's own folder path (already a
+        real directory of the service) to uid:gid, without following any
+        link; entries owned by root are left alone. Since 2026.10.1:32: a
+        service user's number changed once between images (a user added
+        before it), and its files then belonged to the new user."""
+        try:
+            top = self.walk(path)
+        except OSError as e:
+            self.say(f'{path} cannot be opened without following a link ({e.strerror}); its files keep their owners')
+            return
+        fixed = 0
+        try:
+            for _, dirs, files, dfd in os.fwalk('.', dir_fd=top, follow_symlinks=False):
+                for name in dirs + files:
+                    try:
+                        st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+                        if stat.S_ISLNK(st.st_mode) or st.st_uid == 0:
+                            continue
+                        if st.st_uid != uid or st.st_gid != gid:
+                            os.chown(name, uid, gid, dir_fd=dfd, follow_symlinks=False)
+                            fixed += 1
+                    except OSError:
+                        continue
+        finally:
+            os.close(top)
+        if fixed:
+            self.say(f'gave {fixed} file(s) in {path} back to the service user')
+
     @staticmethod
     def open_dir_fd(path, uid, gid):
         """Open a folder as root, component by component, following no link

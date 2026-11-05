@@ -112,7 +112,7 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 # See startos/mailService.ts. The parts every isolated service shares
 # (agentsvc/: MCP server, front door, launcher steps, approval queue) are
 # copied next to each service's own code.
-RUN useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin openclaw-mail
+RUN groupadd --system --gid 999 openclaw-mail && useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --uid 999 --gid 999 openclaw-mail
 COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py agentsvc/approvals.py /opt/openclaw-mail/
 COPY mail/launch.py mail/front.py mail/mcp.py mail/mailservice.py mail/imapmail.py mail/message.py mail/sanitize.py mail/extract.py mail/outbox.py mail/htmlout.py mail/invite.py /opt/openclaw-mail/
 RUN chmod 755 /opt/openclaw-mail && chmod 644 /opt/openclaw-mail/*.py \
@@ -123,7 +123,7 @@ RUN chmod 755 /opt/openclaw-mail && chmod 644 /opt/openclaw-mail/*.py \
 # mail service, as its own user. See startos/calendarService.ts.
 # tzdata: event times are given in each calendar's own time zone.
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin openclaw-calendar
+    && groupadd --system --gid 998 openclaw-calendar && useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --uid 998 --gid 998 openclaw-calendar
 COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py agentsvc/approvals.py mail/sanitize.py /opt/openclaw-calendar/
 COPY gcalendar/launch.py gcalendar/front.py gcalendar/mcp.py gcalendar/calservice.py gcalendar/gapi.py gcalendar/writes.py gcalendar/ical.py gcalendar/links.py gcalendar/invites.py /opt/openclaw-calendar/
 RUN chmod 755 /opt/openclaw-calendar && chmod 644 /opt/openclaw-calendar/*.py \
@@ -133,7 +133,7 @@ RUN chmod 755 /opt/openclaw-calendar && chmod 644 /opt/openclaw-calendar/*.py \
 
 # Contacts service (Configure Contacts, since 2026.10.1:31): read only, built
 # like the calendar service, as its own user. See startos/contactsService.ts.
-RUN useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin openclaw-contacts
+RUN groupadd --system --gid 995 openclaw-contacts && useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --uid 995 --gid 995 openclaw-contacts
 COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py mail/sanitize.py /opt/openclaw-contacts/
 COPY gcontacts/launch.py gcontacts/front.py gcontacts/mcp.py gcontacts/contactsservice.py gcontacts/people.py gcontacts/vcard.py gcontacts/importvcf.py /opt/openclaw-contacts/
 RUN chmod 755 /opt/openclaw-contacts && chmod 644 /opt/openclaw-contacts/*.py \
@@ -153,13 +153,21 @@ RUN chmod 755 /opt/openclaw-services && chmod 644 /opt/openclaw-services/agentct
 # socket (startos/vaultService.ts, vault/). rbw's binaries move where only
 # that user (and root) can run them; the agents' `rbw` is
 # vault/rbw-agent-cli, which asks the service.
-RUN useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin openclaw-vault \
+RUN groupadd --system --gid 997 openclaw-vault && useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --uid 997 --gid 997 openclaw-vault \
     && mkdir -p /usr/libexec/openclaw-vault \
     && for b in rbw rbw-agent; do for d in /usr/bin /usr/local/bin; do \
          if [ -f "$d/$b" ]; then mv "$d/$b" "/usr/libexec/openclaw-vault/$b"; fi; done; done \
     && test -x /usr/libexec/openclaw-vault/rbw && test -x /usr/libexec/openclaw-vault/rbw-agent \
     && chown -R root:openclaw-vault /usr/libexec/openclaw-vault \
     && chmod 0750 /usr/libexec/openclaw-vault /usr/libexec/openclaw-vault/rbw /usr/libexec/openclaw-vault/rbw-agent
+# The service users' numbers are fixed (since 2026.10.1:32): their files on
+# /data keep these owners across images. :31 added a user before the
+# vault's, which moved the vault user from 997 to 996 and left its files to
+# the new user. Never change or reuse these numbers.
+RUN test "$(id -u openclaw-mail):$(id -g openclaw-mail)" = 999:999 \
+    && test "$(id -u openclaw-calendar):$(id -g openclaw-calendar)" = 998:998 \
+    && test "$(id -u openclaw-vault):$(id -g openclaw-vault)" = 997:997 \
+    && test "$(id -u openclaw-contacts):$(id -g openclaw-contacts)" = 995:995
 COPY agentsvc/launcher.py agentsvc/svcutil.py vault/launch.py vault/broker.py vault/client.py vault/start.sh vault/pinentry /opt/openclaw-vault/
 COPY vault/vault-client /usr/local/bin/vault-client
 COPY vault/rbw-agent-cli /usr/local/bin/rbw

@@ -75,6 +75,7 @@ def main():
     os.chown(MAIL_ROOT, owner, mail.pw_gid)
     os.chmod(MAIL_ROOT, 0o710)
     own_dir(STATE, mail.pw_uid, mail.pw_gid, 0o700)
+    L.own_tree(STATE, mail.pw_uid, mail.pw_gid)
     # Sending rules and the owner's approvals: written by the package (as
     # root), readable by the service, never writable by it.
     own_dir(DECISIONS, owner, mail.pw_gid, 0o750)

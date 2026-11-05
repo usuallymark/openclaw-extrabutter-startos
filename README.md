@@ -290,6 +290,8 @@ Configure Agents (since :22) also sets OpenClaw's `skills.workshop.autonomous.mo
 
 ### Configure Contacts
 
+Service users have fixed numbers (since :32): openclaw-mail 999, openclaw-calendar 998, openclaw-vault 997, openclaw-contacts 995 (the Dockerfile checks them); never change or reuse them. Each launcher also gives the non-root files in its own state folder back to its user at start (`launcher.own_tree`). In :31 the contacts user was created before the vault's and took 997, so the vault's files no longer counted as its own.
+
 The address book and the contacts agent (since :31, read only; `startos/actions/configureContacts.ts`, `startos/contactsService.ts`, `gcontacts/`). Built like the calendar service, on the same shared parts.
 
 - **Settings:** `/data/.openclaw-contacts/settings.json` (root, 0600; the folder root:openclaw-contacts 0710, skipped by the chown step, made with `ensurePackageDir`). **Cost:** the service restarts.

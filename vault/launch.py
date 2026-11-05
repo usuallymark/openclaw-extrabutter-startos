@@ -135,6 +135,8 @@ def main():
         L.own_dir(d, vu.pw_uid, vu.pw_gid, mode)
     for sub in ('config', 'config/rbw', 'cache', 'data', 'runtime'):
         L.own_dir(f'{RBW_HOME}/{sub}', vu.pw_uid, vu.pw_gid, 0o700)
+    for d in (RBW_HOME, STATE, RUN):
+        L.own_tree(d, vu.pw_uid, vu.pw_gid)
 
     # Settings: the package's own file (root, in this folder), never the
     # gateway user's: an agent that could change the Vaultwarden address
