@@ -12,6 +12,7 @@ import {
   parseTokenJson,
 } from '../email'
 import { mailingId, sendingOf, writeEmailSettings } from '../mailService'
+import { describe as describeServers, discover } from '../mailDiscovery'
 import { agentModelChoices, OLLAMA_SERVER_ID } from '../modelCatalog'
 import {
   ANTHROPIC_MODELS,
@@ -101,7 +102,7 @@ const hostField = (label: string, placeholder: string) =>
 const emailService = Value.union({
   name: 'Account',
   description:
-    'The mailbox the email agent uses.\n\n• Gmail (app password): the simplest way to use a Gmail address.\n• Other IMAP/SMTP provider: any mail service that offers IMAP and SMTP (Fastmail, iCloud, your own server…).\n\nWith these two, mail is handled by a separate mail service and a separate email agent: the agent that reads mail has no shell and no passwords, it sends only under your rules (Sending, below), and your main agent never reads mail itself (it asks the email agent).\n\n• Google account: Gmail plus Google Calendar, Drive and other Google services, through a one-time sign-in you make on a computer with a browser. Not yet isolated: the main agent uses this account directly, as before.',
+    "The mailbox the email agent uses.\n\n• Gmail (app password): the simplest way to use a Gmail address.\n• Other provider (find servers automatically): enter the address and password; saving looks up the servers (the provider's own settings, Thunderbird's provider directory, the domain's mail server, DNS) and saves them as \"Other IMAP/SMTP provider\", where you can see and change them.\n• Other IMAP/SMTP provider: any mail service that offers IMAP and SMTP (Fastmail, iCloud, your own server…).\n\nWith these two, mail is handled by a separate mail service and a separate email agent: the agent that reads mail has no shell and no passwords, it sends only under your rules (Sending, below), and your main agent never reads mail itself (it asks the email agent).\n\n• Google account: Gmail plus Google Calendar, Drive and other Google services, through a one-time sign-in you make on a computer with a browser. Not yet isolated: the main agent uses this account directly, as before.",
   default: 'disabled',
   variants: Variants.of({
     disabled: { name: 'Disabled', spec: InputSpec.of({}) },
@@ -116,6 +117,29 @@ const emailService = Value.union({
         password: emailPassword(
           'App Password',
           'A Google app password: 16 letters, not your Google password. It requires 2-Step Verification on the account; create one at https://myaccount.google.com/apppasswords (name it "OpenClaw"). Gmail\'s IMAP and SMTP servers are filled in for you.',
+        ),
+      }),
+    },
+    discover: {
+      name: 'Other provider (find servers automatically)',
+      spec: InputSpec.of({
+        address: emailAddress(
+          'The address the agent reads and sends as. Saving looks up its IMAP and SMTP servers (Look Up Mail Servers shows what would be found, without saving).',
+          'you@example.com',
+        ),
+        displayName,
+        username: Value.text({
+          name: 'Login Name (optional)',
+          description:
+            'Only if your provider logs in with something other than the address (the lookup fills this in when the provider says so).',
+          required: false,
+          default: null,
+          masked: false,
+          placeholder: 'Same as the email address',
+        }),
+        password: emailPassword(
+          'Password',
+          'The mailbox password, or an app-specific password if your provider requires one (iCloud, Fastmail, Yahoo…). It is not used for the lookup.',
         ),
       }),
     },
@@ -710,6 +734,43 @@ export const configureEmail = sdk.Action.withInput(
 
   async ({ effects, input }) => {
     const i = input as any
+    // "Find servers automatically" (since :35): look them up, then save as
+    // Gmail or "Other IMAP/SMTP provider". Nothing is saved when none are
+    // found (a form cannot look anything up while it is being filled in).
+    let found = ''
+    if (i.account?.selection === 'discover') {
+      const v = i.account.value ?? {}
+      const address = String(v.address ?? '').trim()
+      const d = await discover(address)
+      if (d.kind === 'signInOnly' || d.kind === 'notFound')
+        throw new Error(describeServers(d, address))
+      found = describeServers(d, address)
+      i.account =
+        d.kind === 'gmail'
+          ? {
+              selection: 'gmail',
+              value: {
+                address,
+                displayName: v.displayName,
+                password: v.password,
+              },
+            }
+          : {
+              selection: 'imap',
+              value: {
+                address,
+                displayName: v.displayName,
+                imapHost: d.imap.host,
+                imapPort: d.imap.port,
+                imapSecurity: d.imap.security,
+                smtpHost: d.smtp.host,
+                smtpPort: d.smtp.port,
+                smtpSecurity: d.smtp.security,
+                username: String(v.username ?? '').trim() || d.username || null,
+                password: v.password,
+              },
+            }
+    }
     // Validates a pasted Google client/token before anything is saved.
     const email = emailFromInput(i.account)
     const trusted: string[] = Array.from(
@@ -776,6 +837,9 @@ export const configureEmail = sdk.Action.withInput(
         'Settings saved. OpenClaw is restarting. With Gmail or IMAP, the mail service starts on its own; its state is shown as "Mail Service" on the service page.' +
         (i.sending?.others === 'auto' && i.sending?.level === 'rules'
           ? ' Note: Anyone Else is set to Send automatically, so the email agent can send to any address without asking you.'
+          : '') +
+        (found
+          ? `\n\nServers found and saved (Configure Email now shows them under ${i.account.selection === 'gmail' ? '"Gmail (app password)"' : '"Other IMAP/SMTP provider"'}):\n${found}`
           : ''),
       result: null,
     }

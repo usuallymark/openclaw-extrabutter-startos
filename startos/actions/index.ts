@@ -3,6 +3,7 @@ import { approveDevices } from './approveDevices'
 import { configureAgents } from './configureAgents'
 import { configureApiCredentials } from './configureApiCredentials'
 import { configureEmail } from './configureEmail'
+import { lookUpMailServers } from './lookUpMailServers'
 import { agentActivity } from './agentActivity'
 import { spendingAlert, usageAndCost } from './usageAndCost'
 import { configureCalendar } from './configureCalendar'
@@ -25,6 +26,7 @@ export const actions = sdk.Actions.of()
   .addAction(configureApiCredentials)
   .addAction(configureAgents)
   .addAction(configureEmail)
+  .addAction(lookUpMailServers)
   .addAction(reviewAgentActions)
   .addAction(agentActivity)
   .addAction(usageAndCost)

@@ -267,13 +267,30 @@ Pick the account type:
 
 Calendar and Drive need the Google account option below.
 
+### Other provider (find servers automatically)
+
+Enter only the address and the password; saving looks up the IMAP and SMTP
+servers the way Thunderbird does: the provider's own settings file,
+Thunderbird's provider directory (iCloud, Fastmail, Yahoo, GMX, many
+internet providers…), the directory entry of your domain's mail server (for
+your own domain at a hosted provider), and DNS records. Only encrypted
+servers with password login are used, and the password is not part of the
+lookup. What was found is saved as **Other IMAP/SMTP provider**, so the next
+time Configure Email shows the servers and you can change them. A Google
+address is saved as **Gmail (app password)**.
+
+To see what would be found without changing anything, run **Look Up Mail
+Servers** with the address.
+
+Outlook.com, Hotmail and Microsoft 365 no longer accept a password from
+mail apps (they need a browser sign-in), so they cannot be used yet.
+
 ### Other IMAP/SMTP provider
 
 Enter the address, the IMAP and SMTP servers with their ports and
 encryption from your provider's help pages (typically IMAP 993 SSL/TLS and
 SMTP 587 STARTTLS; SMTP is used for sending), and the password. Many providers (iCloud, Fastmail,
-Yahoo, Outlook with two-factor sign-in) require an app-specific password
-here. A server with a `.local` name or a private certificate needs a
+Yahoo) require an app-specific password here. A server with a `.local` name or a private certificate needs a
 **Custom Host Mapping** and the **Custom CA Certificate**, as for other
 services.
 

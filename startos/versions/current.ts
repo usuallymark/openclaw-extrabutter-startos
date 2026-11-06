@@ -1,11 +1,13 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:34',
+  version: '2026.10.1:35',
   releaseNotes: {
-    en_US: `Fix: "in your contacts" for a contact just added.
+    en_US: `Mail servers found automatically.
 
-- **A contact added in the assistant's Google account could be missed for a while.** When its copy was older than 15 minutes, the contacts check for mail and calendar answered from that old copy, while your assistant's own contacts lookup, a moment later, already saw the new contact. The contacts service now reads Google again every 15 minutes on its own, and a check that still finds an older copy waits briefly for the new one.`,
+- **New in Configure Email: "Other provider (find servers automatically)".** Enter the address and password; saving finds the IMAP and SMTP servers the way Thunderbird does (the provider's own settings, Thunderbird's provider directory, your domain's mail server, DNS records) and saves them as "Other IMAP/SMTP provider", where you can see and change them. A Google address is saved as Gmail.
+- **New action: Look Up Mail Servers.** Shows what would be found for an address, without saving anything.
+- Only encrypted servers with password login are used, and the password is never part of the lookup. Outlook.com, Hotmail and Microsoft 365 no longer accept passwords from mail apps; the lookup says so instead of trying.`,
   },
   migrations: {
     up: async () => {},
