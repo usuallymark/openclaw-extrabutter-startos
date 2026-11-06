@@ -278,7 +278,19 @@ export async function discover(
     Promise.all(urls.map(([url, label]) => fromUrl(url, label))),
     io.mx(domain),
   ])
-  for (const r of results) if (r) return r
+  // A source that offers only a browser sign-in does not end the search
+  // (since :36): Fastmail's own settings file now names OAuth2 only, while
+  // its IMAP still takes app passwords and the directory lists them. Only
+  // when nothing anywhere offers a password login is the sign-in reported.
+  let signIn: Discovery | null = null
+  const usable = (r: Discovery | null) => {
+    if (r?.kind === 'signInOnly') {
+      signIn ??= r
+      return null
+    }
+    return r
+  }
+  for (const r of results) if (usable(r)) return r as Discovery
 
   // A custom domain at a hosted provider: its mail server's directory entry.
   tried.push(`the domain's mail server (MX)`)
@@ -298,7 +310,7 @@ export async function discover(
         ISPDB + base,
         `Thunderbird's provider directory (${base}, the mail server of ${domain})`,
       )
-      if (r) return r
+      if (usable(r)) return r as Discovery
     }
   }
 
@@ -329,7 +341,7 @@ export async function discover(
       provider: domain,
       source: `DNS SRV records of ${domain}`,
     }
-  return { kind: 'notFound', tried }
+  return signIn ?? { kind: 'notFound', tried }
 }
 
 const SEC = { tls: 'SSL/TLS', starttls: 'STARTTLS' } as const
