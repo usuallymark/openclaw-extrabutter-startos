@@ -947,8 +947,34 @@ export async function probeCalendar(
   const linksText = links.length
     ? `${linksOk} of ${links.length} calendar link${links.length > 1 ? 's' : ''} readable`
     : ''
+  const q = Array.isArray(h.queue) ? h.queue.length : 0
+  const writeText = () =>
+    h.mode === 'write'
+      ? h.writing
+        ? `read + write on its own calendar "${h.calendarName}"` +
+          (q
+            ? `; ${q} request${q > 1 ? 's' : ''} waiting for your approval (Review Agent Actions)`
+            : '')
+        : 'read only for now (writing is not set up, see the warning)'
+      : 'read only'
   switch (h.state) {
     case 'ok': {
+      // A CalDAV account (since :37).
+      const dav = h.caldav
+      if (dav) {
+        const cals: any[] = Array.isArray(dav.calendars) ? dav.calendars : []
+        const bad = cals.filter((c) => c?.error).length
+        const where = `CalDAV account${dav.address ? ` ${dav.address}` : ''}${dav.server ? ` at ${dav.server}` : ''}`
+        if (!dav.connected)
+          return {
+            result: linksOk ? 'success' : 'failure',
+            message: `${where}: ${dav.error || 'not connected yet'}${linksText ? `; ${linksText}` : ''}`,
+          }
+        return {
+          result: 'success',
+          message: `${where}: ${cals.length} calendar${cals.length === 1 ? '' : 's'}${bad ? ` (${bad} not readable)` : ''}; ${writeText()}${linksText ? `; ${linksText}` : ''}${warn}`,
+        }
+      }
       if (h.google === false) {
         // Calendar links only, no Google account.
         if (!linksOk && links.some((l) => !l?.ok && !l?.error))
@@ -961,16 +987,7 @@ export async function probeCalendar(
           message: `${linksText}; ${h.mode === 'invite' ? 'writes by invitations sent by mail' : 'read only'}${warn}`,
         }
       }
-      const q = Array.isArray(h.queue) ? h.queue.length : 0
-      const mode =
-        h.mode === 'write'
-          ? h.writing
-            ? `read + write on its own calendar "${h.calendarName}"` +
-              (q
-                ? `; ${q} request${q > 1 ? 's' : ''} waiting for your approval (Review Agent Actions)`
-                : '')
-            : 'read only for now (writing is not set up, see the warning)'
-          : 'read only'
+      const mode = writeText()
       return {
         result: 'success',
         message: `Signed in${acct}; ${mode}${linksText ? `; ${linksText}` : ''}${warn}`,

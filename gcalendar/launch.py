@@ -7,7 +7,9 @@
    Vaultwarden item "google-calendar" (field "token") through the vault
    service (as root; since 2026.10.1:27 the agents cannot read it); none when the
    calendar links are used alone. Also the calendar links' addresses (since
-   :24), pasted or from Vaultwarden (field "url" of the named item).
+   :24), pasted or from Vaultwarden (field "url" of the named item), and
+   (since :37) a CalDAV account's app password: pasted, or Vaultwarden item
+   "caldav" (its login password).
 3. Become the openclaw-calendar user and replace this process with the
    worker, handing it the settings and sign-in on stdin. No sign-in file is
    written and nothing privileged keeps running.
@@ -38,6 +40,7 @@ EMAIL_SETTINGS = '/data/.openclaw-mail/settings.json'
 SERVICE = '/opt/openclaw-calendar/calservice.py'
 CAL_USER = 'openclaw-calendar'
 VAULT_POINTER = 'google-calendar:token'
+CALDAV_POINTER = 'caldav:password'
 
 L = Launcher('calendar launcher')
 
@@ -84,6 +87,8 @@ def main():
         L.fail('"Read + invitations by mail" is only for use without a Google sign-in; open Configure Calendar')
     if tok.get('source') == 'none':
         token, error, source = None, '', 'none'
+    elif tok.get('source') == 'caldav':
+        token, error, source = None, '', 'caldav'
     elif tok.get('source') == 'manual':
         token = tok.get('value') or None
         error = '' if token else 'no Calendar sign-in is saved in Configure Calendar'
@@ -117,6 +122,24 @@ def main():
                 L.say(f'calendar link "{name}": {why}')
         else:
             links.append({'name': name, 'url': str(ln.get('url') or '').strip(), 'error': ''})
+    dav, dav_pw, dav_err, dav_src = None, None, '', ''
+    if source == 'caldav':
+        c = settings.get('caldav') or {}
+        pw = c.get('password') or {}
+        if pw.get('source') == 'manual':
+            dav_pw = pw.get('value') or None
+            dav_err = '' if dav_pw else 'no app password is saved in Configure Calendar'
+            dav_src = 'manual'
+        else:
+            dav_pw, why, dnote = vault_field(CALDAV_POINTER)
+            dav_err = f'the CalDAV app password (Vaultwarden item "caldav", its password): {why}' if why else ''
+            dav_src = 'vault'
+            if dnote and dnote != note:
+                L.say(dnote)
+        if dav_err:
+            L.say(dav_err)
+        dav = {'server': str(c.get('server') or '').strip(), 'username': str(c.get('username') or '').strip(),
+               'address': str(settings.get('account') or '').strip().lower()}
     if source == 'none' and not links:
         L.fail('Configure Calendar has no Google sign-in and no calendar links; add one of them')
 
@@ -163,8 +186,13 @@ def main():
         # Organizer in the owner's contacts (since :33): asked of the
         # contacts service only while Configure Contacts has a source.
         'knownContacts': knowncontact.contacts_on(owner, node.pw_uid),
+        # A CalDAV account (since :37): its password only in this payload.
+        'caldav': dav,
+        'caldavPassword': dav_pw,
+        'caldavError': dav_err,
+        'caldavPasswordSource': dav_src,
     }
-    del token, links
+    del token, links, dav_pw
     L.exec_service(cal, SERVICE, payload, STATE, 'the calendar settings are too large')
 
 

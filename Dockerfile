@@ -125,7 +125,7 @@ RUN chmod 755 /opt/openclaw-mail && chmod 644 /opt/openclaw-mail/*.py \
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 998 openclaw-calendar && useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --uid 998 --gid 998 openclaw-calendar
 COPY agentsvc/mcpserver.py agentsvc/frontdoor.py agentsvc/launcher.py agentsvc/svcutil.py agentsvc/approvals.py agentsvc/knowncontact.py mail/sanitize.py /opt/openclaw-calendar/
-COPY gcalendar/launch.py gcalendar/front.py gcalendar/mcp.py gcalendar/calservice.py gcalendar/gapi.py gcalendar/writes.py gcalendar/ical.py gcalendar/links.py gcalendar/invites.py /opt/openclaw-calendar/
+COPY gcalendar/launch.py gcalendar/front.py gcalendar/mcp.py gcalendar/calservice.py gcalendar/gapi.py gcalendar/writes.py gcalendar/ical.py gcalendar/links.py gcalendar/invites.py gcalendar/caldav.py gcalendar/davwrites.py /opt/openclaw-calendar/
 RUN chmod 755 /opt/openclaw-calendar && chmod 644 /opt/openclaw-calendar/*.py \
     && python3 -m compileall -q /opt/openclaw-calendar \
     && cd /tmp && python3 -I -c 'import sys; sys.path.insert(0, "/opt/openclaw-calendar"); import calservice, launch, front, writes, ical, links, invites' \

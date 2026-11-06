@@ -12,6 +12,11 @@ import {
 } from '../calendarService'
 import { agentModelChoices, OLLAMA_SERVER_ID } from '../modelCatalog'
 import {
+  credentialUnion,
+  credToPrefill,
+  credToStored,
+} from './configureExternalServices'
+import {
   ANTHROPIC_MODELS,
   GEMINI_MODELS,
   GROK_MODELS,
@@ -64,43 +69,109 @@ const SIGN_IN_VARIANTS = {
   },
 }
 
+// A CalDAV account (since :37): iCloud, Fastmail, Nextcloud and other
+// CalDAV servers, instead of Google. The calendar service finds the server
+// and the calendars itself at start (gcalendar/caldav.py).
+const caldavFields = (withZone: boolean) =>
+  InputSpec.of({
+    server: Value.dynamicText(async () => ({
+      name: 'Server (optional)',
+      description:
+        "The CalDAV address from your provider's help pages (https://…), e.g. https://cloud.example.com/remote.php/dav for Nextcloud. Blank: found from the Account address below (iCloud, Fastmail and Yahoo by name, otherwise the domain's /.well-known/caldav). Look Up Calendar Server shows what is found.",
+      required: false,
+      default: (await saved())?.caldav?.server || null,
+      masked: false,
+      placeholder: 'Blank: from the Account address',
+      patterns: [
+        {
+          regex: '^https://\\S+$',
+          description:
+            'An https:// address (the password would otherwise travel in clear)',
+        },
+      ],
+    })),
+    username: Value.dynamicText(async () => ({
+      name: 'User Name (optional)',
+      description:
+        'Blank: the Account address (right for iCloud, Fastmail and Yahoo). Nextcloud and other servers: your user name there.',
+      required: false,
+      default: (await saved())?.caldav?.username || null,
+      masked: false,
+      placeholder: 'Same as the Account address',
+    })),
+    password: credentialUnion(
+      'App Password',
+      'caldav',
+      'password',
+      'An app-specific password made for this (iCloud: account.apple.com → Sign-In and Security → App-Specific Passwords; Fastmail: Settings → Privacy & Security → Manage app passwords and access → New app password, access Mail, Contacts & Calendars; Nextcloud: Settings → Security → create an app password). Only the calendar service can fetch it; a password the server refused is not tried again until a new one is saved.',
+    ),
+    ...(withZone ? { timeZone } : {}),
+  })
+
 const SIGN_IN_DESCRIPTION = `${SIGN_IN_HELP}\n\nFetch from Vaultwarden: item "${CALENDAR_VAULT.item}", a hidden custom field "${CALENDAR_VAULT.field}" holding the whole line the script printed. Fetched at every start (requires Vaultwarden in Configure External Services); a new sign-in saved there is picked up within 10 minutes.\nPaste here: stored once, encrypted, on this server only.`
 
-/** Google Sign-in for Read only: a Google account, or none (calendar
+const CALDAV_DESCRIPTION =
+  'CalDAV account: a calendar account at iCloud, Fastmail, Nextcloud or another CalDAV server, with an app password (Instructions → Calendar).'
+
+/** The calendar account for Read only: Google, CalDAV, or none (calendar
  * links only). */
 const readSignIn = Value.dynamicUnion(async () => {
   const src = (await saved())?.token?.source ?? 'none'
   return {
-    name: 'Google Sign-in',
-    description: `No Google account: read only the Calendar Links (simplest; nothing to set up at Google).\n${SIGN_IN_DESCRIPTION}`,
+    name: 'Calendar Account',
+    description: `No account: read only the Calendar Links (simplest; nothing to set up).\n${CALDAV_DESCRIPTION}\nGoogle: ${SIGN_IN_DESCRIPTION}`,
     default: src,
     disabled: false,
     variants: Variants.of({
       none: {
-        name: 'No Google account (calendar links only)',
+        name: 'No account (calendar links only)',
         spec: InputSpec.of({}),
       },
-      ...SIGN_IN_VARIANTS,
+      caldav: {
+        name: 'CalDAV account (iCloud, Fastmail, Nextcloud…)',
+        spec: caldavFields(false),
+      },
+      'from-vaultwarden': {
+        ...SIGN_IN_VARIANTS['from-vaultwarden'],
+        name: 'Google: fetch the sign-in from Vaultwarden',
+      },
+      manual: { ...SIGN_IN_VARIANTS.manual, name: 'Google: paste the sign-in' },
     }),
   }
 })
 
-/** Google Sign-in for Read + write on its own calendar: required. */
+/** The calendar account for Read + write on its own calendar: Google or
+ * CalDAV. */
 const writeSignIn = Value.dynamicUnion(async () => {
   const src = (await saved())?.token?.source
   return {
-    name: 'Google Sign-in',
-    description: `${SIGN_IN_DESCRIPTION}\nWriting needs a sign-in with the extra permission (google-signin.py --scopes calendar.readonly,calendar.app.created).`,
-    default: src === 'manual' ? 'manual' : 'from-vaultwarden',
+    name: 'Calendar Account',
+    description: `${CALDAV_DESCRIPTION} The own calendar is made on that account (when the server does not let apps make calendars, make one with the Own Calendar Name yourself).\nGoogle: ${SIGN_IN_DESCRIPTION}\nWriting on Google needs a sign-in with the extra permission (google-signin.py --scopes calendar.readonly,calendar.app.created).`,
+    default:
+      src === 'manual'
+        ? 'manual'
+        : src === 'caldav'
+          ? 'caldav'
+          : 'from-vaultwarden',
     disabled: false,
-    variants: Variants.of(SIGN_IN_VARIANTS),
+    variants: Variants.of({
+      caldav: {
+        name: 'CalDAV account (iCloud, Fastmail, Nextcloud…)',
+        spec: caldavFields(true),
+      },
+      'from-vaultwarden': {
+        ...SIGN_IN_VARIANTS['from-vaultwarden'],
+        name: 'Google: fetch the sign-in from Vaultwarden',
+      },
+      manual: { ...SIGN_IN_VARIANTS.manual, name: 'Google: paste the sign-in' },
+    }),
   }
 })
 
 const calendarName = Value.dynamicText(async () => ({
   name: 'Own Calendar Name',
   description:
-    "The name of the calendar the agent writes to, created in the Google account on the first start (for example your assistant's name). It is also how the agent refers to it. To rename it later, rename the calendar in Google Calendar and change it here too: the agent keeps the calendar it made first, whatever it is called.",
+    "The name of the calendar the agent writes to, created in the Google or CalDAV account on the first start (for example your assistant's name). It is also how the agent refers to it. To rename it later, rename the calendar in your calendar app and change it here too: the agent keeps the calendar it made first, whatever it is called.",
   required: false,
   default: (await saved())?.calendarName || 'Assistant',
   masked: false,
@@ -145,7 +216,7 @@ const calendarMode = Value.dynamicUnion(async () => {
   return {
     name: 'Calendar',
     description:
-      'Off: no calendar service, no calendar agent.\nRead only: the calendar agent lists, searches and reads events of the Calendar Links and, with a Google account, of that account (including calendars shared with it). It cannot change anything.\nRead + write on its own calendar (Google): also adds, changes and cancels events on one calendar of its own in the Google account, and can invite you and the people on the trusted lists; anything with guests waits for your approval before Google emails them.\nRead + invitations by mail (no Google): adding, changing or cancelling an event sends an invitation by email to its guests (you and the people on the trusted lists); their calendar apps put it on their calendars. The mail goes out under your Configure Email rules, and the answers are moved to the mail folder "Calendar Replies". Needs at least one Calendar Link, and Configure Email with Gmail or IMAP and sending "Send by rules".' +
+      'Off: no calendar service, no calendar agent.\nRead only: the calendar agent lists, searches and reads events of the Calendar Links and, with a Google or CalDAV account, of that account (including calendars shared with it). It cannot change anything.\nRead + write on its own calendar: also adds, changes and cancels events on one calendar of its own in the Google or CalDAV account, and can invite you and the people on the trusted lists; anything with guests waits for your approval before Google (or the CalDAV server) emails them.\nRead + invitations by mail (no Google): adding, changing or cancelling an event sends an invitation by email to its guests (you and the people on the trusted lists); their calendar apps put it on their calendars. The mail goes out under your Configure Email rules, and the answers are moved to the mail folder "Calendar Replies". Needs at least one Calendar Link, and Configure Email with Gmail or IMAP and sending "Send by rules".' +
       (notReady && s?.mode !== 'invite'
         ? `\n\nInvitations by mail cannot be chosen yet: ${notReady}.`
         : ''),
@@ -158,7 +229,7 @@ const calendarMode = Value.dynamicUnion(async () => {
         spec: InputSpec.of({ signIn: readSignIn, timeZone }),
       },
       write: {
-        name: 'Read + write on its own calendar (Google)',
+        name: 'Read + write on its own calendar (Google or CalDAV)',
         spec: InputSpec.of({
           signIn: writeSignIn,
           calendarName,
@@ -267,7 +338,7 @@ const inputSpec = InputSpec.of({
   account: Value.text({
     name: 'Account',
     description:
-      'With Google: the Google account the sign-in is for (shown in the health line; filled in from a pasted sign-in when left blank). Without Google: optional, your address as the calendar links know you, so your own events and answers are recognised.',
+      'With Google: the Google account the sign-in is for (shown in the health line; filled in from a pasted sign-in when left blank). With a CalDAV account: its address (finds the server when Server is blank, and is the organizer of invitations). Otherwise: optional, your address as the calendar links know you, so your own events and answers are recognised.',
     required: false,
     default: null,
     masked: false,
@@ -343,14 +414,25 @@ export const configureCalendar = sdk.Action.withInput(
       .catch(() => null)
     const source = s?.token?.source ?? 'from-vaultwarden'
     const mode = s?.mode ?? 'off'
+    const zone = s?.timeZone || null
     // The saved sign-in is never shown; blank keeps it.
+    const caldav = (withZone: boolean) => ({
+      selection: 'caldav',
+      value: {
+        server: s?.caldav?.server || null,
+        username: s?.caldav?.username || null,
+        password: credToPrefill(s?.caldav?.password),
+        ...(withZone ? { timeZone: zone } : {}),
+      },
+    })
     const signIn =
       source === 'manual'
         ? { selection: 'manual', value: { value: null } }
-        : source === 'none' && mode !== 'write'
-          ? { selection: 'none', value: {} }
-          : { selection: 'from-vaultwarden', value: {} }
-    const zone = s?.timeZone || null
+        : source === 'caldav'
+          ? caldav(mode === 'write')
+          : source === 'none' && mode !== 'write'
+            ? { selection: 'none', value: {} }
+            : { selection: 'from-vaultwarden', value: {} }
     const hold = s?.holdAll ?? false
     return {
       mode:
@@ -397,7 +479,12 @@ export const configureCalendar = sdk.Action.withInput(
         sel === 'read' || sel === 'write'
           ? v.signIn
           : { selection: sel === 'invite' ? 'none' : undefined },
-      timeZone: v.timeZone,
+      // With a CalDAV account in write mode, the zone is in its fields.
+      timeZone:
+        v.timeZone ??
+        (v.signIn?.selection === 'caldav'
+          ? v.signIn?.value?.timeZone
+          : undefined),
       holdAll: v.holdAll,
       calendarName: v.calendarName,
     }
@@ -455,11 +542,53 @@ export const configureCalendar = sdk.Action.withInput(
       }
     } else if (i.signIn?.selection === 'none') {
       token = { source: 'none' }
+    } else if (i.signIn?.selection === 'caldav') {
+      token = { source: 'caldav' }
     } else if (sel === 'off') {
       // Off: keep whatever sign-in choice was saved, for switching back.
       token = prior?.token ?? { source: 'from-vaultwarden' }
     } else {
       token = { source: 'from-vaultwarden' }
+    }
+    // The CalDAV account (since :37).
+    let caldav = prior?.caldav
+    if (token.source === 'caldav' && sel !== 'off') {
+      const c = i.signIn?.value ?? {}
+      const server = String(c.server ?? '').trim()
+      if (server && !/^https:\/\/\S+$/i.test(server))
+        throw new Error(
+          'Server: an https:// address (the password would otherwise travel in clear).',
+        )
+      if (!server && !account)
+        throw new Error(
+          'CalDAV account: give the Server address, or your address at the provider under Account (the server is found from it).',
+        )
+      if (
+        !server &&
+        /@(gmail|googlemail)\.com$|@(outlook|hotmail|live|msn)\./i.test(account)
+      )
+        throw new Error(
+          /@(gmail|googlemail)/i.test(account)
+            ? 'Google calendars use the Google sign-in (choose a Google option under Calendar Account), not CalDAV.'
+            : 'Outlook.com and Microsoft 365 do not offer CalDAV; add your Outlook calendar as a Calendar Link instead.',
+        )
+      let password = credToStored(c.password)
+      if (password?.source === 'manual' && !password.value) {
+        if (
+          prior?.caldav?.password?.source === 'manual' &&
+          prior.caldav.password.value
+        )
+          password = prior.caldav.password as any
+        else
+          throw new Error(
+            'App Password: enter the app password, or choose Fetch from Vaultwarden (item "caldav").',
+          )
+      }
+      caldav = {
+        server: server || undefined,
+        username: String(c.username ?? '').trim() || undefined,
+        password: password as any,
+      }
     }
     const savedLinks = new Map(
       (prior?.links ?? []).map((l) => [l.name.trim().toLowerCase(), l]),
@@ -536,9 +665,10 @@ export const configureCalendar = sdk.Action.withInput(
       // Fields of the other choices keep their saved values, for switching
       // back.
       timeZone:
-        sel === 'read' || sel === 'invite'
+        sel === 'read' || sel === 'invite' || token.source === 'caldav'
           ? zone || undefined
           : prior?.timeZone,
+      caldav,
       account: account || prior?.account || undefined,
       token,
       trustedOrganizers: trusted,
@@ -571,8 +701,11 @@ export const configureCalendar = sdk.Action.withInput(
             (settings.mode === 'invite'
               ? ' Invitations by mail: they go out under your Configure Email rules, so mail to anyone not on Send Automatically To waits in Review Agent Actions.'
               : '') +
-            (settings.mode === 'write'
+            (settings.mode === 'write' && token.source !== 'caldav'
               ? ` Write mode: on the first start the agent's own calendar "${settings.calendarName || 'Assistant'}" is created in the Google account; the sign-in must include calendar.app.created (the Calendar Service line warns if it does not).`
+              : '') +
+            (token.source === 'caldav'
+              ? ` CalDAV: the service finds the server and the calendars itself; the Calendar Service line says what it found${settings.mode === 'write' ? `, and whether the own calendar "${settings.calendarName || 'Assistant'}" could be made` : ''}.`
               : '')
           : 'Calendar is off. OpenClaw is restarting.') + scopesNote,
       result: null,

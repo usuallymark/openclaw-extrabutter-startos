@@ -21,12 +21,31 @@ const shape = z.looseObject({
   token: z
     .looseObject({
       // 'none' (since :24): no Google account, calendar links only.
+      // 'caldav' (since :37): a CalDAV account (below) instead of Google.
       source: z
-        .enum(['from-vaultwarden', 'manual', 'none'])
+        .enum(['from-vaultwarden', 'manual', 'none', 'caldav'])
         .catch('from-vaultwarden'),
       value: z.string().optional().catch(undefined),
     })
     .catch({ source: 'from-vaultwarden' as const, value: undefined }),
+  // A CalDAV account (since :37): the server (blank: found from the
+  // account's address), the user name (blank: the address), and the app
+  // password, pasted or Vaultwarden item "caldav" (its login password).
+  caldav: z
+    .looseObject({
+      server: z.string().optional().catch(undefined),
+      username: z.string().optional().catch(undefined),
+      password: z
+        .looseObject({
+          source: z
+            .enum(['from-vaultwarden', 'manual'])
+            .catch('from-vaultwarden'),
+          value: z.string().optional().catch(undefined),
+        })
+        .catch({ source: 'from-vaultwarden' as const, value: undefined }),
+    })
+    .optional()
+    .catch(undefined),
   trustedOrganizers: z.array(z.string()).catch([]),
   // Since :16: Configure Email's Trusted Senders count as Trusted
   // Organizers too (the launcher reads both lists at start).

@@ -7,6 +7,7 @@ import { lookUpMailServers } from './lookUpMailServers'
 import { agentActivity } from './agentActivity'
 import { spendingAlert, usageAndCost } from './usageAndCost'
 import { configureCalendar } from './configureCalendar'
+import { lookUpCalendarServer } from './lookUpCalendarServer'
 import { configureContacts } from './configureContacts'
 import { configureAppsAgent } from './configureAppsAgent'
 import { reviewAgentActions } from './reviewAgentActions'
@@ -32,6 +33,7 @@ export const actions = sdk.Actions.of()
   .addAction(usageAndCost)
   .addAction(spendingAlert)
   .addAction(configureCalendar)
+  .addAction(lookUpCalendarServer)
   .addAction(configureContacts)
   .addAction(configureAppsAgent)
   .addAction(configureExternalServices)

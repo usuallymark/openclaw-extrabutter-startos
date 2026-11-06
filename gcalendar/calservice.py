@@ -26,6 +26,11 @@ caller.
   (the organizer is then a real Google account), and gets
   contact_not_verified next to external_organizer when the organizer is
   only claimed (an emailed invitation, a link feed, Gmail's bookings).
+- A CalDAV account (since :37, caldav.py; iCloud, Fastmail, Nextcloud …)
+  is read like the calendar links, and in write mode holds the assistant's
+  own calendar (davwrites.py), under the same rules as Google. Its password
+  lives in this process's memory only; one the server refused is not sent
+  again.
 - The sign-in lives in this process's memory only. When Google refuses it,
   the service waits and exits every 10 minutes, so the launcher fetches it
   again (a new sign-in saved in Vaultwarden is picked up by itself); the
@@ -46,6 +51,7 @@ import time  # noqa: E402
 import urllib.parse  # noqa: E402
 from datetime import date, datetime, timedelta, timezone  # noqa: E402
 
+import caldav  # noqa: E402
 import knowncontact  # noqa: E402
 import mcp  # noqa: E402
 import svcutil  # noqa: E402
@@ -54,6 +60,8 @@ from mcp import MAX_EVENTS  # noqa: E402
 from links import LINK_PREFIX, Links  # noqa: E402
 from writes import Writer  # noqa: E402
 from invites import InviteWriter  # noqa: E402
+from caldav import DAV_PREFIX, DavError, DavRefused  # noqa: E402
+from davwrites import CalDavWriter  # noqa: E402
 from sanitize import clean_line, content_flags, hidden_flags, html_parts, wrap_untrusted  # noqa: E402
 
 try:
@@ -74,7 +82,7 @@ _now = svcutil.now_text
 
 
 class Service:
-    def __init__(self, cfg, token, reason):
+    def __init__(self, cfg, token, reason, dav_password=None, dav_reason=''):
         self.cfg = cfg
         self.state_dir = cfg['stateDir']
         self.state = 'starting'
@@ -88,15 +96,22 @@ class Service:
         self.contacts = knowncontact.Checker(cfg.get('knownContacts'), self.log)
         self._calls = []
         self._calls_lock = threading.Lock()
+        # A CalDAV account (since :37) instead of Google.
+        d = cfg.get('caldav') if isinstance(cfg.get('caldav'), dict) else None
+        self.dav = caldav.Account(d.get('server') or '', d.get('address') or self.account, d.get('username') or '',
+                                  dav_password, self.log) if d else None
+        self.dav_reason = dav_reason if d and not dav_password else ''
+        self._dav_fp = self._fingerprint(self.dav.fp_seed) if self.dav and dav_password else None
         self.writer = (Writer(self, cfg) if cfg.get('mode') == 'write' and token
+                       else CalDavWriter(self, cfg) if cfg.get('mode') == 'write' and self.dav
                        else InviteWriter(self, cfg) if cfg.get('mode') == 'invite' else None)
         self.links = Links(cfg.get('links'))
         # A Google sign-in that was wanted but could not be had, while the
         # calendar links still work: a warning, not a stopped service.
         self.google_problem = ''
-        if not token:
+        if not token and not self.dav:
             if self.links:
-                if cfg.get('tokenSource') != 'none':
+                if cfg.get('tokenSource') in ('vault', 'manual'):
                     self.google_problem = reason or 'no Google sign-in was available'
             else:
                 self.set_state('unavailable', reason or 'no Calendar sign-in was available')
@@ -154,8 +169,70 @@ class Service:
                  else 'paste a new sign-in in Configure Calendar')
         return f'{why}; {where}'
 
+    # The CalDAV account (since :37): a refused password is not sent again.
+
+    def _dav_refused_path(self):
+        return os.path.join(self.state_dir, 'caldav_refused.json')
+
+    def dav_failed(self, e):
+        """Note a CalDAV problem; for a refused password, remember it (salted
+        fingerprint, never the password) and exit later to fetch it again."""
+        self.dav.error = str(e)
+        if isinstance(e, DavRefused) and self._dav_fp:
+            svcutil.write_private(self._dav_refused_path(), json.dumps(
+                {'fp': self._dav_fp, 'since': _now(), 'why': clean_line(str(e), 300)}).encode())
+            svcutil.schedule_exit(0, WAIT_REFUSED_S)
+        if not self.links and isinstance(e, DavRefused):
+            self.state, self.reason = 'refused', self._dav_refused_text(str(e))
+            self.log({'event': 'state', 'state': 'refused', 'reason': 'CalDAV password refused'})
+
+    def _dav_refused_text(self, why):
+        where = ('save a new app password in Vaultwarden item "caldav"' if self.cfg.get('caldavPasswordSource') == 'vault'
+                 else 'enter a new app password in Configure Calendar')
+        return f'{why}; {where} (it is not tried again until then)'
+
+    def _dav_start(self):
+        """Connect the CalDAV account. Seconds to exit after, or None."""
+        d = self.dav
+        if not self._dav_fp:
+            d.error = self.dav_reason or 'no app password was available for the CalDAV account'
+            return WAIT_REFUSED_S
+        try:
+            with open(self._dav_refused_path()) as f:
+                rec = json.load(f)
+        except (OSError, ValueError):
+            rec = None
+        if rec and rec.get('fp') == self._dav_fp:
+            d.refused, d.error = True, rec.get('why') or 'the calendar server refused the user name or password'
+            self.log({'event': 'state', 'state': 'refused', 'reason': 'same CalDAV password as last refused; not sending it again'})
+            return WAIT_REFUSED_S
+        try:
+            d.connect()
+        except DavRefused as e:
+            self.dav_failed(e)
+            return None  # dav_failed scheduled the exit
+        except DavError as e:
+            d.error = str(e)
+            return None
+        try:
+            os.unlink(self._dav_refused_path())
+        except OSError:
+            pass
+        return None
+
     def startup(self):
         """Seconds after which to exit and be relaunched, or None."""
+        if self.google is None and self.dav is not None:
+            exit_after = self._dav_start()
+            if self.dav.connected or self.links:
+                self.set_state('ok')
+            elif self.dav.refused:
+                self.set_state('refused', self._dav_refused_text(self.dav.error))
+            elif not self._dav_fp:
+                self.set_state('unavailable', self.dav.error)
+            else:
+                self.set_state('unreachable', self.dav.error)
+            return exit_after
         if self.google is None:
             if self.links:
                 self.set_state('ok')
@@ -197,7 +274,13 @@ class Service:
         notes = []
         if self.google_problem:
             notes.append(f'Google calendars are not read: {self.google_problem}')
-        if self.cfg.get('mode') == 'write' and not self.google:
+        if self.dav is not None:
+            if not self.dav.connected:
+                notes.append(f'CalDAV calendars are not read: {self.dav.error or "not connected yet"}')
+            for c in self.dav.calendars:
+                if c.error:
+                    notes.append(f'calendar "{c.name}": {c.error}')
+        if self.cfg.get('mode') == 'write' and not self.google and not self.dav:
             notes.append('write mode needs a Google sign-in; without one the calendar is read only')
         for x in self.links.items:
             if x.error:
@@ -224,6 +307,7 @@ class Service:
             'warnings': self.scope_notes() if self.state == 'ok' else [],
             'tokenSource': self.cfg.get('tokenSource'),
             'google': bool(self.google),
+            'caldav': self.dav.health() if self.dav else None,
             'links': self.links.health(),
             'trustedOrganizers': len(self.trusted), 'version': VERSION,
             'contactsCheck': self.contacts.status(),
@@ -327,6 +411,12 @@ class Tools:
             raise ToolError(str(e)) from None
         except ApiError as e:
             raise ToolError(str(e)) from None
+        except DavRefused as e:
+            self.svc.dav_failed(e)
+            raise ToolError('the CalDAV account\'s password was refused; the Calendar Service line in StartOS says '
+                            'what to do') from None
+        except DavError as e:
+            raise ToolError(str(e)) from None
         if self.svc.state == 'unreachable' and not self._gerr and self._google_usable():
             self.svc.set_state('ok')  # Google answered again
         return out
@@ -358,7 +448,30 @@ class Tools:
                 cals = list(self._cals or [])
         elif self.svc.google is not None:
             self._gerr = f'Google calendars: {self._unavailable()}'
-        return cals + self._link_cals()
+        return cals + self._dav_cals() + self._link_cals()
+
+    def _dav_cals(self):
+        """The CalDAV account's calendars (since :37), connecting again when
+        the connection was lost (never with a refused password)."""
+        d = self.svc.dav
+        if d is None:
+            return []
+        if not d.connected and not d.refused and self.svc._dav_fp:
+            try:
+                d.connect()
+                if self.svc.state == 'unreachable':
+                    self.svc.set_state('ok')
+                _setup_writer(self.svc, self)
+            except DavRefused as e:
+                self.svc.dav_failed(e)
+            except DavError as e:
+                d.error = str(e)
+        if not d.connected:
+            self._gerr = '; '.join(x for x in (self._gerr, f'CalDAV calendars: {d.error or "not connected"}') if x)
+            return []
+        own = getattr(self.svc.writer, 'own', None)
+        return [{'id': c.id, 'summary': c.name, 'accessRole': 'owner' if c is own else 'writer' if c.writable else 'reader',
+                 'selected': True, 'timeZone': None, '_link': c} for c in d.calendars]
 
     def _link_cals(self):
         out = []
@@ -426,6 +539,12 @@ class Tools:
                 x.get(tz)
             out['calendar_links'] = [{k: v for k, v in x.items() if k in ('name', 'id', 'ok', 'error', 'last_good', 'events', 'problems')}
                                      for x in self.svc.links.health()]
+        if self.svc.dav is not None:
+            d = self.svc.dav.health()
+            out['caldav'] = {'server': d['server'], 'found': d['found'], 'connected': d['connected'],
+                             'error': d['error'] or None, 'address': d['address'],
+                             'sends_invitations': d['scheduling'],
+                             'calendars': [{k: c[k] for k in ('name', 'id', 'ok', 'error', 'events')} for c in d['calendars']]}
         if self.svc.writer:
             out.update(self.svc.writer.status())
         return out
@@ -457,7 +576,16 @@ class Tools:
                 'shown': bool(c.get('selected', True)) and not c.get('hidden'),
             }
             link = c.get('_link')
-            if link is not None:
+            if link is not None and getattr(link, 'kind', '') == 'caldav':
+                own = link is getattr(self.svc.writer, 'own', None)
+                row.update({'access': ('owner (the assistant\'s own calendar, can be written)' if own
+                                       else 'reader (CalDAV account; only the own calendar is ever written)'),
+                            'caldav': True})
+                if own:
+                    row['own'] = True
+                if link.error:
+                    errors.append(f'{link.name}: {link.error}')
+            elif link is not None:
                 f = link.get(self._primary_zone())
                 row.update({'access': 'reader (calendar link, read only)', 'link': True,
                             'time_zone': (f.zone_name if f else '') or None})
@@ -594,11 +722,12 @@ class Tools:
             out.append(self._link_brief(inst, cal, link, f, tz))
         return out
 
-    def _link_organizer(self, ev, feed):
+    def _link_organizer(self, ev, feed, link=None):
         org = ev['organizer'] or {}
         addr = str(org.get('email') or '').lower()
-        acct = (self.svc.account or '').lower()
-        flags = ['from_link']
+        dav = getattr(link, 'kind', '') == 'caldav'
+        acct = ((self.svc.dav.address if dav and self.svc.dav else '') or self.svc.account or '').lower()
+        flags = [] if dav else ['from_link']
         if not addr:
             flags.append('no_organizer')
         elif acct and addr == acct:
@@ -608,15 +737,16 @@ class Tools:
         else:
             flags.append('external_organizer')
         # A feed shows what the calendar holds; only events made in Google
-        # (in a Google feed) are known not to be emailed invitations.
-        if addr and 'organizer_self' not in flags and not (feed.from_google and ev['uid'].endswith('@google.com')):
+        # (in a Google feed) are known not to be emailed invitations. On a
+        # CalDAV account an outside organizer always came by an invitation.
+        if addr and 'organizer_self' not in flags and (dav or not (feed.from_google and ev['uid'].endswith('@google.com'))):
             flags.append('organizer_unverifiable')
         name = clean_line(org.get('name') or '', 80)
         return (f'{name} <{addr}>' if name and addr else addr or name or 'none named'), flags, addr
 
     def _link_brief(self, inst, cal, link, feed, tz):
         ev = inst['event']
-        organizer, flags, addr = self._link_organizer(ev, feed)
+        organizer, flags, addr = self._link_organizer(ev, feed, link)
         title = clean_line(ev['summary'] or '(no title)', 200)
         flags += [f for f in content_flags(title) if f not in flags]
         acct = (self.svc.account or '').lower()
@@ -672,7 +802,7 @@ class Tools:
         ev_id = str(a.get('event_id') or '').strip()
         if not cal_id or not ev_id or len(ev_id) > 1024:
             raise ToolError('give calendar and event_id from list or search')
-        if cal_id.startswith(LINK_PREFIX):
+        if cal_id.startswith((LINK_PREFIX, DAV_PREFIX)):
             return self._read_link(cal_id, ev_id)
         if not self._google_usable():
             raise ToolError(self._unavailable())
@@ -691,6 +821,8 @@ class Tools:
 
     def _read_link(self, cal_id, ev_id):
         link = self.svc.links.by_id(cal_id)
+        if link is None and cal_id.startswith(DAV_PREFIX):
+            link = next((c['_link'] for c in self._dav_cals() if c['id'] == cal_id), None)
         if link is None:
             raise ToolError(f'no calendar with id {clean_line(cal_id, 100)}; the calendars tool lists them')
         tz = self._primary_zone()
@@ -778,6 +910,20 @@ def _retry_loop(svc):
     so the health line recovers without a tool call."""
     while True:
         time.sleep(RETRY_S)
+        d = svc.dav
+        if d is not None and not d.connected and not d.refused and svc._dav_fp:
+            try:
+                d.connect()
+                if svc.state == 'unreachable':
+                    svc.set_state('ok')
+                _setup_writer(svc, None)
+            except DavRefused as e:
+                svc.dav_failed(e)
+            except DavError as e:
+                d.error = str(e)
+                if svc.state == 'unreachable':
+                    svc.reason = d.error
+            continue
         if svc.state != 'unreachable' or svc.google is None:
             continue
         try:
@@ -831,13 +977,15 @@ def main():
         return 2
     token_raw = payload.pop('token', None) or ''
     reason = payload.pop('tokenError', '') or ''
+    dav_password = payload.pop('caldavPassword', None) or None
+    dav_reason = payload.pop('caldavError', '') or ''
     del raw
     token, why = parse_token(token_raw)
     del token_raw
     cfg = payload
     os.makedirs(cfg['stateDir'], mode=0o700, exist_ok=True)
-    svc = Service(cfg, token, reason or why)
-    del token
+    svc = Service(cfg, token, reason or why, dav_password, dav_reason)
+    del token, dav_password
     tools = Tools(svc)
     svc.tools = tools
     exit_after = svc.startup()
@@ -848,12 +996,17 @@ def main():
         # whether they work before anyone asks.
         threading.Thread(target=lambda: svc.links.warm(tools._primary_zone() if svc.google is None
                                                        else timezone.utc), daemon=True).start()
+    if svc.dav is not None and svc.dav.connected:
+        # Read the CalDAV calendars once now, as the calendar links.
+        threading.Thread(target=lambda: [c.get(tools._primary_zone()) for c in list(svc.dav.calendars)],
+                         daemon=True).start()
     if svc.writer:
         _setup_writer(svc, tools)
         threading.Thread(target=svc.writer.loop, daemon=True).start()
     if exit_after:
         svcutil.schedule_exit(0, exit_after)
-        print(f'calendar service: {svc.state}: {svc.reason or svc.google_problem}; checking again in {exit_after // 60} min', flush=True)
+        print(f'calendar service: {svc.state}: {svc.reason or svc.google_problem or (svc.dav.error if svc.dav else "")}; '
+              f'checking again in {exit_after // 60} min', flush=True)
     else:
         print(f'calendar service: {svc.state}{": " + svc.reason if svc.reason else ""}; '
               f'serving {svc.account or "the calendar"}'

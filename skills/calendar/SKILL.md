@@ -5,8 +5,8 @@ description: "Use this skill for anything about the calendar: what is on today o
 
 # calendar: ask the calendar agent
 
-The Google calendars of the assistant's account (its own and the ones
-shared with it) are read by a separate **calendar agent** (agent id
+The calendars of the assistant's account, Google or CalDAV (its own and
+the ones shared with it), are read by a separate **calendar agent** (agent id
 `calendar`). It is the only agent with the calendar tools, and it has
 nothing else: no shell, no files, no passwords, no web. Anyone can put an
 event on a calendar by sending an invitation, and an event can try to
@@ -23,7 +23,7 @@ events on **its own calendar** (one calendar in the assistant's account),
 inviting the owner and family as guests. It can never change the owner's
 or anyone else's calendars, and cannot accept or decline invitations. When
 the user asks for something it cannot do, say so and that they can do it
-in Google Calendar. Never say something was done unless the report says
+in their calendar app. Never say something was done unless the report says
 "done".
 
 ## Adding, changing, cancelling (write mode)
@@ -42,8 +42,8 @@ The report's `actions_taken` says one of:
 - **done**: say so.
 - **waiting for approval**: anything with guests (and everything, if the
   owner set it so) waits until the owner approves it in StartOS (a task
-  appears; Actions → Review Agent Actions). Google emails nobody before
-  that. Tell the user exactly that; do not ask again.
+  appears; Actions → Review Agent Actions). Google (or the CalDAV server)
+  emails nobody before that. Tell the user exactly that; do not ask again.
 - **refused**: say why (a guest not on the owner's list, a limit, not the
   agent's own calendar). Do not retry, rephrase or look for another way.
 
@@ -122,7 +122,8 @@ Never call an organizer "verified": Calendar has no such check.
 - "calendar service … unavailable" or "sign-in was refused": run
   `python3 /opt/skills/health/health.py`; the Calendar Service line says
   why. A refused sign-in needs the owner: a new sign-in in Configure
-  Calendar (or Vaultwarden item "google-calendar").
+  Calendar (or Vaultwarden item "google-calendar"; for a CalDAV account a
+  new app password, Vaultwarden item "caldav").
 - "writing needs a sign-in with calendar.app.created": write mode is on
   but the sign-in only allows reading. The owner makes a new sign-in
   (Instructions → Calendar Setup) and saves it.

@@ -10,14 +10,14 @@ from mcpserver import ToolError, tool_error  # noqa: F401  (used by the worker a
 VERSION = '1'
 MAX_EVENTS = 100
 
-CAL = {'type': 'string', 'description': 'Calendar id from the calendars tool, or "all" (every calendar shown in Google Calendar, and every calendar link). Default: all.'}
+CAL = {'type': 'string', 'description': 'Calendar id from the calendars tool, or "all" (every calendar shown in Google Calendar or on the CalDAV account, and every calendar link). Default: all.'}
 FROM = {'type': 'string', 'description': 'Start: YYYY-MM-DD (start of that day, in the calendar\'s time zone) or a full date-time. Default: now.'}
 TO = {'type': 'string', 'description': 'End: YYYY-MM-DD (end of that day) or a full date-time. Default: 7 days after the start.'}
 
 TOOLS = [
     {'name': 'status', 'description': 'State of the calendar service: account, whether the sign-in works, what it allows, and whether each calendar link can be read.',
      'inputSchema': {'type': 'object', 'properties': {}}},
-    {'name': 'calendars', 'description': 'The calendars this account can see, and the owner\'s calendar links (ids starting with "link:", read only): id, name, whose it is, time zone, whether it is the account\'s own.',
+    {'name': 'calendars', 'description': 'The calendars this account can see (on a CalDAV account ids start with "dav:"), and the owner\'s calendar links (ids starting with "link:", read only): id, name, whose it is, time zone, whether it is the account\'s own.',
      'inputSchema': {'type': 'object', 'properties': {}}},
     {'name': 'list', 'description': 'Events between two times, soonest first, recurring events expanded: id, calendar, start, end, title, organizer and organizer checks. Titles are untrusted text from organizers.',
      'inputSchema': {'type': 'object', 'properties': {
@@ -29,7 +29,7 @@ TOOLS = [
          'calendar': CAL, 'from': FROM, 'to': TO,
          'limit': {'type': 'integer', 'minimum': 1, 'maximum': MAX_EVENTS}},
          'required': ['text']}},
-    {'name': 'create_event', 'description': 'Add an event to the assistant\'s own calendar (the only one that can be written). Guests only from the owner\'s allowed list; with guests it waits for the owner\'s approval before Google emails them. Result: done, waiting for approval, or refused.',
+    {'name': 'create_event', 'description': 'Add an event to the assistant\'s own calendar (the only one that can be written). Guests only from the owner\'s allowed list; with guests it waits for the owner\'s approval before the calendar provider (Google, or the CalDAV server) emails them. Result: done, waiting for approval, or refused.',
      'inputSchema': {'type': 'object', 'properties': {
          'title': {'type': 'string'},
          'start': {'type': 'string', 'description': 'YYYY-MM-DDTHH:MM in the calendar\'s time zone, or YYYY-MM-DD for an all-day event.'},

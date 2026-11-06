@@ -113,6 +113,12 @@ export async function writeVaultFiles(
   if (usesMailService(mailSettings?.account as any)) items['email'] = 'mail'
   if (calOn) {
     items[CALENDAR_VAULT.item] = 'calendar'
+    // Since :37: a CalDAV account's app password.
+    if (
+      calSettings?.token?.source === 'caldav' &&
+      calSettings?.caldav?.password?.source !== 'manual'
+    )
+      items['caldav'] = 'calendar'
     for (const l of calSettings?.links ?? []) {
       const item = String(l?.item ?? '').trim()
       if (l?.source === 'from-vaultwarden' && item)

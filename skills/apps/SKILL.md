@@ -200,7 +200,7 @@ through a calendar link (ids starting with `link:`) are read only too.
 When the user asks for something it cannot do, say so and that they can
 do it in their calendar app.
 
-Without a Google account the calendar agent may instead **send
+Without a Google or CalDAV account the calendar agent may instead **send
 invitations by mail** (the apps agent's notes say which): adding an event
 emails an invitation to its guests, and their calendar apps put it on
 their calendars. Every invitation needs a guest: to put something on the

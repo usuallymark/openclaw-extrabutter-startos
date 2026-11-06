@@ -400,14 +400,55 @@ contacts.
 
 ## Calendar Setup
 
-The calendar agent reads your calendars in one of two ways, or both:
+The calendar agent reads your calendars in one of three ways (calendar
+links can be added to either account):
 
 - **Calendar links** (simplest, about 2 minutes, read only): the secret
   address each calendar app gives you. No Google Cloud project, no sign-in.
   See *The simple way* right below.
+- **A CalDAV account** (about 5 minutes): iCloud, Fastmail, Nextcloud or
+  another CalDAV server, with an app password. It reads that account's
+  calendars and can also keep a calendar of its own and invite your family,
+  with your approval. See *With a CalDAV account* below.
 - **A Google account** for the assistant (about 15 minutes): it reads the
   calendars shared with that account, and can also keep a calendar of its
   own and invite your family, with your approval. Steps 1 to 5 below.
+
+### With a CalDAV account (iCloud, Fastmail, Nextcloud…)
+
+1. Make an **app password** for it (your normal password is not used):
+   - **iCloud**: account.apple.com → **Sign-In and Security** →
+     **App-Specific Passwords** → **Generate an app-specific password**
+     (needs two-factor authentication on the Apple Account).
+   - **Fastmail**: **Settings** → **Privacy & Security** → **Manage app
+     passwords and access** → **New app password**, access **Mail, Contacts
+     & Calendars** (Fastmail's Basic plan has no calendar access for apps).
+   - **Nextcloud** and others: the app passwords page of your account.
+2. Optional: run **Look Up Calendar Server** with your address (and the app
+   password) to see the server and the calendars it finds. Nothing is
+   saved.
+3. **Configure Calendar**: **Calendar** *Read only* or *Read + write on its
+   own calendar*; **Calendar Account** *CalDAV account*; **Account** your
+   address at the provider. **Server** stays blank for iCloud, Fastmail and
+   Yahoo (it is found from the address); for Nextcloud and others enter the
+   CalDAV address from your provider's help pages (https:// only).
+   **User Name** blank, unless your server logs in with something other
+   than the address. **App Password**: paste it, or save it in Vaultwarden
+   as the password of a Login item named `caldav` and choose *Fetch from
+   Vaultwarden* (only the calendar service can fetch it). Set your **Time
+   Zone**.
+4. Save. The **Calendar Service** line says what it found: the server,
+   how many calendars, and in write mode whether its own calendar could be
+   made. If your server does not let apps make calendars, make one with the
+   **Own Calendar Name** in your calendar app and restart OpenClaw.
+
+Guests: iCloud, Fastmail and Nextcloud send the invitations themselves (as
+Google does), after your approval. A server that does not send invitations
+takes events without guests only, and says so. A change waiting for your
+approval is made only if nobody changed the event on another device in the
+meantime; otherwise it fails and nothing is overwritten. A password the
+server refused is not tried again until you save a new one (some providers
+lock an account after repeated failures).
 
 ### The simple way: calendar links
 
