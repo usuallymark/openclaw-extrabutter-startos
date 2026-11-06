@@ -252,8 +252,11 @@ accepts the password. If you change the password (in Vaultwarden or in the
 form), nothing else is needed: when the mailbox refuses the old one, the
 mail service fetches the password again. A password the mailbox refused is
 never tried twice, so your account is not locked out; you get a StartOS
-notification (and an ntfy message, if ntfy is set up), and the service
-checks for a new password every 10 minutes.
+notification (and an ntfy message, if ntfy is set up), a task on the
+service page that opens Configure Email and says where the new password
+goes, and the service checks for a new password every 10 minutes. The
+task goes away once the mailbox accepts the password again. Calendar and
+Contacts do the same when their sign-in is refused.
 
 Pick the account type:
 
@@ -628,9 +631,10 @@ whether it came from an emailed invitation (whose organizer can't be
 checked). Unlike mail, calendars have no sender verification, so it never
 calls an organizer "verified".
 
-If the Calendar Service line says the sign-in was refused, Google ended
-it (revoked, the app still in Testing, or the client deleted): repeat step
-2 and save the new sign-in (Vaultwarden or Configure Calendar).
+If the Calendar Service line says the sign-in was refused (a task then
+opens Configure Calendar), Google ended it (revoked, the app still in
+Testing, or the client deleted): repeat step 2 and save the new sign-in
+(Vaultwarden or Configure Calendar).
 
 ## Apps Agent
 

@@ -308,6 +308,10 @@ class Service:
             'tokenSource': self.cfg.get('tokenSource'),
             'google': bool(self.google),
             'caldav': self.dav.health() if self.dav else None,
+            # The package's fix-it task (since :39) for a refused CalDAV
+            # password while the links keep the service "ok".
+            'caldavRefused': (self._dav_refused_text(self.dav.error or 'the server refused the password')
+                              if self.dav and self.dav.refused else ''),
             'links': self.links.health(),
             'trustedOrganizers': len(self.trusted), 'version': VERSION,
             'contactsCheck': self.contacts.status(),

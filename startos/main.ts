@@ -12,6 +12,7 @@ import {
   qdrantInternalPort,
 } from './interfaces'
 import { sdk } from './sdk'
+import { PROBLEM_TASKS } from './problemTasks'
 import { setGatewayContainer } from './gatewayContainer'
 import {
   isLocal,
@@ -416,6 +417,20 @@ export const main = sdk.setupMain(async ({ effects }) => {
   if (owned.length)
     console.info(`Vault items only their service may read: ${owned.join(', ')}`)
   const vaultOwner = await vaultRootOwner()
+
+  // Fix-it tasks (problemTasks.ts, since :39) of services that are off: their
+  // health checks no longer run, so nothing else would clear them.
+  for (const [svc, on] of [
+    ['mail', mailOn],
+    ['calendar', calOn],
+    ['contacts', contactsOn],
+  ] as const) {
+    if (on) continue
+    await Promise.race([
+      sdk.action.clearTask(effects, PROBLEM_TASKS[svc]),
+      new Promise((resolve) => setTimeout(resolve, 20_000)),
+    ]).catch((e) => console.warn(`clear fix-it task: ${(e as Error)?.message}`))
+  }
 
   // The apps agent (appsAgent.ts, since :20): while mail or calendar is on,
   // the main agent asks it, with one skill, and it asks the email and
@@ -1193,7 +1208,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
         .addHealthCheck('contacts-status', {
           ready: {
             display: 'Contacts Service',
-            fn: () => probeContacts(openclawSub),
+            fn: () => probeContacts(effects, openclawSub),
             trigger: externalTrigger,
             gracePeriod: 0,
           },

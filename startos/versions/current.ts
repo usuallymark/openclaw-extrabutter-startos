@@ -1,13 +1,13 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:38',
+  version: '2026.10.1:39',
   releaseNotes: {
-    en_US: `Tidier actions, safer approvals.
+    en_US: `A refused sign-in now tells you where to fix it.
 
-- **Actions are grouped:** Daily (Review Agent Actions, Agent Activity, Usage and Cost, Spending Alert), Email, Calendar, Contacts, Setup, Channels and Maintenance.
-- **Review Agent Actions picks no decision for you.** Choose the request, and its details (recipients, subject, why it waits, when it expires) are shown right under the Decision field. Only the choices that apply are offered: calendar requests get Approve or Reject; "make this a routine mailing" is greyed out, with the reason, for replies, forwards, invitations and mail without a subject.
-- **Review Agent Actions is greyed out while nothing waits**, and opens again when an agent asks (the task appears at the same time).`,
+- **When the mailbox refuses the password, or Google or the CalDAV server refuses a calendar or contacts sign-in**, the service page gets a task that opens Configure Email, Configure Calendar or Configure Contacts. Its text says what was refused and where the new password or sign-in goes (Vaultwarden or the form).
+- The task goes away by itself once the sign-in works again, and comes back within 10 minutes if you open the form without fixing it. A server that is only unreachable raises no task.
+- Also for a CalDAV account whose password was refused while calendar links keep working.`,
   },
   migrations: {
     up: async () => {},

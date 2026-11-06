@@ -15,6 +15,16 @@ import {
 import { LocalKey, notInstalledMessage } from './localServices'
 import { usageSettingsJson } from './fileModels/usageSettings.json'
 import { agentActionsWaitingJson } from './fileModels/agentActionsWaiting.json'
+import { configureEmail } from './actions/configureEmail'
+import { configureCalendar } from './actions/configureCalendar'
+import { configureContacts } from './actions/configureContacts'
+import {
+  PROBLEM_TASKS,
+  ProblemService,
+  problemReason,
+  problemTaskChange,
+  problemTaskDone,
+} from './problemTasks'
 import { dollars } from './actions/usageAndCost'
 
 // Health checks for the vault and external services.
@@ -547,6 +557,41 @@ async function syncAgentActionsTask(
   taskSynced(change.key)
 }
 
+/** The fix-it task of one service (problemTasks.ts): raised while its own
+ * sign-in is refused, pointing at the form that fixes it; cleared after. */
+async function syncProblemTask(
+  effects: T.Effects,
+  svc: ProblemService,
+  h: any,
+) {
+  const reason = problemReason(svc, h)
+  const change = problemTaskChange(svc, reason)
+  if (!change) return
+  const action =
+    svc === 'mail'
+      ? configureEmail
+      : svc === 'calendar'
+        ? configureCalendar
+        : configureContacts
+  if (change === 'raise' && reason) {
+    await within(
+      20_000,
+      sdk.action.createOwnTask(effects, action, 'important', {
+        reason,
+        replayId: PROBLEM_TASKS[svc],
+      }),
+      'fix-it task',
+    )
+  } else {
+    await within(
+      20_000,
+      sdk.action.clearTask(effects, PROBLEM_TASKS[svc]),
+      'clear fix-it task',
+    )
+  }
+  problemTaskDone(svc, reason)
+}
+
 async function syncQueueTask(
   effects: T.Effects,
   sub: Sub,
@@ -678,6 +723,11 @@ function mailSideJobs(effects: T.Effects, sub: Sub, h: any) {
       if (live()) await syncQueueTask(effects, sub, h, live)
     } catch (e) {
       console.warn(`mail queue task: ${(e as Error)?.message}`)
+    }
+    try {
+      if (live()) await syncProblemTask(effects, 'mail', h)
+    } catch (e) {
+      console.warn(`mail fix-it task: ${(e as Error)?.message}`)
     }
     try {
       if (live() && h.state === 'refused' && announcedRefusal !== h.since) {
@@ -922,6 +972,11 @@ function calendarSideJobs(effects: T.Effects, sub: Sub, h: any) {
       console.warn(`calendar approval task: ${(e as Error)?.message}`)
     }
     try {
+      if (live()) await syncProblemTask(effects, 'calendar', h)
+    } catch (e) {
+      console.warn(`calendar fix-it task: ${(e as Error)?.message}`)
+    }
+    try {
       if (live() && h.state === 'ok')
         await within(
           150_000,
@@ -1144,6 +1199,8 @@ export async function probeSpending(
 
 const CONTACTS_SESSION = 'agent:contacts:main'
 let contactsSideJob: Promise<void> | null = null
+const contactsLeft = new WeakSet<T.Effects>()
+const contactsWatched = new WeakSet<T.Effects>()
 
 async function contactsHealthz(sub: Sub): Promise<any | null> {
   try {
@@ -1170,12 +1227,25 @@ export async function contactsAnswers(
 /** The "Contacts Service" line; clears the contacts agent's (and the apps
  * agent's) conversation after 15 idle minutes, as a side job. */
 export async function probeContacts(
+  effects: T.Effects,
   sub: Sub,
 ): Promise<Result | { result: 'starting'; message: string }> {
   const h = await contactsHealthz(sub)
   if (!h) return { result: 'starting', message: 'Contacts service starting' }
-  if (!contactsSideJob)
+  if (!contactsWatched.has(effects)) {
+    contactsWatched.add(effects)
+    effects.onLeaveContext(() => {
+      contactsLeft.add(effects)
+    })
+  }
+  if (!contactsSideJob && !contactsLeft.has(effects))
     contactsSideJob = (async () => {
+      try {
+        await syncProblemTask(effects, 'contacts', h)
+      } catch (e) {
+        console.warn(`contacts fix-it task: ${(e as Error)?.message}`)
+      }
+      if (contactsLeft.has(effects)) return
       try {
         await within(
           150_000,
