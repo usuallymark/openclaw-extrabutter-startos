@@ -210,11 +210,14 @@ and **Sending**.
     to trick the agent could then make it write to anyone).
 
 When mail waits for you, you get a task on the service page, a StartOS
-notification and (with ntfy set up) a phone alert. Open **Actions → Review
-Agent Actions** (called Review Outgoing Mail before 2026.10.1:14; it is
-the one place you approve whatever your agents want to do): it shows the recipients, subject, opening lines,
-attachments and why it waits. Choose **Approve**, **Reject**, or **Approve
-and always allow these recipients** (adds them to Send Automatically To).
+notification and (with ntfy set up) a phone alert. Open **Actions → Daily →
+Review Agent Actions** (called Review Outgoing Mail before 2026.10.1:14; it
+is the one place you approve whatever your agents want to do; greyed out
+while nothing waits): pick the request, and its recipients, subject,
+opening lines, attachments and why it waits are shown under **Decision**.
+No decision is picked for you: choose **Approve: send it**, **Reject**,
+or **Approve, and always send to these recipients without asking** (adds
+them to Send Automatically To).
 Undecided mail expires after 5 days (you get a reminder the day before),
 and a draft you changed or deleted in
 your mail app meanwhile is not sent. **Actions → Agent Activity** lists what
@@ -233,8 +236,8 @@ how it looks before you approve, open the draft in the assistant's mail
 (Drafts), or have the agent send a test to you first.
 
 **Routine mailings** (a monthly newsletter, say): when the first real issue
-waits in Review Agent Actions, choose **Approve and make this a routine
-mailing**. Its recipients, the start of its subject and its attachment
+waits in Review Agent Actions, choose **Approve, and make this a routine
+mailing** (offered only for a new message with a subject). Its recipients, the start of its subject and its attachment
 types are saved (Configure Email → Sending → Routine Mailings; at most one
 a month to begin with). Later issues the agent sends as that mailing go
 out without asking when they match, and you get a notification. An issue

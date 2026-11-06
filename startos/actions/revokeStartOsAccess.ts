@@ -2,6 +2,7 @@ import { i18n } from '../i18n'
 import { sdk } from '../sdk'
 import { mainMounts } from '../utils'
 import { installRootCA } from './loginToOs'
+import { GROUP_MAINTENANCE } from './groups'
 
 // start-cli stores its identity key next to its config (<HOME>/.startos/config.yaml);
 // loginToOs runs `start-cli auth login` with HOME=/data, so the key lands here.
@@ -26,7 +27,7 @@ export const revokeStartOsAccess = sdk.Action.withoutInput(
       'OpenClaw will lose StartOS administrative access until you run Login to StartOS again.',
     ),
     allowedStatuses: 'any',
-    group: null,
+    group: GROUP_MAINTENANCE,
     visibility: 'enabled',
   }),
 

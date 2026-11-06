@@ -23,26 +23,32 @@ import { revokeStartOsAccess } from './revokeStartOsAccess'
 import { setPassword } from './setPassword'
 
 export const actions = sdk.Actions.of()
-  .addAction(setPassword)
-  .addAction(configureApiCredentials)
-  .addAction(configureAgents)
-  .addAction(configureEmail)
-  .addAction(lookUpMailServers)
+  // Grouped (actions/groups.ts); StartOS shows the groups in this order.
+  // Daily
   .addAction(reviewAgentActions)
   .addAction(agentActivity)
   .addAction(usageAndCost)
   .addAction(spendingAlert)
+  // Email, Calendar, Contacts
+  .addAction(configureEmail)
+  .addAction(lookUpMailServers)
   .addAction(configureCalendar)
   .addAction(lookUpCalendarServer)
   .addAction(configureContacts)
   .addAction(configureAppsAgent)
+  // Setup
+  .addAction(setPassword)
+  .addAction(configureApiCredentials)
+  .addAction(configureAgents)
   .addAction(configureExternalServices)
+  .addAction(approveDevices)
+  // Channels
   .addAction(configureWebchat)
   .addAction(connectTelegram)
   .addAction(connectWhatsapp)
   .addAction(configureSimplex)
   // .addAction(configureSynapse)
+  // Maintenance
   .addAction(loginToOs)
-  .addAction(approveDevices)
   .addAction(repairOpenclaw)
   .addAction(revokeStartOsAccess)

@@ -11,6 +11,7 @@ import {
   OUTBOUND_MOUNTPOINT,
   BRIDGE_OUTBOUND_DIR,
 } from '../simplex'
+import { GROUP_CHANNELS } from './groups'
 
 const { InputSpec, Value, Variants } = sdk
 
@@ -206,7 +207,7 @@ export const configureSimplex = sdk.Action.withInput(
     ),
     warning: null,
     allowedStatuses: 'any',
-    group: i18n('Channels'),
+    group: GROUP_CHANNELS,
     visibility: 'enabled',
   }),
   inputSpec,

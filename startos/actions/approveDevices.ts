@@ -1,6 +1,7 @@
 import { sdk } from '../sdk'
 import { runOpenclawCli } from '../utils'
 import { i18n } from '../i18n'
+import { GROUP_SETUP } from './groups'
 
 type PendingDevice = {
   requestId: string
@@ -24,7 +25,7 @@ export const approveDevices = sdk.Action.withoutInput(
       'Only run this right after you tried to log in yourself: every pending request is approved, and an approved browser keeps its access until you remove it in the Web UI.',
     ),
     allowedStatuses: 'only-running',
-    group: null,
+    group: GROUP_SETUP,
     visibility: 'enabled',
   }),
 

@@ -2,6 +2,7 @@ import { utils } from '@start9labs/start-sdk'
 import { openclawJson } from '../fileModels/openclaw.json'
 import { i18n } from '../i18n'
 import { sdk } from '../sdk'
+import { GROUP_SETUP } from './groups'
 
 export const setPassword = sdk.Action.withoutInput(
   'set-password',
@@ -22,7 +23,7 @@ export const setPassword = sdk.Action.withoutInput(
           )
         : null,
       allowedStatuses: 'any',
-      group: null,
+      group: GROUP_SETUP,
       visibility: 'enabled',
     }
   },

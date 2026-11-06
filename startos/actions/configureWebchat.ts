@@ -7,6 +7,7 @@ import {
   webchatJson,
 } from '../fileModels/webchat.json'
 import { clearLinks } from '../noLinks'
+import { GROUP_CHANNELS } from './groups'
 
 const { InputSpec, Value, Variants } = sdk
 
@@ -211,7 +212,7 @@ export const configureWebchat = sdk.Action.withInput(
       'Turn on the mobile-friendly webchat and set up a profile for each person (name, color, PIN, preset conversations). Saving starts or stops the webchat; the rest of OpenClaw keeps running.',
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: GROUP_CHANNELS,
     visibility: 'enabled',
   }),
 

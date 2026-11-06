@@ -7,8 +7,10 @@ import {
   writeEmailSettings,
 } from '../mailService'
 import { AgentAction, agentctl, pendingAgentActions } from '../agentActions'
+import { GROUP_DAILY } from './groups'
+import { agentActionsWaitingJson } from '../fileModels/agentActionsWaiting.json'
 
-const { InputSpec, Value } = sdk
+const { InputSpec, Value, Variants } = sdk
 
 // Review Agent Actions (since 2026.10.1:14; Review Outgoing Mail from :10):
 // approve or reject what an isolated agent wanted to do that the owner's
@@ -67,8 +69,57 @@ function details(q: AgentAction): string {
 
 const title = (q: AgentAction) => `[${q.label}] ${oneLine(q.summary, 90)}`
 
+/** The form's key for a waiting item (service and id are word characters). */
+export const itemKey = (q: AgentAction) => `${q.service}_${q.id}`
+
+/** Why an item cannot become a routine mailing, or null when it can. */
+export function routineBlocked(q: AgentAction): string | null {
+  const seed = q.mailingSeed ?? {}
+  if (seed.kind === 'invite') return 'an invitation is never a routine mailing'
+  if (seed.kind !== 'new')
+    return 'only a new message can be one, not a reply or forward'
+  if (!mailingNameFromSubject(seed.subject ?? ''))
+    return 'this mail has no subject to recognise the mailing by'
+  return null
+}
+
+/**
+ * The decision for one waiting item (since :38): only the choices that
+ * apply to it, none picked in advance, its details shown under the field.
+ * Exported for tests.
+ */
+export function decisionFor(q: AgentAction) {
+  const isMail = q.service === 'mail'
+  const blocked = isMail ? routineBlocked(q) : null
+  const values: Record<string, string> = isMail
+    ? {
+        approve: 'Approve: send it',
+        reject: 'Reject: do not send it (the draft stays in Drafts)',
+        always: 'Approve, and always send to these recipients without asking',
+        routine: 'Approve, and make this a routine mailing',
+      }
+    : {
+        approve: 'Approve: carry it out',
+        reject: 'Reject: do not carry it out',
+      }
+  return Value.dynamicSelect(async () => ({
+    name: 'Decision',
+    description: isMail
+      ? 'Always send: the recipients are added to Send Automatically To (Configure Email); forwards, attachments and HTML mail are still held. Routine mailing: its recipients, the start of its subject and its attachment types are saved under Configure Email → Sending → Routine Mailings, at most 1 a month to begin with; later issues that match go out without asking.' +
+        (blocked ? `\n\nRoutine mailing is not offered: ${blocked}.` : '')
+      : null,
+    footnote: details(q),
+    default: null,
+    values,
+    disabled: blocked ? ['routine'] : false,
+  }))
+}
+
+/** One choice per waiting item, keyed by itemKey. */
+type RequestVariants = Record<string, { name: string; spec: any }>
+
 const inputSpec = InputSpec.of({
-  item: Value.dynamicSelect(async ({ effects }) => {
+  request: Value.dynamicUnion(async ({ effects }) => {
     let items: AgentAction[] = []
     let error = ''
     try {
@@ -81,55 +132,70 @@ const inputSpec = InputSpec.of({
         name: 'Request',
         description: error || 'Nothing is waiting for approval.',
         default: 'none',
-        values: { none: 'Nothing is waiting' },
-        disabled: ['none'],
+        disabled: false,
+        variants: Variants.of<RequestVariants>({
+          none: { name: 'Nothing is waiting', spec: InputSpec.of({}) },
+        }),
       }
     }
     return {
       name: 'Request',
-      description: items
-        .map((q, n) => `${n + 1}. ${title(q)}\n${details(q)}`)
-        .join('\n\n'),
-      default: `${items[0].service}/${items[0].id}`,
-      values: Object.fromEntries(
-        items.map((q, n) => [`${q.service}/${q.id}`, `${n + 1}. ${title(q)}`]),
+      description:
+        items.length > 1
+          ? `${items.length} requests wait, oldest first. Pick one; its details are shown under its Decision.`
+          : null,
+      default: itemKey(items[0]),
+      disabled: false,
+      variants: Variants.of<RequestVariants>(
+        Object.fromEntries(
+          items.map((q, n) => [
+            itemKey(q),
+            {
+              name: `${n + 1}. ${title(q)}`,
+              spec: InputSpec.of({ decision: decisionFor(q) }),
+            },
+          ]),
+        ),
       ),
     }
-  }),
-  decision: Value.select({
-    name: 'Decision',
-    description:
-      'Approve: carry it out now. Reject: do not (for mail, the draft stays in Drafts). Approve and always allow (email only): send it, and add its recipients to Send Automatically To (Configure Email), so mail to them is no longer held for approval; forwards, attachments and HTML mail are always held. Approve and make this a routine mailing (email only, for a newsletter or another regular mail): send it, and save its recipients, the start of its subject and its attachment types as a routine mailing (Configure Email → Sending), at most 1 a month to begin with; later issues the agent sends as that mailing go out without asking when they match, and anything else still waits. For anything else both are the same as Approve.',
-    default: 'approve',
-    values: {
-      approve: 'Approve',
-      reject: 'Reject',
-      always: 'Approve and always allow these recipients (email)',
-      routine: 'Approve and make this a routine mailing (email)',
-    },
   }),
 })
 
 export const reviewAgentActions = sdk.Action.withInput(
   'review-agent-actions',
 
-  async () => ({
-    name: 'Review Agent Actions',
-    description:
-      'Approve or reject what your agents want to do that your rules hold for you, such as mail the email agent wants to send (Configure Email → Sending). Shows what would happen, to whom, and why it was held. Undecided requests expire after 5 days, with a reminder the day before.',
-    warning: null,
-    allowedStatuses: 'any',
-    group: null,
-    visibility: 'enabled',
-  }),
+  async ({ effects }) => {
+    // Greyed out while the health checks say nothing waits (written with
+    // the task, fileModels/agentActionsWaiting.json); open when unknown.
+    const waiting = await agentActionsWaitingJson
+      .read((s) => s.waiting)
+      .const(effects)
+      .catch(() => null)
+    return {
+      name: 'Review Agent Actions',
+      description:
+        'Approve or reject what your agents want to do that your rules hold for you, such as mail the email agent wants to send (Configure Email → Sending). Shows what would happen, to whom, and why it was held. Undecided requests expire after 5 days, with a reminder the day before.',
+      warning: null,
+      allowedStatuses: 'any' as const,
+      group: GROUP_DAILY,
+      visibility:
+        waiting === 0
+          ? {
+              disabled:
+                'Nothing is waiting for approval. When an agent asks, a task appears on this service.',
+            }
+          : ('enabled' as const),
+    }
+  },
 
   inputSpec,
 
   async () => ({}) as any,
 
   async ({ effects, input }) => {
-    const i = input as any
-    const key = String(i.item ?? '')
+    const req = (input as any)?.request ?? {}
+    const key = String(req.selection ?? '')
+    const choice = String(req.value?.decision ?? '')
     if (!key || key === 'none') {
       return {
         version: '1' as const,
@@ -139,15 +205,27 @@ export const reviewAgentActions = sdk.Action.withInput(
       }
     }
     const items = await pendingAgentActions(effects)
-    const q = items.find((x) => `${x.service}/${x.id}` === key)
+    const q = items.find((x) => itemKey(x) === key)
     if (!q) {
       throw new Error(
         'That request is no longer waiting (it was decided, done, or expired). Agent Activity shows what happened to it.',
       )
     }
-    const decision = i.decision === 'reject' ? 'reject' : 'approve'
+    // Guards only: the form offers exactly these choices.
+    const isMailItem = q.service === 'mail'
+    const allowed = isMailItem
+      ? ['approve', 'reject', 'always', 'routine']
+      : ['approve', 'reject']
+    if (!allowed.includes(choice))
+      throw new Error('Pick a decision for this request.')
+    if (choice === 'routine') {
+      const blocked = routineBlocked(q)
+      if (blocked)
+        throw new Error(`This cannot become a routine mailing: ${blocked}.`)
+    }
+    const decision = choice === 'reject' ? 'reject' : 'approve'
     let added: string[] = []
-    if (i.decision === 'always' && q.service === 'mail') {
+    if (choice === 'always' && q.service === 'mail') {
       const s = await emailSettingsJson
         .read()
         .once()
@@ -175,7 +253,7 @@ export const reviewAgentActions = sdk.Action.withInput(
       }
     }
     let made: Mailing | null = null
-    if (i.decision === 'routine' && q.service === 'mail') {
+    if (choice === 'routine' && q.service === 'mail') {
       const s = await emailSettingsJson.read().once()
       if (!s) throw new Error('Configure Email has no settings yet.')
       const sending = sendingOf(s)

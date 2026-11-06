@@ -5,6 +5,7 @@ import { SubContainer } from '@start9labs/start-sdk'
 import { appendFile } from 'fs/promises'
 import { T } from '@start9labs/start-sdk'
 import { i18n } from '../i18n'
+import { GROUP_MAINTENANCE } from './groups'
 
 const { InputSpec, Value } = sdk
 
@@ -29,7 +30,7 @@ export const loginToOs = sdk.Action.withInput(
       'This will give root access to your StartOS server to this package. Only do this for a server designated for development purposes.',
     ),
     allowedStatuses: 'any',
-    group: null,
+    group: GROUP_MAINTENANCE,
     visibility: 'enabled',
   }),
 

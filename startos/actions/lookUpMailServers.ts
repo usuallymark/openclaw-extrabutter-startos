@@ -1,5 +1,6 @@
 import { sdk } from '../sdk'
 import { describe, discover } from '../mailDiscovery'
+import { GROUP_APPS } from './groups'
 
 const { InputSpec, Value } = sdk
 
@@ -15,7 +16,7 @@ export const lookUpMailServers = sdk.Action.withInput(
       "Shows the IMAP and SMTP servers Configure Email would find for an address: the provider's own settings, Thunderbird's provider directory, the domain's mail server, DNS. Saves nothing; no password needed.",
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: GROUP_APPS,
     visibility: 'enabled',
   }),
 

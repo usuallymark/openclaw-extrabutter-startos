@@ -1,6 +1,7 @@
 import { sdk } from '../sdk'
 import { DOCTOR_TIMEOUT_MS, runOpenclawCli } from '../utils'
 import { i18n } from '../i18n'
+import { GROUP_MAINTENANCE } from './groups'
 
 const { InputSpec, Value, Variants } = sdk
 
@@ -62,7 +63,7 @@ export const repairOpenclaw = sdk.Action.withInput(
     ),
     warning: i18n('Back up the service before applying repairs.'),
     allowedStatuses: 'only-stopped',
-    group: null,
+    group: GROUP_MAINTENANCE,
     visibility: 'enabled',
   }),
 

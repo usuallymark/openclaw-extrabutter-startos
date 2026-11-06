@@ -1,5 +1,6 @@
 import { sdk } from '../sdk'
 import { agentctl } from '../agentActions'
+import { GROUP_DAILY } from './groups'
 
 // Agent Activity (since 2026.10.1:18; Email Activity before): the isolated
 // services' logs, newest first: what the email and calendar agents read,
@@ -198,7 +199,7 @@ export const agentActivity = sdk.Action.withoutInput(
       "The email, calendar, contacts and vault services' logs, newest first: what the agents read, filed, drafted, sent, added, changed and cancelled, what your rules refused or held for approval, your decisions, and which Vaultwarden items were given or refused. No message text, event descriptions or secrets are logged.",
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: GROUP_DAILY,
     visibility: 'enabled',
   }),
 

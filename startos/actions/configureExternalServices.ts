@@ -1,6 +1,7 @@
 import { sdk } from '../sdk'
 import { externalServicesJson } from '../fileModels/externalServices.json'
 import { splitPemCerts, writeMasterPassword } from '../vault'
+import { GROUP_SETUP } from './groups'
 
 const { InputSpec, Value, Variants } = sdk
 
@@ -452,7 +453,7 @@ export const configureExternalServices = sdk.Action.withInput(
       'Connect OpenClaw to your self-hosted tools (Vaultwarden, Ollama, NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy, Gitea), plus host mappings and a custom CA for internal HTTPS services. Enable only the services you use; a service installed on this server can be chosen "On this server", with no URL. If Vaultwarden is enabled, other services can fetch their credentials from it automatically. Email is in Configure Email. Saving restarts OpenClaw to apply changes.',
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: GROUP_SETUP,
     visibility: 'enabled',
   }),
 

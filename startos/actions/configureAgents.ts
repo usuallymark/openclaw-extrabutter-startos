@@ -13,6 +13,7 @@ import {
   OPENAI_MODELS,
 } from './configureApiCredentials'
 import { clearLinksAt } from '../noLinks'
+import { GROUP_SETUP } from './groups'
 
 const { InputSpec, Value } = sdk
 
@@ -328,7 +329,7 @@ export const configureAgents = sdk.Action.withInput(
     ),
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: GROUP_SETUP,
     visibility: 'enabled',
   }),
 

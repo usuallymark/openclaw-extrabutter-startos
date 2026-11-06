@@ -1,6 +1,7 @@
 import { sdk } from '../sdk'
 import { agentctl } from '../agentActions'
 import { usageSettingsJson } from '../fileModels/usageSettings.json'
+import { GROUP_DAILY } from './groups'
 
 // Usage and Cost (since 2026.10.1:30): what the models cost, per agent and
 // per day, from OpenClaw's own records (agentctl.py usage: the cost OpenClaw
@@ -117,7 +118,7 @@ export const usageAndCost = sdk.Action.withoutInput(
       "What the AI models cost: per agent (today, 7 and 30 days, tokens, model), per day for the last two weeks, and how often each scheduled job ran. From the cost OpenClaw records for every model call with the provider's prices. Numbers only, no message text.",
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: GROUP_DAILY,
     visibility: 'enabled',
   }),
 
@@ -155,7 +156,7 @@ export const spendingAlert = sdk.Action.withInput(
       'A daily limit for the model cost. Above it, the Spending line on the service page turns red and you get one StartOS notification (and ntfy, when set up) that day. Leave blank for no alert.',
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: GROUP_DAILY,
     visibility: 'enabled',
   }),
 

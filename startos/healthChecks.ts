@@ -14,6 +14,7 @@ import {
 } from './agentActions'
 import { LocalKey, notInstalledMessage } from './localServices'
 import { usageSettingsJson } from './fileModels/usageSettings.json'
+import { agentActionsWaitingJson } from './fileModels/agentActionsWaiting.json'
 import { dollars } from './actions/usageAndCost'
 
 // Health checks for the vault and external services.
@@ -515,7 +516,18 @@ async function syncAgentActionsTask(
 ) {
   const change = agentActionsTaskChange(source, ids)
   if (!change) return
+  // The count that greys out Review Agent Actions (since :38) moves with the
+  // task: raised before the task is, lowered only after it was cleared, so
+  // the action is never greyed out while a task points at it. If a step
+  // fails, the change is not marked done and the next check repeats it.
+  const writeWaiting = () =>
+    within(
+      20_000,
+      agentActionsWaitingJson.write(effects, { waiting: change.total }),
+      'approval count',
+    )
   if (change.total) {
+    await writeWaiting()
     await within(
       20_000,
       sdk.action.createOwnTask(effects, reviewAgentActions, 'important', {
@@ -530,6 +542,7 @@ async function syncAgentActionsTask(
       sdk.action.clearTask(effects, AGENT_ACTIONS_TASK),
       'clear approval task',
     )
+    await writeWaiting()
   }
   taskSynced(change.key)
 }

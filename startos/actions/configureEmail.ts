@@ -25,6 +25,7 @@ import {
   credToStored,
   credentialUnion,
 } from './configureExternalServices'
+import { GROUP_APPS } from './groups'
 
 const { InputSpec, Value, Variants } = sdk
 
@@ -700,7 +701,7 @@ export const configureEmail = sdk.Action.withInput(
       'Connect a mailbox and set up the email agent: the only agent that reads mail. It has no shell and no passwords; your main agent asks it about your mail. It can read, search, organise (mark read, flag, move, archive; never delete), write drafts, and send under the rules you set here. Saving restarts OpenClaw.',
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: GROUP_APPS,
     visibility: 'enabled',
   }),
 

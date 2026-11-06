@@ -14,6 +14,7 @@ import {
   pickDefault,
 } from '../modelCatalog'
 import { i18n } from '../i18n'
+import { GROUP_SETUP } from './groups'
 
 const { InputSpec, Value, Variants } = sdk
 
@@ -737,7 +738,7 @@ export const configureApiCredentials = sdk.Action.withInput(
     ),
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: GROUP_SETUP,
     visibility: 'enabled',
   }),
 

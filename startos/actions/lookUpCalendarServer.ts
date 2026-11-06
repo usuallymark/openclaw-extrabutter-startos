@@ -1,5 +1,6 @@
 import { sdk } from '../sdk'
 import { inOpenclawContainer } from '../gatewayContainer'
+import { GROUP_APPS } from './groups'
 
 const { InputSpec, Value } = sdk
 
@@ -16,7 +17,7 @@ export const lookUpCalendarServer = sdk.Action.withInput(
       'Shows the CalDAV server Configure Calendar would find for a calendar account (iCloud, Fastmail, Nextcloud…) and, with the app password, its calendars. Saves nothing.',
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: GROUP_APPS,
     visibility: 'enabled',
   }),
 

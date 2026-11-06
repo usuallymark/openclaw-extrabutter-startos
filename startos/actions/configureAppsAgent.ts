@@ -12,6 +12,7 @@ import {
   GROK_MODELS,
   OPENAI_MODELS,
 } from './configureApiCredentials'
+import { GROUP_APPS } from './groups'
 
 const { InputSpec, Value } = sdk
 
@@ -83,7 +84,7 @@ export const configureAppsAgent = sdk.Action.withInput(
       'The agent your main agent asks about mail and calendars. It passes each job to the email or calendar agent and brings back their reports unchanged; its only tool is asking them. It exists while Email or Calendar is set up. Saving restarts OpenClaw.',
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: GROUP_APPS,
     visibility: 'enabled',
   }),
 

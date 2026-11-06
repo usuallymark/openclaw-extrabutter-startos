@@ -2,6 +2,7 @@ import { sdk } from '../sdk'
 import { inOpenclawContainer } from '../gatewayContainer'
 import { openclawJson } from '../fileModels/openclaw.json'
 import { i18n } from '../i18n'
+import { GROUP_CHANNELS } from './groups'
 
 const { InputSpec, Value } = sdk
 
@@ -39,7 +40,7 @@ export const connectWhatsapp = sdk.Action.withInput(
     ),
     warning: null,
     allowedStatuses: 'only-running',
-    group: i18n('Channels'),
+    group: GROUP_CHANNELS,
     visibility: 'enabled',
   }),
 

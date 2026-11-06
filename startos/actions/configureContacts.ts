@@ -19,6 +19,7 @@ import {
   GROK_MODELS,
   OPENAI_MODELS,
 } from './configureApiCredentials'
+import { GROUP_APPS } from './groups'
 
 const { InputSpec, Value, Variants } = sdk
 
@@ -190,7 +191,7 @@ export const configureContacts = sdk.Action.withInput(
       'Connect an address book (a vCard file, or the assistant\'s Google account) and set up the contacts agent: the only agent that reads contacts, read only. Your main agent asks it ("Sam\'s number", "who is this address?", "birthdays this month"). Saving restarts OpenClaw.',
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: GROUP_APPS,
     visibility: 'enabled',
   }),
 

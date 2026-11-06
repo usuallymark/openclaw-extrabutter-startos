@@ -22,6 +22,7 @@ import {
   GROK_MODELS,
   OPENAI_MODELS,
 } from './configureApiCredentials'
+import { GROUP_APPS } from './groups'
 
 const { InputSpec, Value, Variants } = sdk
 
@@ -401,7 +402,7 @@ export const configureCalendar = sdk.Action.withInput(
       'Connect calendars (calendar links, or a Google account) and set up the calendar agent: the only agent that reads the calendars. It has no shell and no passwords; your main agent asks it what is on. It can also keep a calendar of its own and invite your family, with your approval. Saving restarts OpenClaw.',
     warning: null,
     allowedStatuses: 'any',
-    group: null,
+    group: GROUP_APPS,
     visibility: 'enabled',
   }),
 
