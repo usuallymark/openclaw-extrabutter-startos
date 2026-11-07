@@ -56,10 +56,38 @@ jobs:
           mkdir -p .startos
           echo "host: https://localhost" > .startos/config.yaml
 
-      - name: Build s9pk
+      # start-cli signs packages with the workspace's .startos/build.key.pem,
+      # which `s9pk init-workspace` above makes fresh on every run, so every
+      # release until :41 had a different, random signer and StartOS could
+      # not be told to trust "this package's key". Sign with the one key in
+      # the DEV_KEY secret instead (an Ed25519 private key, PKCS#8 PEM), and
+      # stop rather than publish a release signed by a throwaway key.
+      - name: Sign with the package key
         env:
           DEV_KEY: ${{ secrets.DEV_KEY }}
+        run: |
+          [ -n "$DEV_KEY" ] || { echo "::error::The DEV_KEY secret is not set. Releases must be signed with the package key (see UPDATING.md)."; exit 1; }
+          umask 077
+          printf '%s\n' "$DEV_KEY" > ../.startos/build.key.pem
+          openssl pkey -in ../.startos/build.key.pem -noout -text 2>/dev/null | grep -q '^ED25519 Private-Key' \
+            || { echo "::error::DEV_KEY is not an Ed25519 private key in PEM form (-----BEGIN PRIVATE KEY-----)."; exit 1; }
+          openssl pkey -in ../.startos/build.key.pem -pubout > signer.pub
+          echo "Signed by:"; cat signer.pub
+          { echo 'Signed by this key (StartOS: System → Trusted Keys → Add key, Packages on):'; echo; echo '```'; cat signer.pub; echo '```'; } > release-body.md
+
+      - name: Build s9pk
         run: make
+
+      - name: Check the package's signer
+        run: |
+          python3 - <<'PY'
+          import base64
+          want = base64.b64decode(''.join(l for l in open('signer.pub').read().split('\n') if l and not l.startswith('-----')))[-32:]
+          for f in __import__('glob').glob('*.s9pk'):
+              head = open(f, 'rb').read(35)
+              assert head[:3] == b';;\x02' and head[3:35] == want, f'{f} is not signed by the package key'
+              print(f'{f}: signed by the package key')
+          PY
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -67,4 +95,5 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.version }}
           files: '*.s9pk'
+          body_path: release-body.md
           generate_release_notes: false

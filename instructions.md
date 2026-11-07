@@ -761,8 +761,11 @@ and sideload it via **StartOS → System → Sideload a Service**. Your data
 and configuration are preserved automatically.
 
 StartOS 0.4.1 and later ask you to confirm a package from a signer it does
-not trust yet. To skip that, trust the package's signing key once under
-**System → Trusted Keys** (for packages only).
+not trust yet ("Install untrusted software?"). To skip that, trust the
+package's key once: copy the key shown on the release's GitHub page (from
+2026.10.1:42 on; every release is signed by the same key), then in StartOS
+**System → Trusted Keys → Add key**, paste it under **Public key**, give it
+a label, Save, and leave **Packages** on.
 
 ---
 
