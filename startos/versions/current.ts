@@ -1,12 +1,14 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:40',
+  version: '2026.10.1:41',
   releaseNotes: {
-    en_US: `Health lines in a useful order; no more login nag.
+    en_US: `Ready for StartOS 0.4.1; clearer help texts.
 
-- **The health lines are in a fixed order:** Web Interface, Webchat, Vault and Qdrant first, then Mail, Calendar and Contacts, then Spending and Server Access, and the external services last. StartOS sorts them by an internal name, which until now put Calendar and Contacts at the top and Mail among the external services.
-- **No more "Login to StartOS" task at every start.** Leaving start-cli signed out is the safe choice, and the Server Access line already shows it. The action is still under Maintenance when you want it.`,
+- **Server Access stays truthful on StartOS 0.4.1.** StartOS 0.4.1 changed an answer the line relied on, so a signed-in start-cli would have shown as "not signed in". The line now checks the sign-in in a way that works on every StartOS 0.4 release, and shows an unclear result as a warning instead of as signed out.
+- **Server Access looks like what it means:** signed out (the safe choice) is a grey dash instead of a green check, and signed in, which gives the agent root on the server, is an orange warning.
+- **Help texts corrected and shortened:** the calendar choices (now "Read + invitations by mail (no calendar account)"), calendar links, sending and routine mailings; the email and calendar agent models; the apps agent now mentions contacts.
+- **Setup guide corrected:** the calendar account field's current name, the Vaultwarden items for calendar and contacts, troubleshooting the vault, and two StartOS 0.4.1 notes: confirming a sideloaded package, and API tokens to check under System → Active Sessions after Revoke StartOS Access.`,
   },
   migrations: {
     up: async () => {},

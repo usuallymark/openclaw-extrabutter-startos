@@ -8,9 +8,12 @@ import { GROUP_MAINTENANCE } from './groups'
 // loginToOs runs `start-cli auth login` with HOME=/data, so the key lands here.
 // `developer.key.pem` and the `.cookies.json` pair are the pre-1.1.0 names, kept
 // so an upgraded install has nothing left behind.
-const startCliAuthPaths = [
+export const START_CLI_KEY_FILES = [
   '/data/.startos/id.key.pem',
   '/data/.startos/developer.key.pem',
+]
+const startCliAuthPaths = [
+  ...START_CLI_KEY_FILES,
   '/data/.startos/.cookies.json',
   '/data/.startos/.cookies.json.tmp',
 ]

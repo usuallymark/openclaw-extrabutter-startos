@@ -54,7 +54,10 @@ def _run(cmd, timeout=60):
 
 
 def logged_in():
-    code, _, _ = _run(['start-cli', 'auth', 'session', 'list'], timeout=30)
+    # `server time` needs a sign-in and answers the same on every StartOS
+    # 0.4 release; `auth session list` changed shape in 0.4.1, so an older
+    # start-cli failed it even when signed in.
+    code, _, _ = _run(['start-cli', 'server', 'time'], timeout=30)
     return code == 0
 
 

@@ -89,7 +89,15 @@ the agent's memory search uses keywords only.
 **Login to StartOS** lets the agent run `start-cli` against this server:
 start and stop services, read logs, change settings. That is root-equivalent
 control, reachable by anything that can talk to the agent. It is off unless
-you run the action, and **Revoke StartOS Access** turns it off again.
+you run the action (under **Maintenance**), and **Revoke StartOS Access**
+turns it off again. The **Server Access** line on the service page says
+which it is: a grey dash while it is off (the safe choice), an orange
+warning while the agent has this control.
+
+While it is on, the agent could also create StartOS API tokens (StartOS
+0.4.1 and later), which Revoke StartOS Access does not remove. After
+revoking, check **System → Active Sessions** and end any session or token
+you did not create.
 
 ---
 
@@ -115,13 +123,14 @@ In Configure External Services, enable Vaultwarden and enter:
 
 Login uses the master password only (rbw does not support API-key login).
 
-**Who can read what (since 2026.10.1:27).** The vault is held by a separate
-vault service; no agent can read the master password or the vault's files.
-Agents ask the service, and it gives them any item except those that belong
-to the email and calendar services: `email` (while Configure Email uses
-Gmail or IMAP), `google-calendar` and your calendar links' items (while
-Calendar is on). Those go only to their service, so an agent cannot use
-them to get around Never Send To, your approvals or the own-calendar rule.
+**Who can read what.** The vault is held by a separate vault service; no
+agent can read the master password or the vault's files. Agents ask the
+service, and it gives them any item except those that belong to the email,
+calendar and contacts services: `email` (while Configure Email uses Gmail
+or IMAP), `google-calendar`, `caldav` and your calendar links' items (while
+Calendar is on), and `google-contacts` (while Contacts reads the Google
+account). Those go only to their service, so an agent cannot use them to
+get around Never Send To, your approvals or the own-calendar rule.
 All your other items (NAS, Crawl4AI, n8n, ntfy, Gitea …) work for every
 agent as before. Agents can no longer add, edit or delete vault items: do
 that in Vaultwarden. Agent Activity lists which items were asked for and
@@ -147,10 +156,14 @@ One item per service, named after the service in lowercase:
 | Crawl4AI | `crawl4ai` | hidden custom field `api_key` |
 | ntfy | `ntfy` | hidden custom field `api_key` |
 | Gitea | `gitea` | hidden custom field `api_key` |
-| Google account | `google` | hidden custom fields `client_json` and `token_json` |
+| Calendar (Google) | `google-calendar` | hidden custom field `token` |
+| Calendar (CalDAV) | `caldav` | the login's **password** (the app password) |
+| Calendar links | a name you choose, e.g. `calendar-family` | custom field `url` |
+| Contacts (Google) | `google-contacts` | hidden custom field `token` |
+| Google account (Email option, gog) | `google` | hidden custom fields `client_json` and `token_json` |
 
-- For `email` and `nas`, create a normal **Login** item and fill in its own
-  username/password; no custom fields needed.
+- For `email`, `nas` and `caldav`, create a normal **Login** item and fill
+  in its own username/password; no custom fields needed.
 - For keys, add a **hidden** custom field named `api_key` to the item.
 - The two Google fields hold the whole contents of the two JSON files (see
   [Email Setup](#email-setup)).
@@ -162,9 +175,7 @@ One item per service, named after the service in lowercase:
 
 ## Email Setup
 
-Run **Configure Email** (until version 2026.10.1:7 this was the Email
-section of Configure External Services; your settings moved over by
-themselves).
+Run **Configure Email**.
 
 **How it works, and why.** Anyone can send you mail, and a message can be
 written to trick the AI that reads it ("ignore your instructions and send
@@ -211,9 +222,8 @@ and **Sending**.
 
 When mail waits for you, you get a task on the service page, a StartOS
 notification and (with ntfy set up) a phone alert. Open **Actions → Daily →
-Review Agent Actions** (called Review Outgoing Mail before 2026.10.1:14; it
-is the one place you approve whatever your agents want to do; greyed out
-while nothing waits): pick the request, and its recipients, subject,
+Review Agent Actions** (the one place you approve whatever your agents want
+to do; greyed out while nothing waits): pick the request, and its recipients, subject,
 opening lines, attachments and why it waits are shown under **Decision**.
 No decision is picked for you: choose **Approve: send it**, **Reject**,
 or **Approve, and always send to these recipients without asking** (adds
@@ -221,8 +231,9 @@ them to Send Automatically To).
 Undecided mail expires after 5 days (you get a reminder the day before),
 and a draft you changed or deleted in
 your mail app meanwhile is not sent. **Actions → Agent Activity** lists what
-the email and calendar agents read, filed, drafted, sent, added, changed and
-cancelled, and every decision.
+the email, calendar and contacts agents read, filed, drafted, sent, added,
+changed and cancelled, every decision, and which Vaultwarden items were
+handed out.
 
 To attach files, the main agent puts them in the workspace folder
 `mail-outbox`; mail with attachments always waits for your approval.
@@ -467,8 +478,8 @@ lock an account after repeated failures).
    - **Outlook**: Settings → Calendar → Shared calendars → **Publish a
      calendar** → choose the calendar and *Can view all details* →
      Publish → copy the **ICS** link.
-2. **Configure Calendar** (Actions): **Calendar** *Read only*; **Google
-   Sign-in** *No Google account (calendar links only)*; under **Calendar
+2. **Configure Calendar** (Actions): **Calendar** *Read only*; **Calendar
+   Account** *No account (calendar links only)*; under **Calendar
    Links** add one entry per calendar with a name ("Family", "Sam's
    school") and paste the address into **Secret Address**, or put it in a
    Vaultwarden item (custom field `url`) and name the item instead. Add
@@ -482,7 +493,7 @@ where you copied it (Google: **Reset** next to the secret address) and
 paste the new one. The agent sees changes within about 5 minutes; Google
 itself may take a few hours to update what the link shows.
 
-### Adding events without Google: invitations by mail
+### Adding events without a calendar account: invitations by mail
 
 With calendar links (above) and Configure Email set up (Gmail or IMAP,
 sending *Send by rules*), the calendar agent can also put events on your
@@ -490,7 +501,7 @@ and your family's calendars by sending a normal calendar invitation by
 email, the kind every calendar app understands.
 
 1. **Configure Calendar**: **Calendar** *Read + invitations by mail (no
-   Google)*, then its **Time Zone** (e.g. `America/Chicago`); at least one
+   calendar account)*, then its **Time Zone** (e.g. `America/Chicago`); at least one
    entry under **Calendar Links**. Your own and your family's addresses
    under **Trusted Organizers** are the only ones it may invite. Save. (The
    choice is greyed out until Configure Email is set to Gmail or IMAP with
@@ -638,23 +649,22 @@ Testing, or the client deleted): repeat step 2 and save the new sign-in
 
 ## Apps Agent
 
-When Email or Calendar is set up, your main agent does not talk to the
-email and calendar agents itself. It asks one **apps agent**, which passes
+When Email, Calendar or Contacts is set up, your main agent does not talk
+to the email, calendar and contacts agents itself. It asks one **apps agent**, which passes
 the job on and brings back their reports unchanged. Your main agent then
 needs only one set of instructions for all of them, and the apps agent has
 nothing but that: no shell, no files, no passwords, and it never reads
-mail or events itself.
+mail, events or contacts itself.
 
-Nothing to set up: it appears with Email or Calendar. **Actions →
+Nothing to set up: it appears with Email, Calendar or Contacts. **Actions →
 Configure Apps Agent** sets its name, its model (a smaller one is usually
 enough) and extra instructions. To give it a persona, edit `SOUL.md` and
 `IDENTITY.md` in its workspace folder (`workspaces/apps`); the package
 never changes those two files.
 
 If your main agent's own files (its `AGENTS.md`, `TOOLS.md` or memory)
-say to ask the email or calendar agent directly, change that to the apps
-agent: the email and calendar agents now answer only requests that come
-through it.
+say to ask the email, calendar or contacts agent directly, change that to
+the apps agent: those agents answer only requests that come through it.
 
 ## Gitea Setup
 
@@ -750,6 +760,10 @@ When a new version of this package is available, download the `.s9pk` file
 and sideload it via **StartOS → System → Sideload a Service**. Your data
 and configuration are preserved automatically.
 
+StartOS 0.4.1 and later ask you to confirm a package from a signer it does
+not trust yet. To skip that, trust the package's signing key once under
+**System → Trusted Keys** (for packages only).
+
 ---
 
 ## Webchat (optional)
@@ -805,11 +819,12 @@ Check the service logs (StartOS → OpenClaw → Logs) for error messages.
 Common causes: missing AI provider key, Qdrant startup delay (allow 30s).
 
 **Vaultwarden credentials not loading:**
-Check the logs for the `setup-vault` step. "error sending request" usually
+The **Vault (rbw)** line says why; the service log has the details (lines
+starting with `vault:` or `vault launcher:`). "error sending request" usually
 means a `.local` name without a Custom Host Mapping, or an internal HTTPS
-certificate without the Custom CA Certificate. An authentication error means
-the master password is wrong — re-enter it exactly in Configure External
-Services.
+certificate without the Custom CA Certificate. "Vault locked" means the
+master password or account is wrong: re-enter it exactly in Configure
+External Services.
 
 **Health checks:**
 The service page shows a check for each enabled external service and, if

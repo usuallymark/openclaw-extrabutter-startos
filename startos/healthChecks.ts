@@ -13,6 +13,7 @@ import {
   taskSynced,
 } from './agentActions'
 import { LocalKey, notInstalledMessage } from './localServices'
+import { START_CLI_KEY_FILES } from './actions/revokeStartOsAccess'
 import { usageSettingsJson } from './fileModels/usageSettings.json'
 import { agentActionsWaitingJson } from './fileModels/agentActionsWaiting.json'
 import { configureEmail } from './actions/configureEmail'
@@ -1079,27 +1080,66 @@ export async function probeCalendar(
  * nothing in this package (the separate users of the email and calendar
  * services, their rules and approvals) holds against it. Said plainly in
  * the health line, so whoever turns it on sees what it costs.
+ *
+ * Since :41 this does not trust a failing command to mean "signed out":
+ * until :40 it ran `auth session list`, and StartOS 0.4.1 changed that
+ * answer's shape, so the image's start-cli failed to read it even when
+ * signed in, and the line said the agent could not manage the server.
+ * Now: no stored key means signed out; with a key, `server time` (needs a
+ * sign-in, same answer on every 0.4 release) decides; "Unauthorized" means
+ * the key is no longer accepted; anything else is shown as unknown, as a
+ * failure, because the agent may still have access.
+ *
+ * How it looks (since :41): signed out is "disabled" (a grey dash, not a
+ * green check: a deliberate off state, not something working), and signed
+ * in is a failure (orange triangle), since that is the state that costs
+ * something. Neither "disabled" nor "success" changes the service's
+ * overall status; "failure" does, on purpose.
  */
 export async function probeServerAccess(sub: Sub): Promise<Result> {
   try {
-    const res = await sub.exec(['start-cli', 'auth', 'session', 'list'], {
+    const keys = await sub.exec(
+      [
+        'sh',
+        '-c',
+        'for f in "$@"; do [ -e "$f" ] && exit 0; done; exit 3',
+        'sh',
+        ...START_CLI_KEY_FILES,
+      ],
+      { user: 'root', timeout: 20_000 },
+    )
+    if (keys.exitCode === 3)
+      return {
+        result: 'disabled',
+        message: 'start-cli not signed in: the agent cannot manage the server',
+      }
+    const res = await sub.exec(['start-cli', 'server', 'time'], {
       user: 'node',
-      env: { HOME: '/data' },
+      env: { HOME: '/data', NO_COLOR: '1' },
       timeout: 20_000,
     })
-    if (res.exitCode === 0) {
+    if (res.exitCode === 0)
       return {
-        result: 'success',
+        result: 'failure',
         message:
-          'Warning: start-cli is signed in, so the agent has root on this whole server. The email and calendar rules and your approvals do not hold against it. Sign out (start-cli auth logout) unless this server is for development.',
+          'start-cli is signed in, so the agent has root on this whole server. The email and calendar rules and your approvals do not hold against it. Run Revoke StartOS Access unless this server is for development.',
       }
-    }
+    const why = firstLine(String(res.stderr || res.stdout))
+    if (/unauthori[sz]ed/i.test(why))
+      return {
+        result: 'disabled',
+        message:
+          'start-cli not signed in (StartOS no longer accepts its stored key; Revoke StartOS Access removes it): the agent cannot manage the server',
+      }
     return {
-      result: 'success',
-      message: 'start-cli not signed in: the agent cannot manage the server',
+      result: 'failure',
+      message: `start-cli has a stored sign-in, but checking it failed (${why || `exit ${res.exitCode}`}), so the agent may still have root on this server. Run Revoke StartOS Access if you did not mean to grant it.`,
     }
-  } catch {
-    return { result: 'success', message: 'start-cli status unknown' }
+  } catch (e) {
+    return {
+      result: 'failure',
+      message: `start-cli status unknown: ${firstLine((e as Error)?.message)}`,
+    }
   }
 }
 

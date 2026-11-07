@@ -34,7 +34,7 @@ const agentModel = Value.dynamicSelect(async () => {
   return {
     name: 'Apps Agent Model',
     description:
-      'The model that passes jobs to the email and calendar agents and returns their reports unchanged. It never reads mail or events itself, so a smaller, cheaper model is usually enough.',
+      'The model that passes jobs to the email, calendar and contacts agents and returns their reports unchanged. It never reads mail, events or contacts itself, so a smaller, cheaper model is usually enough.',
     default: 'default',
     values: {
       default: 'Same as the main agent' + (main ? ` (${main})` : ''),
@@ -81,7 +81,7 @@ export const configureAppsAgent = sdk.Action.withInput(
   async () => ({
     name: 'Configure Apps Agent',
     description:
-      'The agent your main agent asks about mail and calendars. It passes each job to the email or calendar agent and brings back their reports unchanged; its only tool is asking them. It exists while Email or Calendar is set up. Saving restarts OpenClaw.',
+      'The agent your main agent asks about mail, calendars and contacts. It passes each job to the email, calendar or contacts agent and brings back their reports unchanged; its only tool is asking them. It exists while Email, Calendar or Contacts is set up. Saving restarts OpenClaw.',
     warning: null,
     allowedStatuses: 'any',
     group: GROUP_APPS,

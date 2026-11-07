@@ -217,7 +217,7 @@ const calendarMode = Value.dynamicUnion(async () => {
   return {
     name: 'Calendar',
     description:
-      'Off: no calendar service, no calendar agent.\nRead only: the calendar agent lists, searches and reads events of the Calendar Links and, with a Google or CalDAV account, of that account (including calendars shared with it). It cannot change anything.\nRead + write on its own calendar: also adds, changes and cancels events on one calendar of its own in the Google or CalDAV account, and can invite you and the people on the trusted lists; anything with guests waits for your approval before Google (or the CalDAV server) emails them.\nRead + invitations by mail (no Google): adding, changing or cancelling an event sends an invitation by email to its guests (you and the people on the trusted lists); their calendar apps put it on their calendars. The mail goes out under your Configure Email rules, and the answers are moved to the mail folder "Calendar Replies". Needs at least one Calendar Link, and Configure Email with Gmail or IMAP and sending "Send by rules".' +
+      'Read only: the calendar agent reads the Calendar Links and the calendars of the Google or CalDAV account; it changes nothing.\nRead + write: it also keeps one calendar of its own in that account and can invite the people on your trusted lists; anything with guests waits for your approval.\nRead + invitations by mail: no calendar account; it sends invitations by email under your Configure Email rules (needs a Calendar Link, and Configure Email set to Send by rules).' +
       (notReady && s?.mode !== 'invite'
         ? `\n\nInvitations by mail cannot be chosen yet: ${notReady}.`
         : ''),
@@ -230,7 +230,7 @@ const calendarMode = Value.dynamicUnion(async () => {
         spec: InputSpec.of({ signIn: readSignIn, timeZone }),
       },
       write: {
-        name: 'Read + write on its own calendar (Google or CalDAV)',
+        name: 'Read + write on its own calendar',
         spec: InputSpec.of({
           signIn: writeSignIn,
           calendarName,
@@ -240,7 +240,7 @@ const calendarMode = Value.dynamicUnion(async () => {
         }),
       },
       invite: {
-        name: 'Read + invitations by mail (no Google)',
+        name: 'Read + invitations by mail (no calendar account)',
         spec: InputSpec.of({
           timeZone,
           holdAll: holdAll(
@@ -257,7 +257,7 @@ const links = Value.list(
     {
       name: 'Calendar Links',
       description:
-        'Needed for Read + invitations by mail, and for Read only without a Google account (at least one). Calendars read through their secret address in iCal format, no Google sign-in needed: in Google Calendar, Settings → (the calendar) → Integrate calendar → "Secret address in iCal format"; in iCloud, share the calendar as a Public Calendar and copy its link; in Outlook, Settings → Calendar → Shared calendars → Publish a calendar → the ICS link. Read only: the agent can list, search and read these events, never change them. The address is a password in all but name (anyone who has it sees the calendar): it is kept on this server, never shown to the agents, and if it leaks you can reset it where you copied it.',
+        'Calendars read through their secret iCal address, read only, with no sign-in. At least one is needed without a calendar account. Where to copy it: Google Calendar → Settings → (the calendar) → Integrate calendar → "Secret address in iCal format"; iCloud → share as a Public Calendar; Outlook → Settings → Calendar → Shared calendars → Publish a calendar → ICS link. Anyone with the address sees the calendar: it stays on this server, never reaches the agents, and can be reset where you copied it.',
       default: [],
     },
     {
@@ -316,7 +316,7 @@ const agentModel = Value.dynamicSelect(async () => {
   return {
     name: 'Calendar Agent Model',
     description:
-      'The model that reads the calendars. Invitations can come from strangers and may try to trick the model; a strong cloud model resists that best. A smaller, cheaper model is usually enough for reading schedules (the agent still cannot change anything, run commands or read passwords).',
+      'The model that reads the calendars. Invitations can come from strangers and may try to trick the model; a strong cloud model resists that best. A smaller, cheaper model is usually enough for reading schedules (the agent still cannot touch your own calendars, run commands or read passwords).',
     default: 'default',
     values: {
       default: 'Same as the main agent' + (main ? ` (${main})` : ''),
@@ -399,7 +399,7 @@ export const configureCalendar = sdk.Action.withInput(
   async () => ({
     name: 'Configure Calendar',
     description:
-      'Connect calendars (calendar links, or a Google account) and set up the calendar agent: the only agent that reads the calendars. It has no shell and no passwords; your main agent asks it what is on. It can also keep a calendar of its own and invite your family, with your approval. Saving restarts OpenClaw.',
+      'Connect calendars (calendar links, a CalDAV account such as iCloud or Fastmail, or a Google account) and set up the calendar agent: the only agent that reads the calendars. It has no shell and no passwords; your main agent asks it what is on. It can also keep a calendar of its own and invite your family, with your approval. Saving restarts OpenClaw.',
     warning: null,
     allowedStatuses: 'any',
     group: GROUP_APPS,

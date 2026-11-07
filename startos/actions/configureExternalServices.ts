@@ -116,7 +116,7 @@ const vaultwardenService = placedService({
     masterPassword: Value.text({
       name: 'Master Password',
       description:
-        'Your Vaultwarden master password, used to log in and unlock the vault at every startup. Paste it exactly — it is stored byte-for-byte in a private file (not in the settings file) and read by rbw non-interactively.\n\nLeave blank to keep the password already saved.',
+        'Your Vaultwarden master password, used to log in and unlock the vault at every startup. Paste it exactly: it is stored byte-for-byte in a private file that only the vault service can read, never by an agent.\n\nLeave blank to keep the password already saved.',
       required: false,
       default: null,
       masked: true,

@@ -361,7 +361,7 @@ const agentModel = Value.dynamicSelect(async () => {
   return {
     name: 'Email Agent Model',
     description:
-      'The model that reads your mail. Mail is written by strangers and may try to trick the model, so a strong cloud model is the safer choice. A local model works, but resists tricks less well (the agent still cannot run commands, read passwords or send).',
+      'The model that reads your mail. Mail is written by strangers and may try to trick the model, so a strong cloud model is the safer choice. A local model works, but resists tricks less well (the agent still cannot run commands, read passwords or send outside your Sending rules).',
     default: 'default',
     values: {
       default: 'Same as the main agent' + (main ? ` (${main})` : ''),
@@ -531,7 +531,7 @@ const mailings = Value.list(
     {
       name: 'Routine Mailings',
       description:
-        'Regular mail you have approved once, such as a monthly newsletter. When the email agent sends a draft as one of these, the mail service checks it: exactly these recipients, a subject starting as given, only these attachment types, not more often than allowed, no hidden instructions, and links only to the listed domains (if any). If everything matches and an earlier issue with the same recipients and subject start was approved, it goes out without asking and you get a notification. Anything else waits for your approval as usual, saying why. The easiest way to add one: approve the first issue with "Approve and make this a routine mailing" in Review Agent Actions.',
+        'Regular mail you approved once, such as a monthly newsletter. A later issue goes out without asking (with a notification) when it matches exactly: these recipients, a subject starting as given, these attachment types, links only to the listed domains, no hidden instructions, and not more often than allowed. Anything else waits for your approval and says why. Easiest way to add one: approve the first issue in Review Agent Actions with "Approve, and make this a routine mailing".',
       default: [],
     },
     {
@@ -612,7 +612,7 @@ const sending = Value.object(
   {
     name: 'Sending',
     description:
-      'What happens when the email agent is asked to send a draft (Gmail and IMAP only). Every recipient (To, Cc and Bcc) is checked: anyone on Never Send To → refused; a forward, any attachment, an HTML version, or a limit reached → waits for your approval; everyone on Send Automatically To (or a Trusted Sender, when that switch is on) → sent; otherwise Anyone Else decides. Mail waiting for approval appears as a task and under Actions → Review Agent Actions; it expires after 5 days (with a reminder the day before).',
+      'What happens when the email agent sends a draft (Gmail and IMAP only), checked for every recipient: Never Send To → refused; a forward, an attachment, HTML or a limit reached → waits for your approval; all on Send Automatically To (or Trusted Senders, when that switch is on) → sent; anyone else → as Anyone Else says. Waiting mail shows as a task and in Review Agent Actions, and expires after 5 days.',
   },
   InputSpec.of({
     level: Value.select({
