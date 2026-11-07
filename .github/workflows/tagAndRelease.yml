@@ -68,10 +68,19 @@ jobs:
         run: |
           [ -n "$DEV_KEY" ] || { echo "::error::The DEV_KEY secret is not set. Releases must be signed with the package key (see UPDATING.md)."; exit 1; }
           umask 077
-          printf '%s\n' "$DEV_KEY" > ../.startos/build.key.pem
+          # start-cli's PEM reader refuses a blank line after the END line
+          # (PEM error, make's "Error 60"), which a secret pasted from the
+          # clipboard usually has; openssl does not mind. Drop carriage
+          # returns and blank lines (a PEM block has none), then test the
+          # file with start-cli itself, the reader that signs.
+          printf '%s\n' "$DEV_KEY" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' > ../.startos/build.key.pem
           openssl pkey -in ../.startos/build.key.pem -noout -text 2>/dev/null | grep -q '^ED25519 Private-Key' \
             || { echo "::error::DEV_KEY is not an Ed25519 private key in PEM form (-----BEGIN PRIVATE KEY-----)."; exit 1; }
-          openssl pkey -in ../.startos/build.key.pem -pubout > signer.pub
+          KEYHOME=$(mktemp -d)
+          mkdir -p "$KEYHOME/.startos" && cp ../.startos/build.key.pem "$KEYHOME/.startos/id.key.pem"
+          HOME="$KEYHOME" start-cli pubkey > signer.pub \
+            || { echo "::error::start-cli cannot read DEV_KEY as a signing key."; rm -rf "$KEYHOME"; exit 1; }
+          rm -rf "$KEYHOME"
           echo "Signed by:"; cat signer.pub
           { echo 'Signed by this key (StartOS: System → Trusted Keys → Add key, Packages on):'; echo; echo '```'; cat signer.pub; echo '```'; } > release-body.md
 
