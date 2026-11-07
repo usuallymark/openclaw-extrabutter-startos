@@ -1,13 +1,12 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:39',
+  version: '2026.10.1:40',
   releaseNotes: {
-    en_US: `A refused sign-in now tells you where to fix it.
+    en_US: `Health lines in a useful order; no more login nag.
 
-- **When the mailbox refuses the password, or Google or the CalDAV server refuses a calendar or contacts sign-in**, the service page gets a task that opens Configure Email, Configure Calendar or Configure Contacts. Its text says what was refused and where the new password or sign-in goes (Vaultwarden or the form).
-- The task goes away by itself once the sign-in works again, and comes back within 10 minutes if you open the form without fixing it. A server that is only unreachable raises no task.
-- Also for a CalDAV account whose password was refused while calendar links keep working.`,
+- **The health lines are in a fixed order:** Web Interface, Webchat, Vault and Qdrant first, then Mail, Calendar and Contacts, then Spending and Server Access, and the external services last. StartOS sorts them by an internal name, which until now put Calendar and Contacts at the top and Mail among the external services.
+- **No more "Login to StartOS" task at every start.** Leaving start-cli signed out is the safe choice, and the Server Access line already shows it. The action is still under Maintenance when you want it.`,
   },
   migrations: {
     up: async () => {},

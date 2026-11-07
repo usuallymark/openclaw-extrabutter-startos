@@ -69,9 +69,9 @@ One image, built here.
 
 **The image also installs `start-cli`**, pinned to a version by a build argument. That binary is what lets the agent administer the server when you grant it access, and it is why the container needs StartOS's root certificate. It also carries the skills (`/opt/skills`), the GitHub CLI, `rbw`, Python libraries for the skills (`/opt/python-libs`, hash-pinned in `skills/requirements.txt`) and Tesseract for OCR.
 
-Daemons: `qdrant`, `vault-service` (the vault, below; always running), `primary` (the gateway), `webchat` while it is enabled, `mail-front` + `mail` (the mail service, below) while Configure Email uses Gmail or IMAP, and `calendar-front` + `calendar` (the calendar service) while Configure Calendar is on. Every health check runs through `startos/stopLog.ts`, which logs `[stop]` lines in the package log when a stop begins: which checks are mid-run, every 15 s which are still running, and when each finishes (for updates that stall at 80% with the old version never stopping). It also limits every run: one that has not answered in 120 s, or 20 s after a stop began, counts as a failure and is let go (`[stop-log] check … let go`), because the SDK's `exec` waits for the subcontainer before its own timeout starts and that wait has no limit; on the box `ext-gitea` and `ext-ollama` hung there for 6 hours and held up an update.
+Daemons: `14-qdrant`, `vault-service` (the vault, below; always running), `11-gateway` (the gateway; `primary` until :39), `12-webchat` while it is enabled, `mail-front` + `mail` (the mail service, below) while Configure Email uses Gmail or IMAP, and `calendar-front` + `calendar` (the calendar service) while Configure Calendar is on. Every health check runs through `startos/stopLog.ts`, which logs `[stop]` lines in the package log when a stop begins: which checks are mid-run, every 15 s which are still running, and when each finishes (for updates that stall at 80% with the old version never stopping). It also limits every run: one that has not answered in 120 s, or 20 s after a stop began, counts as a failure and is let go (`[stop-log] check … let go`), because the SDK's `exec` waits for the subcontainer before its own timeout starts and that wait has no limit; on the box `ext-gitea` and `ext-ollama` hung there for 6 hours and held up an update.
 
-Six oneshots run before the gateway, and three after it:
+Six oneshots run before the gateway, and two after it (`check-login`, which raised the Login to StartOS task at every start while start-cli was signed out, was removed in :40):
 
 | Oneshot                 | When   | Purpose                                                                                            |
 | ----------------------- | ------ | -------------------------------------------------------------------------------------------------- |
@@ -81,7 +81,6 @@ Six oneshots run before the gateway, and three after it:
 | `state-migrate`         | Before | Once per OpenClaw version: `openclaw doctor --non-interactive` to migrate the agent databases      |
 | `google-sign-in`        | Before | Google account kept in Vaultwarden: loads the OAuth client and sign-in token into gog              |
 | `git-setup`             | Before | Writes git's system config: sign-in to Gitea and its address mapping (Configure External Services) |
-| `check-login`           | After  | Raises a task if `start-cli` is not authenticated                                                  |
 | `check-simplex-plugin`  | After  | Brings the SimpleX plugin up to the pinned version                                                 |
 | `server-state-snapshot` | After  | Writes a server inventory (or, when not logged in, a health report) into `MEMORY.md`               |
 
@@ -380,33 +379,35 @@ Runs one of OpenClaw's own maintenance commands against the stopped service and 
 
 ## Tasks
 
-Four, two of them blocking (a SimpleX plugin task may also appear when the bundled OpenClaw needs a newer plugin).
+Three, two of them blocking (a SimpleX plugin task may also appear when the bundled OpenClaw needs a newer plugin; since :39 the fix-it tasks of a refused sign-in, under Review Agent Actions below).
 
 | Task                  | Severity    | Raised when                                       | Cleared when    |
 | --------------------- | ----------- | ------------------------------------------------- | --------------- |
 | Set Gateway Password  | `critical`  | Any init that finds no password                   | The action runs |
 | Configure AI Provider | `critical`  | Install with no credentials stored                | The action runs |
-| Login to StartOS      | `important` | A start-up that finds `start-cli` unauthenticated | The action runs |
 | Review Agent Actions  | `important` | An agent action waits for approval (Mail Service check) | Nothing waits |
 
-`critical` blocks the service from starting, so a fresh install shows the two setup tasks and nothing else. `important` is advisory — the login task appears every start until it is either done or ignored, and ignoring it is a legitimate choice.
+`critical` blocks the service from starting, so a fresh install shows the two setup tasks and nothing else. `important` is advisory. Until :39 a Login to StartOS task appeared at every start while `start-cli` was signed out; signed out is the safe state, so :40 dropped it (and clears one left over at every start). The Server Access line shows the state; the action is under Maintenance.
 
 ## Health Checks
 
+StartOS lists the checks sorted by id (a `BTreeMap` in its status), not in the order they are defined, so since :40 the ids carry a number that sets the order: 1x the core (gateway, webchat, vault, Qdrant), 2x mail, calendar and contacts, 3x spending and server access, 40 the external services. The page keeps that order after a reload; while the service starts, lines appear as they first report until the page is reloaded.
+
 | Check           | Displayed as             | Method                                                         |
 | --------------- | ------------------------ | -------------------------------------------------------------- |
-| `primary`       | "Web Interface"          | The gateway's `/healthz` on its own bridge address (40s grace) |
-| `qdrant`        | "Qdrant Vector Database" | Port open, then Qdrant's `/readyz`                             |
-| `webchat`       | "Webchat"                | Its `/healthz`, while enabled                                  |
-| `vault`         | "Vault (rbw)"            | An unlock and a sync every 5 minutes, asked of the vault service as root, while Vaultwarden is enabled |
-| `ext-<service>` | The service's name       | Reachability every minute, for each enabled external service   |
+| `11-gateway`    | "Web Interface"          | The gateway's `/healthz` on its own bridge address (40s grace) |
+| `14-qdrant`     | "Qdrant Vector Database" | Port open, then Qdrant's `/readyz`                             |
+| `12-webchat`    | "Webchat"                | Its `/healthz`, while enabled                                  |
+| `13-vault`      | "Vault (rbw)"            | An unlock and a sync every 5 minutes, asked of the vault service as root, while Vaultwarden is enabled |
+| `40-ext-<service>` | The service's name       | Reachability every minute, for each enabled external service   |
 | `mail`          | (hidden)                 | Ready once the mail service's `/healthz` answers (any state)   |
-| `mail-status`   | "Mail Service"           | The mail service's `/healthz` every minute: signed in, password refused (since when, why), Vaultwarden unavailable, server unreachable; sending level, a warning for Anyone Else: Send automatically, messages waiting for approval (raises/clears the Review Agent Actions task) |
+| `21-mail`       | "Mail Service"           | The mail service's `/healthz` every minute: signed in, password refused (since when, why), Vaultwarden unavailable, server unreachable; sending level, a warning for Anyone Else: Send automatically, messages waiting for approval (raises/clears the Review Agent Actions task) |
 | `calendar`      | (hidden)                 | Ready once the calendar service's `/healthz` answers (any state) |
-| `calendar-status` | "Calendar Service"     | The calendar service's `/healthz` every minute: signed in (account, read only, scope warnings), sign-in refused (why, what to do), Vaultwarden unavailable, Google unreachable; calendar links readable (N of M, each failing link as a warning; links only: failure when none can be read) |
-| `contacts-status` | "Contacts Service"     | Since :31: the contacts service's `/healthz` every minute: how many contacts from which source, when read; no file yet, sign-in refused, Google unreachable; since :33 also fails when the contacts check for mail and calendar could not start (its socket name taken) |
-| `spending`        | "Spending"             | Since :30: today's and the last 7 days' model cost (OpenClaw's records), every 10 minutes; fails above the Spending Alert limit, with one notification + ntfy that day |
-| `ext-email`     | "Google account"         | Google account only: a stored sign-in for the address (local, no network) |
+| `22-calendar` | "Calendar Service"     | The calendar service's `/healthz` every minute: signed in (account, read only, scope warnings), sign-in refused (why, what to do), Vaultwarden unavailable, Google unreachable; calendar links readable (N of M, each failing link as a warning; links only: failure when none can be read) |
+| `23-contacts` | "Contacts Service"     | Since :31: the contacts service's `/healthz` every minute: how many contacts from which source, when read; no file yet, sign-in refused, Google unreachable; since :33 also fails when the contacts check for mail and calendar could not start (its socket name taken) |
+| `31-spending`     | "Spending"             | Since :30: today's and the last 7 days' model cost (OpenClaw's records), every 10 minutes; fails above the Spending Alert limit, with one notification + ntfy that day |
+| `32-server-access` | "Server Access"      | Whether `start-cli` is signed in (`start-cli auth session list` as node): signed out says the agent cannot manage the server; signed in warns that the agent then has root on the whole server |
+| `40-ext-email`  | "Google account"         | Google account only: a stored sign-in for the address (local, no network) |
 
 The external checks test reachability only; the `health` skill (`/opt/skills/health/health.py`) also tests the n8n, Trilium and Gitea API keys (Gitea: names the token's account), the mail and calendar services' state plus the isolation in `openclaw.json` (each isolated agent limited to its own tools, every other agent denied them), the Google sign-in (Google refreshes the token) and memory search. **None of them says anything about the model**: a wrong API key, a rate limit, or a local backend that is running but not loaded all show green checks and an error in the chat.
 

@@ -418,6 +418,15 @@ export const main = sdk.setupMain(async ({ effects }) => {
     console.info(`Vault items only their service may read: ${owned.join(', ')}`)
   const vaultOwner = await vaultRootOwner()
 
+  // Until :39 every start without start-cli signed in raised a "Login to
+  // StartOS" task (default replay id <package>:<action>). Signed out is the
+  // safe, intended state, which the Server Access line already shows, so
+  // the task only nagged; the action stays under Maintenance.
+  await Promise.race([
+    sdk.action.clearTask(effects, `${sdk.manifest.id}:${loginToOs.id}`),
+    new Promise((resolve) => setTimeout(resolve, 20_000)),
+  ]).catch((e) => console.warn(`clear login task: ${(e as Error)?.message}`))
+
   // Fix-it tasks (problemTasks.ts, since :39) of services that are off: their
   // health checks no longer run, so nothing else would clear them.
   for (const [svc, on] of [
@@ -822,7 +831,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['chown', 'vault-service'],
     })
-    .addDaemon('qdrant', {
+    .addDaemon('14-qdrant', {
       subcontainer: qdrantSub,
       exec: {
         command: ['./qdrant'],
@@ -840,7 +849,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: [],
     })
-    .addDaemon('primary', {
+    .addDaemon('11-gateway', {
       subcontainer: openclawSub,
       exec: {
         // Provider keys and service settings come from the secrets file
@@ -890,46 +899,26 @@ export const main = sdk.setupMain(async ({ effects }) => {
         'vault-service',
         'google-sign-in',
         'git-setup',
-        'qdrant',
+        '14-qdrant',
       ],
     })
-    .addOneshot('check-login', {
-      subcontainer: openclawSub,
-      exec: {
-        fn: async (subcontainer) => {
-          const result = await subcontainer.exec(
-            ['start-cli', 'auth', 'session', 'list'],
-            { user: 'node', env: { HOME: '/data' } },
-          )
-          if (result.exitCode !== 0) {
-            await sdk.action.createOwnTask(effects, loginToOs, 'important', {
-              reason: i18n(
-                'Login to StartOS to enable start-cli authentication for managing the server',
-              ),
-            })
-          }
-          return null
-        },
-      },
-      requires: ['primary'],
-    })
-    .addHealthCheck('server-access', {
+    .addHealthCheck('32-server-access', {
       ready: {
         display: 'Server Access',
         fn: () => probeServerAccess(openclawSub),
         trigger: externalTrigger,
         gracePeriod: 0,
       },
-      requires: ['check-login'],
+      requires: ['11-gateway'],
     })
-    .addHealthCheck('spending', {
+    .addHealthCheck('31-spending', {
       ready: {
         display: 'Spending',
         fn: () => probeSpending(effects, openclawSub),
         trigger: externalTrigger,
         gracePeriod: 0,
       },
-      requires: ['primary'],
+      requires: ['11-gateway'],
     })
     .addOneshot('check-simplex-plugin', {
       subcontainer: openclawSub,
@@ -937,7 +926,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
         fn: (subcontainer) =>
           requestSimplexPluginUpgrade(effects, subcontainer),
       },
-      requires: ['primary'],
+      requires: ['11-gateway'],
     })
     // Rewrites MEMORY.md's "## Server State Snapshot" section (server state
     // when start-cli is logged in, else this container's health report). The
@@ -952,9 +941,9 @@ export const main = sdk.setupMain(async ({ effects }) => {
           OPENCLAW_HEALTH_TARGETS: JSON.stringify(healthTargets),
         },
       },
-      requires: ['primary', 'check-login'],
+      requires: ['11-gateway'],
     })
-    .addHealthCheck('vault', {
+    .addHealthCheck('13-vault', {
       ready: {
         display: vaultCheck.display,
         fn: () => vaultCheck.fn(openclawSub),
@@ -963,7 +952,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['vault-service'],
     })
-    .addHealthCheck('ext-vaultwarden', {
+    .addHealthCheck('40-ext-vaultwarden', {
       ready: {
         display: extChecks.vaultwarden.display,
         fn: () => extChecks.vaultwarden.fn(openclawSub),
@@ -972,7 +961,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['network-setup'],
     })
-    .addHealthCheck('ext-ollama', {
+    .addHealthCheck('40-ext-ollama', {
       ready: {
         display: extChecks.ollama.display,
         fn: () => extChecks.ollama.fn(openclawSub),
@@ -981,7 +970,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['network-setup'],
     })
-    .addHealthCheck('ext-nas', {
+    .addHealthCheck('40-ext-nas', {
       ready: {
         display: extChecks.nas.display,
         fn: () => extChecks.nas.fn(openclawSub),
@@ -990,7 +979,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['network-setup'],
     })
-    .addHealthCheck('ext-n8n', {
+    .addHealthCheck('40-ext-n8n', {
       ready: {
         display: extChecks.n8n.display,
         fn: () => extChecks.n8n.fn(openclawSub),
@@ -999,7 +988,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['network-setup'],
     })
-    .addHealthCheck('ext-trilium', {
+    .addHealthCheck('40-ext-trilium', {
       ready: {
         display: extChecks.trilium.display,
         fn: () => extChecks.trilium.fn(openclawSub),
@@ -1008,7 +997,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['network-setup'],
     })
-    .addHealthCheck('ext-searxng', {
+    .addHealthCheck('40-ext-searxng', {
       ready: {
         display: extChecks.searxng.display,
         fn: () => extChecks.searxng.fn(openclawSub),
@@ -1017,7 +1006,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['network-setup'],
     })
-    .addHealthCheck('ext-crawl4ai', {
+    .addHealthCheck('40-ext-crawl4ai', {
       ready: {
         display: extChecks.crawl4ai.display,
         fn: () => extChecks.crawl4ai.fn(openclawSub),
@@ -1026,7 +1015,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['network-setup'],
     })
-    .addHealthCheck('ext-ntfy', {
+    .addHealthCheck('40-ext-ntfy', {
       ready: {
         display: extChecks.ntfy.display,
         fn: () => extChecks.ntfy.fn(openclawSub),
@@ -1035,7 +1024,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['network-setup'],
     })
-    .addHealthCheck('ext-gitea', {
+    .addHealthCheck('40-ext-gitea', {
       ready: {
         display: extChecks.gitea.display,
         fn: () => extChecks.gitea.fn(openclawSub),
@@ -1044,7 +1033,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['network-setup'],
     })
-    .addHealthCheck('ext-email', {
+    .addHealthCheck('40-ext-email', {
       ready: {
         display: extChecks.email.display,
         fn: () => extChecks.email.fn(openclawSub),
@@ -1097,7 +1086,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
           },
           requires: ['chown', 'network-setup', 'vault-service', 'mail-front'],
         })
-        .addHealthCheck('mail-status', {
+        .addHealthCheck('21-mail', {
           ready: {
             display: 'Mail Service',
             fn: () => probeMail(effects, openclawSub),
@@ -1151,7 +1140,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
             'calendar-front',
           ],
         })
-        .addHealthCheck('calendar-status', {
+        .addHealthCheck('22-calendar', {
           ready: {
             display: 'Calendar Service',
             fn: () => probeCalendar(effects, openclawSub),
@@ -1205,7 +1194,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
             'contacts-front',
           ],
         })
-        .addHealthCheck('contacts-status', {
+        .addHealthCheck('23-contacts', {
           ready: {
             display: 'Contacts Service',
             fn: () => probeContacts(effects, openclawSub),
@@ -1218,7 +1207,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
   if (!webchatEnabled) return logStops(effects, withContacts)
 
-  const all = (withContacts as typeof daemons).addDaemon('webchat', {
+  const all = (withContacts as typeof daemons).addDaemon('12-webchat', {
     subcontainer: openclawSub,
     exec: {
       command: ['node', '/opt/webchat/server.mjs'],
@@ -1245,7 +1234,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
         ),
       gracePeriod: 30_000,
     },
-    requires: ['primary'],
+    requires: ['11-gateway'],
   })
   return logStops(effects, all)
 })
