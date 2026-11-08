@@ -8,6 +8,7 @@ import {
 import {
   CALENDAR_VAULT,
   parseCalendarSignIn,
+  trustedOrganizersOf,
   writeCalendarSettings,
 } from '../calendarService'
 import { agentModelChoices, OLLAMA_SERVER_ID } from '../modelCatalog'
@@ -211,6 +212,30 @@ async function emailReadyForInvites(): Promise<string> {
   return ''
 }
 
+/** The trusted list as saved, for the form (since :44). */
+export function trustedFootnote(
+  s: CalendarSettings | null | undefined,
+  emailTrusted: string[],
+): string {
+  const own = (s?.trustedOrganizers ?? []).length
+  const fromEmail = s?.includeEmailTrusted !== false ? emailTrusted.length : 0
+  const all = s
+    ? trustedOrganizersOf(s, emailTrusted)
+    : Array.from(
+        new Set(emailTrusted.map((t) => String(t).trim().toLowerCase())),
+      )
+        .filter(Boolean)
+        .sort()
+  if (!all.length)
+    return 'Trusted now: nobody. Every organizer is marked as outside.'
+  const shown = all.length > 20 ? [...all.slice(0, 20), '…'] : all
+  return (
+    `Trusted now, as saved (${all.length}: ${own} from Trusted Organizers, ${fromEmail} from Configure Email's Trusted Senders, duplicates counted once): ` +
+    shown.join(', ') +
+    '. Changes here show after saving.'
+  )
+}
+
 const calendarMode = Value.dynamicUnion(async () => {
   const s = await saved()
   const notReady = await emailReadyForInvites()
@@ -374,11 +399,23 @@ const inputSpec = InputSpec.of({
       },
     ),
   ),
-  includeEmailTrusted: Value.toggle({
-    name: "Also Trust Email's Trusted Senders",
-    description:
-      "The Trusted Senders in Configure Email count as Trusted Organizers too, so you don't type your own and your family's addresses twice. In write mode, the trusted addresses are also the only ones that may be invited.",
-    default: true,
+  includeEmailTrusted: Value.dynamicToggle(async () => {
+    // Since :44: the footnote shows the combined list as saved, the one the
+    // calendar service uses (Trusted Organizers plus, while this is on,
+    // Configure Email's Trusted Senders).
+    const s = await saved()
+    const senders =
+      (await emailSettingsJson
+        .read((e) => e?.agent?.trustedSenders)
+        .once()
+        .catch(() => null)) ?? []
+    return {
+      name: "Also Trust Email's Trusted Senders",
+      description:
+        "The Trusted Senders in Configure Email count as Trusted Organizers too, so you don't type your own and your family's addresses twice. In write mode, the trusted addresses are also the only ones that may be invited.",
+      footnote: trustedFootnote(s, senders),
+      default: s?.includeEmailTrusted ?? true,
+    }
   }),
   agentModel,
   extraInstructions: Value.textarea({

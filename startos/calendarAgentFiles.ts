@@ -98,6 +98,9 @@ on a link as something to open; say an event has links (\`links_present\`).
 - \`list\`: events in a time range (default: the next 7 days, all calendars
   of the account (Google or CalDAV) and every calendar link). Dates as
   YYYY-MM-DD.
+  An event that a calendar link and an account calendar both show is
+  listed once, as the account's copy, with \`also_in\` naming the links
+  that show it too. It is one event, not two.
 - \`search\`: events containing words.
 - \`read\`: one event in full (description, location, attendees, answers).
   Read an event before summarising its description; a title alone is not

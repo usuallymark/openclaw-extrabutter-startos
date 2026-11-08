@@ -660,6 +660,7 @@ class Tools:
             'recurring': bool(e.get('recurringEventId')),
             'flags': flags,
             '_contact': addr if 'external_organizer' in flags else '',
+            '_uid': str(e.get('iCalUID') or ''),
         }
 
     def _events(self, a, text=None, back_days=0, ahead_days=7, default_limit=50):
@@ -693,6 +694,7 @@ class Tools:
         if self._gerr:
             errors.insert(0, self._gerr)
         events.sort(key=lambda x: (_sort_key(x['start']), x['title']))
+        events = drop_duplicates(events)
         self._mark_contacts(events[:limit])
         out = {'from': start.isoformat(), 'to': end.isoformat(), 'events': events[:limit],
                'more': len(events) > limit}
@@ -764,6 +766,7 @@ class Tools:
             'recurring': bool(ev['rrule'] or ev['rdates'] or ev['recurrence_id'] is not None),
             'flags': flags,
             '_contact': addr if 'external_organizer' in flags else '',
+            '_uid': ev['uid'],
         }
 
     def _mark_contacts(self, briefs):
@@ -773,6 +776,8 @@ class Tools:
         real Google account (an event made in Google, or a shared
         calendar's owner); contact_not_verified next to external_organizer
         when it is only claimed (an emailed invitation, a link feed, Gmail)."""
+        for b in briefs:
+            b.pop('_uid', None)
         pending = [(b, b.pop('_contact', '')) for b in briefs]
         addrs = sorted({a for _, a in pending if a})
         known = self.svc.contacts.known(addrs) if addrs else None
@@ -896,6 +901,43 @@ class Tools:
                 warnings.append('the description was cut (too long)')
         self.svc.log({'event': 'read', 'calendar': cal_id[:200], 'flags': flags})
         return out
+
+
+def drop_duplicates(events):
+    """One copy of each event (since :44). A calendar link and a calendar
+    shared with the account (or a CalDAV account) can show the same
+    calendar: the same event then has the same iCal UID and start in both.
+    The account's copy is kept (its organizer flags are the stronger ones)
+    and names the links that also show it in 'also_in'; of two links, the
+    first one listed is kept. Takes the events sorted by start; removes the
+    internal '_uid' from every event."""
+    kept, by_key = [], {}
+    for ev in events:
+        uid = ev.pop('_uid', '')
+        if not uid or uid.startswith('no-uid-'):
+            kept.append(ev)
+            continue
+        key = (uid, _sort_key(ev['start']), bool(ev.get('all_day')))
+        is_link = str(ev.get('calendar') or '').startswith(LINK_PREFIX)
+        other = by_key.get(key)
+        if other is None:
+            by_key[key] = ev
+            kept.append(ev)
+            continue
+        other_link = str(other.get('calendar') or '').startswith(LINK_PREFIX)
+        if is_link or not other_link:
+            # This copy is the link's (or both come from accounts: two
+            # different calendars may really hold the same event, keep both).
+            if is_link:
+                other.setdefault('also_in', []).append(ev.get('calendar_name') or ev.get('calendar'))
+            else:
+                kept.append(ev)
+            continue
+        # The kept copy was a link's and this one is the account's: swap.
+        ev['also_in'] = other.pop('also_in', []) + [other.get('calendar_name') or other.get('calendar')]
+        kept[kept.index(other)] = ev
+        by_key[key] = ev
+    return kept
 
 
 def _sort_key(s):

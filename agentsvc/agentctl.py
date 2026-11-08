@@ -193,7 +193,7 @@ def results(n):
 AGENT_DBS = '/data/.openclaw/agents/*/agent/openclaw-agent.sqlite'
 STATE_DB = '/data/.openclaw/state/openclaw.sqlite'
 OPENCLAW_JSON = '/data/.openclaw/openclaw.json'
-HELPER_AGENTS = ('email', 'calendar', 'apps')
+HELPER_AGENTS = ('email', 'calendar', 'contacts', 'apps')
 
 
 def _zone():
