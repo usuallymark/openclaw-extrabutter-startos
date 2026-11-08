@@ -98,6 +98,11 @@ start-cli signs a package with the workspace key `.startos/build.key.pem`, and `
 
 ## The baked `start-cli` (`START_CLI_VERSION`)
 
+**Rule: no bump forces a StartOS update.** Two things set which StartOS releases this package works on:
+
+- **The SDK sets the minimum StartOS** (manifest `osVersion`): every start-sdk 3.x up to 3.1.1 sets 0.4.0.2, **start-sdk 4.0.0 sets 0.4.1** and would lock out every server still on 0.4.0.x. Stay on 3.x while 0.4.0 is supported; moving to 4.x is a deliberate decision with a release note saying StartOS 0.4.1 is required.
+- **The baked start-cli should match that minimum**, not the newest StartOS. Each start-cli release is cut from the same `start-core` as one StartOS release (2.2.0 = 0.4.0.2, 2.5.2 = 0.4.0.4, 2.6.0+ = 0.4.1), and a client fails wherever the other side's answer changed shape in a way it cannot read. Checked for :43 by extracting every serialized Rust type of `shared-libs/crates/start-core` at each tag and comparing those behind the commands the package runs: with 2.2.0, `auth login`, `auth logout`, `server time` and the snapshot's commands (`server metrics`, `package list` (untyped JSON), `package stats`, `notification list`, `net gateway list` (0.4.1 only adds defaulted fields), `disk list`, `backup target list`) work on 0.4.0.2 through 0.4.1.2; `auth session list` does not on 0.4.1+ (the package no longer runs it). 2.7.0 would only move the gap: its `auth session list` fails on 0.4.0.x. Whatever the agent may hit on a newer server is listed at the top of `skills/start-cli/SKILL.md`. Repeat the comparison on any bump of start-cli, the SDK or the supported StartOS range.
+
 Separate from OpenClaw and `gh`, the `Dockerfile` downloads a `start-cli` binary for the **Login to StartOS** action, pinned by `START_CLI_VERSION` in `startos/utils.ts` and passed through the manifest's `buildArgs`. It tracks the `start-cli` release line in the [`Start9Labs/start-technologies`](https://github.com/Start9Labs/start-technologies) monorepo — not OpenClaw, and not StartOS itself. It moves on its own schedule, so check it whenever you touch this file.
 
 > [!WARNING]

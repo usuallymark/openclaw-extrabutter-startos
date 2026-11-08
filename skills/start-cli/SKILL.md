@@ -16,6 +16,13 @@ All commands use **positional arguments** for primary identifiers (package IDs, 
 
 This file matches start-cli 2.2.0. Commands marked "newer StartOS" call server functions that an older StartOS may not have; if the server answers with an unknown-method error, say so instead of retrying.
 
+**On StartOS 0.4.1 and later** (the version is `.value.serverInfo.version` in a `db dump`, see below), this start-cli is older than the server. Known differences:
+
+- `start-cli auth session list` and `auth session kill` fail (the server's answer changed). Do not retry or work around it: tell the owner to open **System → Active Sessions** in the StartOS web UI, which lists sessions and API tokens and can end them.
+- Installing or updating a package, or updating StartOS, from a signer the server does not trust is refused, and this start-cli has no `--trust` override. Tell the owner; they can trust the key under **System → Trusted Keys** or install through the web UI. Never ask for the key to be trusted on your behalf.
+- There is no `auth token create`: do not create API tokens.
+- Anything else that fails with a parse or deserialization error is most likely the same version gap: report it to the owner instead of retrying.
+
 **Only use commands exactly as documented in this file.** Do not guess or invent subcommands. If a command is not listed here, it does not exist. Common mistakes to avoid:
 
 - **`start-cli server experimental governor`** — REMOVED in start-cli 2.0. Use `start-cli server governor [GOVERNOR]`.
@@ -63,8 +70,8 @@ Manage authentication sessions.
 | `start-cli auth logout`                    | Log out of current auth session                |
 | `start-cli auth reset-password`            | Reset password                                 |
 | `start-cli auth get-pubkey`                | Get public key derived from server private key |
-| `start-cli auth session list`              | List active auth sessions                      |
-| `start-cli auth session kill <SESSION_ID>` | Kill a specific auth session                   |
+| `start-cli auth session list`              | List active auth sessions (fails on StartOS 0.4.1+, see above) |
+| `start-cli auth session kill <SESSION_ID>` | Kill a specific auth session (fails on StartOS 0.4.1+, see above) |
 
 ### Examples
 
