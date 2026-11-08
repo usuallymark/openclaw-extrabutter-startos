@@ -1,14 +1,12 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '2026.10.1:44',
+  version: '2026.10.1:45',
   releaseNotes: {
-    en_US: `Easier report screens, and no more double events.
+    en_US: `Usage and Cost now counts every model call.
 
-- **Agent Activity** has a small form: which service, which period (24 hours, 7 days, 30 days, everything) and changes only. The result starts with a one-line count of each service's changes; each part opens on its own.
-- **Usage and Cost** starts with a one-line summary and opens each part on its own. It now names each agent's model and the form that sets it, and counts the contacts agent among the helpers.
-- **Configure Calendar** shows under "Also Trust Email's Trusted Senders" who is trusted now: your Trusted Organizers together with Configure Email's Trusted Senders.
-- **Calendar:** when a calendar link and a shared calendar show the same calendar, each event is listed once.`,
+- **Usage and Cost, the Spending line and the Spending Alert showed too little.** OpenClaw 2026.10 stores longer replies compressed, and those were not counted, often about a third of the cost. They are now. Expect the figures, and the daily total the alert compares with your limit, to go up; check your Spending Alert limit.
+- **Long app reports:** the apps agent asks for compact reports when a job may list many messages or events, and the main agent asks again for a narrower job instead of guessing when a report arrives cut off.`,
   },
   migrations: {
     up: async () => {},

@@ -143,10 +143,15 @@ RUN chmod 755 /opt/openclaw-contacts && chmod 644 /opt/openclaw-contacts/*.py \
 # Owner-side helper for every isolated service's approval queue and log
 # (Review Agent Actions, Email Activity): run as root by the package's
 # actions, never by an agent.
-COPY agentsvc/agentctl.py /opt/openclaw-services/agentctl.py
-RUN chmod 755 /opt/openclaw-services && chmod 644 /opt/openclaw-services/agentctl.py \
+# usagezstd.js (since :45): Usage and Cost reads OpenClaw's compressed
+# transcript rows with Node's zstd (this Python has none).
+COPY agentsvc/agentctl.py agentsvc/usagezstd.js /opt/openclaw-services/
+RUN chmod 755 /opt/openclaw-services \
+    && chmod 644 /opt/openclaw-services/agentctl.py /opt/openclaw-services/usagezstd.js \
     && python3 -m compileall -q /opt/openclaw-services \
-    && cd /tmp && python3 -I /opt/openclaw-services/agentctl.py queue >/dev/null
+    && cd /tmp && python3 -I /opt/openclaw-services/agentctl.py queue >/dev/null \
+    && node --no-warnings -e 'if (typeof require("zlib").zstdDecompressSync !== "function" || typeof require("node:sqlite").DatabaseSync !== "function") process.exit(1)' \
+    && node --no-warnings /opt/openclaw-services/usagezstd.js 0 >/dev/null
 
 # Vault service (since 2026.10.1:27): rbw, its keys and the Vaultwarden
 # master password belong to openclaw-vault; everyone else asks it over its

@@ -92,6 +92,13 @@ Answer with exactly one JSON object, nothing before or after it:
 - When an agent did not answer within the wait, or its answer was not
   JSON: null, and say so in \`notes\`.
 - \`notes\`: whom you asked and anything that went wrong. Short.
+- Keep the whole report short enough to arrive whole: a reply longer than
+  about 12,000 characters can be cut off on the way to the main agent.
+  Because you may not shorten a report, ask for a short one instead: for a
+  job that may list many messages or events, or a full status, tell the
+  agent "a compact report, at most 30 items; say in notes how many more
+  there are". If a report is still very long, say so in \`notes\` and
+  suggest a narrower job (a shorter date range, one folder, one calendar).
 - A job for an app that is not switched on: all null, and \`notes\` says
   which app is not set up (the owner can set it up in StartOS).
 

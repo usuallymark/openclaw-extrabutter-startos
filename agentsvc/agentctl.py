@@ -241,6 +241,51 @@ def _since_value(sample, cut):
     return datetime.fromtimestamp(cut, timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
 
 
+USAGE_ZSTD = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'usagezstd.js')
+
+
+def _agent_of(db):
+    return os.path.basename(os.path.dirname(os.path.dirname(db)))
+
+
+def _compressed_usage(dbs, cut, problems):
+    """(agent, time, usage) from the compressed transcript rows, read by
+    usagezstd.js (Node has zstd; this Python has not). Anything it cannot
+    read is named in problems, so the report never looks complete when it
+    is not."""
+    import shutil
+    import subprocess
+    if not dbs:
+        return
+    node = shutil.which('node') or '/usr/local/bin/node'
+    try:
+        p = subprocess.run([node, '--no-warnings', USAGE_ZSTD, str(int(cut)), *dbs],
+                           capture_output=True, timeout=25, cwd='/', check=False)
+        out = json.loads(p.stdout or b'{}') if p.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        out = None
+    if not isinstance(out, dict):
+        problems.append('compressed records (the longer replies) could not be read')
+        return
+    for db in dbs:
+        r = out.get(db)
+        agent = _agent_of(db)
+        if not isinstance(r, dict) or r.get('error'):
+            problems.append(f'{agent}: compressed records could not be read')
+            continue
+        if r.get('unreadable'):
+            problems.append(f'{agent}: {_n(r["unreadable"])} compressed records unreadable')
+        for row in r.get('rows') or []:
+            if not (isinstance(row, list) and len(row) == 2 and isinstance(row[1], list)):
+                continue
+            t = _ts(row[0])
+            if t is None or t < cut:
+                continue
+            for u in row[1]:
+                if isinstance(u, dict):
+                    yield agent, t, u
+
+
 def usage(days=30):
     import glob
     import sqlite3
@@ -252,7 +297,28 @@ def usage(days=30):
     cut = now - days * 86400
     today = datetime.fromtimestamp(now, tz).date()
     agents, per_day, problems = {}, {}, []
-    for db in sorted(glob.glob(AGENT_DBS)):
+
+    def add(agent, t, u):
+        cost = u.get('cost')
+        if not isinstance(cost, dict) or not isinstance(cost.get('total'), (int, float)):
+            return
+        a = agents.setdefault(agent, {})
+        day = datetime.fromtimestamp(t, tz).date()
+        age = (today - day).days
+        rec = [_n(cost['total']), 1, _n(u.get('input')), _n(u.get('output')),
+               _n(u.get('cacheRead')), _n(u.get('cacheWrite'))]
+        for window, limit in (('today', 0), ('d7', 6), ('d30', 29)):
+            if age <= limit:
+                w = a.setdefault(window, [0] * 6)
+                for i, x in enumerate(rec):
+                    w[i] += x
+        if age <= 13:
+            dd = per_day.setdefault(day.isoformat(), [0, 0])
+            dd[0] += rec[0]
+            dd[1] += 1
+
+    dbs = sorted(glob.glob(AGENT_DBS))
+    for db in dbs:
         agent = os.path.basename(os.path.dirname(os.path.dirname(db)))
         try:
             c = sqlite3.connect(f'file:{db}?mode=ro', uri=True, timeout=5)
@@ -267,7 +333,7 @@ def usage(days=30):
             if not row:
                 continue
             since = _since_value(row[0], cut)
-            a = agents.setdefault(agent, {})
+            agents.setdefault(agent, {})
             for r in c.execute('select * from transcript_events where created_at >= ?', (since,)):
                 t = _ts(r[cols.index('created_at')])
                 if t is None or t < cut:
@@ -285,27 +351,15 @@ def usage(days=30):
                     except ValueError:
                         continue
                     for u in _walk_usage(d):
-                        cost = u.get('cost')
-                        if not isinstance(cost, dict) or not isinstance(cost.get('total'), (int, float)):
-                            continue
-                        day = datetime.fromtimestamp(t, tz).date()
-                        age = (today - day).days
-                        rec = [_n(cost['total']), 1, _n(u.get('input')), _n(u.get('output')),
-                               _n(u.get('cacheRead')), _n(u.get('cacheWrite'))]
-                        for window, limit in (('today', 0), ('d7', 6), ('d30', 29)):
-                            if age <= limit:
-                                w = a.setdefault(window, [0] * 6)
-                                for i, x in enumerate(rec):
-                                    w[i] += x
-                        if age <= 13:
-                            k = day.isoformat()
-                            dd = per_day.setdefault(k, [0, 0])
-                            dd[0] += rec[0]
-                            dd[1] += 1
+                        add(agent, t, u)
         except sqlite3.Error as e:
             problems.append(f'{agent}: {type(e).__name__}')
         finally:
             c.close()
+    # Since :45: events of 1 KB or more are stored zstd-compressed
+    # (event_zstd), with the usage only inside; until :44 they were missed.
+    for agent, t, u in _compressed_usage(dbs, cut, problems):
+        add(agent, t, u)
     models = {}
     try:
         with open(OPENCLAW_JSON) as f:

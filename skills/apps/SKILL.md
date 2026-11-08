@@ -76,6 +76,12 @@ the reports of those agents exactly as they gave them (or null when that
 app was not asked); `notes` is from the apps agent (who it asked, what did
 not answer).
 
+If a report stops part-way (the JSON does not close, or a line ends in the
+middle), it was cut off on the way: never guess the rest or present it as
+complete. Tell the user what arrived, and ask the apps agent again for a
+narrower job (a shorter date range, one calendar or folder, "only the
+status fields after trusted_organizers").
+
 - The email report: `{ messages: [{ id, folder, from, from_verified,
   subject, date, summary, suggested_action, flags }], actions_taken,
   notes }`.
