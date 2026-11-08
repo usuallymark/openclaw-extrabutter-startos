@@ -11,19 +11,21 @@
 
 [OpenClaw](https://github.com/openclaw/openclaw) is a self-hosted AI agent gateway: a web chat and control panel in front of an LLM, reachable from messaging channels, with a workspace and memory of its own. This package runs the gateway, wires it to either a cloud provider or a local model server on the same box, and can — if you ask it to — give the agent administrative control of StartOS itself.
 
+This file is the technical reference (for an AI support or administering agent, and for anyone who wants to know how the package works). The setup guide for users is `instructions.md`; what changed in each release is [docs/HISTORY.md](docs/HISTORY.md); how to update the bundled software is `UPDATING.md`.
+
 **This is a fork of the community package** ([Start9-Community/openclaw-startos](https://github.com/Start9-Community/openclaw-startos)) with its own package id, `openclaw-extrabutter`, shown in StartOS as **OpenClaw Extra Butter**. It installs alongside the community OpenClaw package and never replaces it; each has its own volumes, Qdrant and addresses. Don't connect both to the same Telegram bot or WhatsApp number. On top of the community package it adds:
 
 - a bundled **Qdrant** vector database (its own volume) and a skill for it;
 - **helper agents** the main agent can spawn, managed from an action (Configure Agents) or by the agent itself;
-- a built-in **rbw** vault client (rbw 1.15.0, Bitwarden-compatible, installed for x86_64 and aarch64): point it at your Vaultwarden once and the package logs in and unlocks the vault at every start, keeps it unlocked, and lets the other services fetch their credentials from it instead of storing them in plain config. Since 2026.10.1:27 a separate **vault service** holds it, and agents never get the items that belong to the email and calendar services;
+- a **vault service** around the built-in **rbw** client (Bitwarden-compatible): point it at your Vaultwarden once and every other part of the package fetches its credentials from it; agents never get the master password or the items the services own;
 - **Configure External Services**: optional skills for services you already run (Vaultwarden, Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy and Gitea), plus host mappings and a custom CA for internal HTTPS services;
-- **email** (Configure Email): Gmail with an app password or any IMAP provider, through an isolated **mail service** and an **email agent** that has the mail tools and nothing else (the main agent never reads mail); or a Google account with Gmail, Calendar and Drive (gog 0.44.0, not yet isolated); every credential can live in Vaultwarden;
-- a **mobile webchat** with one profile per person (optional);
-- a built-in **pdf** skill (text extraction and OCR of scanned pages) and a **health** skill;
-- **memory embeddings** settings and a daily server snapshot in the agent's memory.
+- **email, calendar and contacts** through isolated services, each with its own agent that has only its own tools; the main agent asks them through an **apps agent** and never reads mail or invitations itself; outgoing mail and invitations follow your rules, with anything else waiting for your approval;
+- **cost reports**: Usage and Cost, a Spending health line and a daily Spending Alert;
+- a **mobile webchat** with one PIN-protected profile per person (optional);
+- built-in **pdf** (text extraction and OCR) and **health** skills, memory-embeddings settings, and a daily server snapshot in the agent's memory.
 
 - **Upstream repo:** <https://github.com/openclaw/openclaw>
-- **This package:** <https://github.com/usuallymark/openclaw-extrabutter-startos> (releases carry the `.s9pk` files for sideloading: StartOS → System → Sideload a Service)
+- **This package:** <https://github.com/usuallymark/openclaw-extrabutter-startos> (releases carry the `.s9pk` files for x86_64 and aarch64, signed by one release key shown on each release page)
 
 ## Screenshots
 
@@ -37,12 +39,14 @@ More: [Actions & Config](docs/screenshots/actions.png), Configure External Servi
 
 ## Table of Contents
 
+- [Installing and Updating](#installing-and-updating)
 - [Image and Container Runtime](#image-and-container-runtime)
 - [Volume and Data Layout](#volume-and-data-layout)
 - [File Models](#file-models)
 - [Dependencies](#dependencies)
 - [Network Access and Interfaces](#network-access-and-interfaces)
-- [Installation and First-Run Flow](#installation-and-first-run-flow)
+- [First Run](#first-run)
+- [The Isolated Services](#the-isolated-services)
 - [Actions](#actions)
 - [Tasks](#tasks)
 - [Health Checks](#health-checks)
@@ -52,43 +56,46 @@ More: [Actions & Config](docs/screenshots/actions.png), Configure External Servi
 
 ---
 
+## Installing and Updating
+
+The package is sideloaded: download the `.s9pk` for your server from the release page, then StartOS → System → Sideload a Service. It runs on StartOS 0.4.0.2 and later, 0.4.1 included; no release requires a StartOS update.
+
+- **Trust the release key once** (StartOS 0.4.1 and later): System → Trusted Keys → Add key, with the key from the release page, Packages on. Without it, every sideload asks "Install untrusted software?".
+- **If the browser upload breaks off** (StartOS logs "Connection closed or timed out before full file received" and nothing installs), install from the server itself over SSH: download the file there and run `sudo start-cli package install --sideload <file>`. It checks the signature against the same trusted keys.
+- **Make a StartOS backup before updating**: the update migrates OpenClaw's databases, which cannot be undone.
+- **The first start after an OpenClaw update takes 1–2 minutes longer**, once: newer OpenClaw releases open agent databases written by older ones only after `openclaw doctor` has migrated them with the gateway stopped (the `state-migrate` oneshot). A marker (`/data/.startos/openclaw-doctor-version`) is written only on success; a failure is logged and retried at the next start and never blocks it. If vector memory search is paused afterwards, the main agent's memory index is rebuilt (this needs a reachable embedding provider; without one, keyword search still works).
+
 ## Image and Container Runtime
 
-One image, built here.
-
-| Property      | Value                               |
-| ------------- | ----------------------------------- |
-| Image         | Built from this repo's `Dockerfile` |
-| Architectures | x86_64, aarch64                     |
-| Command       | The gateway, bound to the LAN       |
+One image, built from this repo's `Dockerfile`, for x86_64 and aarch64. Node and OpenClaw are pinned to exact releases; `UPDATING.md` lists every pinned piece and how to move it.
 
 | Subcontainer   | Purpose                                                            |
 | -------------- | ------------------------------------------------------------------ |
-| `openclaw-sub` | The gateway, the webchat and the oneshots — the one to `attach` to |
+| `openclaw-sub` | The gateway, the webchat, the isolated services and the oneshots — the one to `attach` to |
 | `qdrant-sub`   | Qdrant, from the official image                                    |
 
-**The image also installs `start-cli`**, pinned to a version by a build argument. That binary is what lets the agent administer the server when you grant it access, and it is why the container needs StartOS's root certificate. It also carries the skills (`/opt/skills`), the GitHub CLI, `rbw`, Python libraries for the skills (`/opt/python-libs`, hash-pinned in `skills/requirements.txt`) and Tesseract for OCR.
+**The image also installs `start-cli`**, pinned to the release that matches the package's minimum StartOS (so it works on every supported server; `UPDATING.md`, "Compatibility"). That binary is what lets the agent administer the server when you grant it access, and it is why the container needs StartOS's root certificate. The image also carries the skills (`/opt/skills`), the GitHub CLI, `rbw`, `gog`, Python libraries for the skills (`/opt/python-libs`, hash-pinned in `skills/requirements.txt`), Tesseract for OCR, and the isolated services (`/opt/openclaw-*`).
 
-Daemons: `14-qdrant`, `vault-service` (the vault, below; always running), `11-gateway` (the gateway; `primary` until :39), `12-webchat` while it is enabled, `mail-front` + `mail` (the mail service, below) while Configure Email uses Gmail or IMAP, and `calendar-front` + `calendar` (the calendar service) while Configure Calendar is on. Every health check runs through `startos/stopLog.ts`, which logs `[stop]` lines in the package log when a stop begins: which checks are mid-run, every 15 s which are still running, and when each finishes (for updates that stall at 80% with the old version never stopping). It also limits every run: one that has not answered in 120 s, or 20 s after a stop began, counts as a failure and is let go (`[stop-log] check … let go`), because the SDK's `exec` waits for the subcontainer before its own timeout starts and that wait has no limit; on the box `ext-gitea` and `ext-ollama` hung there for 6 hours and held up an update.
+**Users.** The gateway, the webchat and every agent run as `node` (HOME `/data`). The isolated services each run as their own user with a fixed number: `openclaw-mail` 999, `openclaw-calendar` 998, `openclaw-vault` 997, `openclaw-contacts` 995 (the Dockerfile checks them). A new service gets the next free number; numbers are never changed or reused, because the services' files on the volume carry them.
 
-Six oneshots run before the gateway, and two after it (`check-login`, which raised the Login to StartOS task at every start while start-cli was signed out, was removed in :40):
+**Daemons.** `14-qdrant`; `vault-service` (always); `11-gateway`; `12-webchat` while enabled; `mail-front` + `mail` while Configure Email uses Gmail or IMAP; `calendar-front` + `calendar` while Calendar is on; `contacts-front` + `contacts` while Contacts has a source.
+
+**Health checks have a time limit.** Every check runs through `startos/stopLog.ts`: a run that has not answered in 120 s, or 20 s after a stop began, counts as a failure and is let go, because the SDK's `exec` waits for the subcontainer before its own timeout starts and that wait has no limit. It also logs `[stop]` lines in the package log when a stop begins (which checks are mid-run, every 15 s which are still running), for an update that stalls with the old version never stopping.
+
+Six oneshots run before the gateway, and two after it:
 
 | Oneshot                 | When   | Purpose                                                                                            |
 | ----------------------- | ------ | -------------------------------------------------------------------------------------------------- |
 | `install-root-ca`       | Before | Installs StartOS's root CA so the container trusts the OS                                          |
-| `chown`                 | Before | Hands everything in `/data` to the unprivileged user the gateway runs as, except `/data/.openclaw-mail`, `/data/.openclaw-calendar`, `/data/.openclaw-vault` and `/data/.openclaw-package`; `/data` itself is `root:node` 1775 (sticky) since :26, so that user cannot rename or replace the services' folders, and the service launchers refuse to start otherwise |
+| `chown`                 | Before | Hands everything in `/data` to `node`, except the services' folders (`.openclaw-mail`, `.openclaw-calendar`, `.openclaw-contacts`, `.openclaw-vault`) and `.openclaw-package`; `/data` itself is `root:node` 1775 (sticky), so `node` cannot rename or replace the services' folders, and the service launchers refuse to start otherwise |
 | `network-setup`         | Before | Writes custom host mappings to `/etc/hosts` and installs a custom CA (Configure External Services) |
 | `state-migrate`         | Before | Once per OpenClaw version: `openclaw doctor --non-interactive` to migrate the agent databases      |
 | `google-sign-in`        | Before | Google account kept in Vaultwarden: loads the OAuth client and sign-in token into gog              |
 | `git-setup`             | Before | Writes git's system config: sign-in to Gitea and its address mapping (Configure External Services) |
 | `check-simplex-plugin`  | After  | Brings the SimpleX plugin up to the pinned version                                                 |
-| `server-state-snapshot` | After  | Writes a server inventory (or, when not logged in, a health report) into `MEMORY.md`               |
+| `server-state-snapshot` | After  | Writes a server inventory (or, when not signed in, a health report) into `MEMORY.md`               |
 
-**The vault service** (since 2026.10.1:27; `startos/vaultService.ts`, `vault/`). The daemon `vault-service` runs `vault/launch.py` as root: it checks `/data/.openclaw-vault` is the package's (in the sticky `/data`, owner root or the uid main passes, never node), sets the folder to `root:openclaw-vault 0711` and its parts as in the table below, moves the master password from `.openclaw/rbw/.credentials` (where it was until :26) and removes rbw's old files there, writes rbw's config from `settings.json`, and execs `vault/broker.py` as `openclaw-vault`. The broker signs in, unlocks and syncs (`vault/start.sh`, the former setup-vault script: signs in again when Vaultwarden refuses the stored sign-in), then answers one JSON line per request on `run/vault.sock` (`vault/client.py` has the protocol: `get`, `list`, `sync`, `status`, `check`). It tells callers apart by `SO_PEERCRED`: root (the launchers, the health check) gets any item; node (every OpenClaw agent and skill, the main agent and any persona alike) gets any item that no service owns; anyone else nothing. `owners.json` lists the owned items, written by main at every start: `email` while the mail service is on, `google-calendar` (Google), `caldav` (CalDAV account) and every calendar link's item while Calendar is on, `google-contacts` while Contacts reads the Google account; it is unreadable or missing → agents get nothing. The broker resolves the name itself (exact, any case, outside folders first; else the one name containing it, as rbw does) and asks rbw by the item's id, because rbw would also match an agent's text as an id or a web address. The client checks the service's uid too. rbw's binaries are in `/usr/libexec/openclaw-vault` (root:openclaw-vault 0750); the agents' `/usr/local/bin/rbw` is `vault/rbw-agent-cli` (`get`, `list`, `sync`, `unlocked`; everything else refused), and `getcred` asks through `vault-client`. Each request is logged (item, field, caller; never a value) to `state/activity.jsonl`, shown in Agent Activity. The Vaultwarden address and email come only from the package's `settings.json`, never from a file an agent can change, so an agent cannot point the sign-in at a server of its own; that is also why Configure External Services' file moved to the root-only `.openclaw-package/`.
-
-**The first start after an OpenClaw update takes 1–2 minutes longer**, once: newer OpenClaw releases refuse to open agent databases written by older ones until `doctor` has migrated them with the gateway stopped. A marker (`/data/.startos/openclaw-doctor-version`) is written only on success; a failure is logged and retried at the next start and never blocks it.
-
-**The gateway starts unconfigured on purpose.** It is launched with the flag that allows that, so the interface comes up and shows you what is missing rather than refusing to start.
+**The gateway starts unconfigured on purpose.** It is launched with `--allow-unconfigured`, so the interface comes up and shows you what is missing rather than refusing to start.
 
 ## Volume and Data Layout
 
@@ -99,57 +106,50 @@ Two volumes.
 | `main`   | `/data`           | The agent's entire home     |
 | `qdrant` | `/qdrant/storage` | Qdrant's vector collections |
 
-| Path                               | Written by  | Holds                                                    |
+| Path (under `/data`)               | Written by  | Holds                                                    |
 | ---------------------------------- | ----------- | -------------------------------------------------------- |
-| `.openclaw/openclaw.json`          | Actions     | The gateway and agent configuration                      |
+| `.openclaw/openclaw.json`          | Actions and OpenClaw | The gateway and agent configuration             |
 | `.openclaw/workspace/`             | Both        | The agent's identity, memory, and files                  |
-| `.openclaw/agents/<id>/`           | OpenClaw    | Per-agent state database (sessions, auth, memory index)  |
-| `.openclaw-package/external-services.json` | An action | Configure External Services settings; root only (0600, since :27; in `.openclaw/` before, where agents could change them) |
-| `.openclaw-mail/settings.json`     | An action   | Configure Email settings; root only (0600)               |
-| `.openclaw-mail/rules.json`        | An action   | Sending rules (from Configure Email); the service reads them |
-| `.openclaw-mail/decisions/`        | An action   | Review Agent Actions decisions (root writes, service reads) |
-| `.openclaw-mail/state/`            | Mail service| Activity log (no bodies), refused-password fingerprint, approval queue, send counts |
-| `.openclaw/workspace/mail-inbox/`  | Mail service| Attachments released from trusted, verified senders      |
-| `.openclaw/workspace/mail-outbox/` | Main agent  | Files to attach to outgoing drafts (service reads them)  |
-| `.openclaw/workspace/workspaces/email/` | Package | The email agent's `AGENTS.md` (rewritten), `SOUL.md`, `IDENTITY.md` |
-| `.openclaw-calendar/settings.json` | An action   | Configure Calendar settings, including a pasted Google sign-in; root only (0600) |
-| `.openclaw-calendar/state/`        | Calendar service | Activity log (no event text), refused-sign-in fingerprint, own calendar id, approval queue, write counts |
-| `.openclaw-calendar/decisions/`    | An action   | Review Agent Actions decisions for calendar requests (root writes, service reads) |
-| `.openclaw/workspace/workspaces/calendar/` | Package | The calendar agent's `AGENTS.md` (rewritten), `SOUL.md`, `IDENTITY.md` |
-| `.openclaw-vault/`                 | The package and the vault service | `settings.json` (Vaultwarden address and email, root 0600), `owners.json` (items a service owns, root 0644), `credentials` (the master password, `openclaw-vault` 0600), `rbw/` (rbw's settings, local vault copy and agent socket), `state/activity.jsonl`, `run/vault.sock`; the folder is root 0711 (since :27; `.openclaw/rbw/` before, readable by every agent) |
+| `.openclaw/workspace/workspaces/<agent>/` | Package | The isolated agents' `AGENTS.md` (rewritten every start), `SOUL.md`, `IDENTITY.md` (created once, then yours) |
+| `.openclaw/workspace/mail-inbox/`, `mail-outbox/` | Mail service / agents | Attachments released from trusted, verified senders; files to attach to drafts |
+| `.openclaw/workspace/contacts-import/` | You     | A `.vcf` to import into the contacts service             |
+| `.openclaw/agents/<id>/agent/openclaw-agent.sqlite` | OpenClaw | Per-agent state (sessions, transcripts, memory index) |
+| `.openclaw/state/openclaw.sqlite`  | OpenClaw    | Gateway state, including scheduled jobs                  |
 | `.openclaw/webchat/`               | Both        | Webchat profiles, its state and file hand-offs           |
+| `.openclaw-package/`               | The package | Root-only settings the package trusts: `external-services.json`, `usage.json` (Spending Alert), `agent-actions.json` (how many items wait) |
+| `.openclaw-mail/`                  | Package and mail service | `settings.json` (root 0600), `rules.json` (sending rules), `decisions/` (your approvals), `state/` (activity log without bodies, approval queue, send counts, refused-password fingerprint) |
+| `.openclaw-calendar/`              | Package and calendar service | The same layout for the calendar: settings (with a pasted sign-in), decisions, `state/` (activity log without event text, own calendar id, queue, write counts) |
+| `.openclaw-contacts/`              | Package and contacts service | `settings.json`, `contacts.vcf` (an imported file), `state/` |
+| `.openclaw-vault/`                 | Package and vault service | `settings.json` (Vaultwarden address and email, root 0600), `owners.json` (items a service owns), `credentials` (the master password, `openclaw-vault` 0600), `rbw/`, `state/activity.jsonl`, `run/vault.sock`; the folder is root 0711 |
 | `.startos/auth-profiles.json`      | An action   | Provider API keys                                        |
-| `.startos/embeddings.json`         | An action   | Memory-embeddings provider choice                        |
-| `.startos/config.yaml`             | The package | Where `start-cli` points                                 |
-| `.startos/openclaw-doctor-version` | The package | Last OpenClaw version `state-migrate` ran for            |
+| `.startos/embeddings.json`, `apps-agent.json` | Actions | Memory-embeddings choice; Configure Apps Agent     |
+| `.startos/config.yaml`             | The package | Where `start-cli` points (rewritten every start with the server's current address) |
+| `.startos/gateway-secrets.env`     | The package | The gateway's secrets (0600), sourced by its start command |
 | `simplex.json`                     | An action   | Whether SimpleX file exchange is on                      |
 
 **`SOUL.md`, `IDENTITY.md` and `MEMORY.md` are seeded once** from the image when missing, and then belong to you: updates never replace them (they may live in your own git repository).
 
-**Every start rewrites one section of `MEMORY.md`** (`## Server State Snapshot`) with `refresh-snapshot`: when `start-cli` is logged in, the server's metrics, packages, notifications, gateways, disks and backup targets; otherwise the health report. It is how the agent knows what it is running on — and it means the memory file can contain an inventory of your server. **A daily heartbeat runs the same command.** Its instructions are the heartbeat prompt in the configuration (`agents.defaults.heartbeat`), rewritten by init on every install and update and delivered nowhere (`target: none`).
+**Every start rewrites one section of `MEMORY.md`** (`## Server State Snapshot`) with `refresh-snapshot`: when `start-cli` is signed in, the server's metrics, packages, notifications, gateways, disks and backup targets; otherwise the health report. It is how the agent knows what it is running on — and it means the memory file can contain an inventory of your server. **A daily heartbeat runs the same command.** Its instructions are the heartbeat prompt in the configuration (`agents.defaults.heartbeat`), rewritten by init on every install and update and delivered nowhere (`target: none`).
 
 ## File Models
-
-Eight models, each owning a different boundary.
 
 | File                     | Format | Written by                         |
 | ------------------------ | ------ | ---------------------------------- |
 | `openclaw.json`          | JSON   | Actions, init, and OpenClaw itself |
-| `auth-profiles.json`     | JSON   | Configure AI Provider              |
-| `embeddings.json`        | JSON   | Configure AI Provider              |
+| `auth-profiles.json`, `embeddings.json` | JSON | Configure AI Provider    |
 | `external-services.json` | JSON   | Configure External Services        |
-| `.openclaw-mail/settings.json` | JSON | Configure Email; init (moves the old `email` section here) |
+| `.openclaw-mail/settings.json`, `.openclaw-calendar/settings.json`, `.openclaw-contacts/settings.json` | JSON | Configure Email, Calendar, Contacts |
 | `webchat/config.json`    | JSON   | Configure Webchat                  |
 | `config.yaml`            | YAML   | `main` and init                    |
 | `simplex.json`           | JSON   | Configure SimpleX                  |
 
 **The main configuration is shared with the application, not owned by the package.** OpenClaw edits it too — changing the model from inside the chat writes to the same file — which is why the dependency declaration reads it reactively rather than trusting the action to be the only writer.
 
-Two gateway settings are **pinned** with `z.literal(true)`: the control UI being enabled, and the host-header origin fallback. The reason is structural: **StartOS fronts the gateway with its own reverse proxy on addresses that OpenClaw's origin check rejects.** With the fallback off, the interface simply refuses to connect. `main` also writes `gateway.trustedProxies` every start, set to the bridge address the proxy connects from — without it OpenClaw answers every proxied request with `403 proxy_attribution_required`. What remains in front of the gateway is its password and a one-time approval per browser — see [Network Access and Interfaces](#network-access-and-interfaces).
+Two gateway settings are **pinned** with `z.literal(true)`: the control UI being enabled, and the host-header origin fallback, because **StartOS fronts the gateway with its own reverse proxy on addresses that OpenClaw's origin check rejects**. `main` also writes `gateway.trustedProxies` every start, set to the bridge address the proxy connects from; without it OpenClaw answers every proxied request with `403 proxy_attribution_required`.
 
-**API keys are stored in one place and consumed in another.** The action writes them into the auth-profiles file; OpenClaw reads them from the environment. `main` bridges the two at start, so a key added by the action reaches the gateway on the restart that follows. Since 2026.10.1:10 the bridge is a file, not the start command: `main` writes the keys and the other service secrets to `/data/.startos/gateway-secrets.env` (0600) and the gateway's command is `sh -c '. that file; exec "$@"' openclaw gateway …` (`startos/secretEnv.ts`), because StartOS passes a daemon's environment as command-line arguments, which every process in the server can read. The `google-sign-in` oneshot starts the same way; gog's keyring password and Login to StartOS's password go in on standard input. The file is the package's, which is why it lives under `.startos/` and not in OpenClaw's agent directory: a file of that name there is a retired credential source that OpenClaw's doctor archives and that makes the gateway refuse an agent whose own credential store is empty.
+**API keys are stored in one place and consumed in another.** The action writes them into `auth-profiles.json`; OpenClaw reads them from the environment. `main` writes the keys and the other service secrets to `/data/.startos/gateway-secrets.env` (0600), and the gateway starts as `sh -c '. that file; exec "$@"' openclaw gateway …` (`startos/secretEnv.ts`), because StartOS passes a daemon's environment as command-line arguments, which every process on the server can read. The `google-sign-in` oneshot starts the same way; gog's keyring password and Login to StartOS's password go in on standard input. The file lives under `.startos/`, not OpenClaw's agent directory: a file of that name there is a retired credential source that OpenClaw's doctor archives.
 
-The `start-cli` configuration is rewritten at every start with the server's current address, so the agent's administrative tooling follows the box rather than a value recorded at install.
+**No package write goes through a link in `node`'s folders.** A file model under `.openclaw/` or `.startos/` is wrapped in `linkSafe` (`startos/noLinks.ts`), and root steps that touch `node`'s folders work by descriptor (`agentsvc/launcher.py` `walk`/`own_dir`), so an agent cannot point a package-written file at the services' folders with a symlink.
 
 ## Dependencies
 
@@ -157,285 +157,201 @@ All optional, and **each declared only while it is selected**. (Qdrant is bundle
 
 | Dependency               | Required             | Kind      | Why                           |
 | ------------------------ | -------------------- | --------- | ----------------------------- |
-| Ollama                   | No — only if chosen  | `running` | Local inference backend       |
-| vLLM                     | No — only if chosen  | `running` | Local inference backend       |
-| llama.cpp                | No — only if chosen  | `running` | Local inference backend       |
+| Ollama, vLLM, llama.cpp  | No — only if chosen  | `running` | Local inference backend       |
 | SimpleX Websocket Bridge | No — only if enabled | `running` | Exchanging files over SimpleX |
 | Vaultwarden, n8n, Trilium, SearXNG, Crawl4AI, ntfy, Gitea | No — only while *On this server* | `running` | Configure External Services (Ollama too, besides the AI backend) |
 
-**The inference dependency follows the model you are actually using.** The declaration is derived from the primary model and its fallbacks, so selecting a local backend adds it and switching to a cloud provider drops it — including when the switch is made from inside the chat rather than through the action. Each is required to be running _and_ passing its own health check, since an unhealthy model server is the same as an absent one.
+**The inference dependency follows the model you are actually using.** The declaration is derived from the primary model and its fallbacks, so selecting a local backend adds it and switching to a cloud provider drops it — including when the switch is made from inside the chat. Each is required to be running _and_ passing its own health check. A cloud provider needs no dependency, only an API key and internet. Local backends are reached over the internal bridge, and their API key is read from the backend's own published volume.
 
-**A cloud provider needs no dependency at all**, only an API key and internet.
-
-Local backends are reached over the internal bridge, and their API key is read directly out of the backend's own published volume rather than being asked for again.
-
-SimpleX is different in kind: enabling it mounts the bridge's file-exchange directories into this container so the two can hand files to each other, and resolves the bridge's control socket over the bridge network.
+SimpleX is different in kind: enabling file exchange mounts the bridge's file-exchange directories into this container, and resolves the bridge's control socket over the bridge network.
 
 ## Network Access and Interfaces
-
-Up to two interfaces.
 
 | Interface | Id        | Type | Port  | Description                                       |
 | --------- | --------- | ---- | ----- | ------------------------------------------------- |
 | Web UI    | `ui`      | ui   | 18789 | The chat and the control panel                    |
 | Webchat   | `webchat` | ui   | 18800 | Mobile webchat; exported only while it is enabled |
 
-The Web UI is bound on the `ui-multi` MultiHost over HTTP and not masked. Qdrant (6333) is bound to the internal bridge only and never exported.
+The Web UI is bound on the `ui-multi` MultiHost over HTTP and not masked. Qdrant (6333) and the isolated services' MCP ports (18805–18807, on 127.0.0.1) are never exported.
 
-**The gateway password is the gate, and each browser is approved once.** OpenClaw's origin checking is relaxed for the reason given under [File Models](#file-models); its device pairing is not, and cannot be. A browser that passes the password is held at "Approve this browser" until the Approve Browser Pairing action admits it, and it then keeps a per-device credential until it is removed in the Web UI's device list. So anyone who can reach this address, knows the password, and can run that action has the agent — and, if StartOS access has been granted, the server. A `critical` task blocks the service from starting until that password is set, so there is no window where it is reachable without one.
+**The gateway password is the gate, and each browser is approved once.** OpenClaw's origin checking is relaxed (above); its device pairing is not, and cannot be. A browser that passes the password is held at "Approve this browser" until the Approve Browser Pairing action admits it, and then keeps a per-device credential until it is removed in the Web UI's device list. So anyone who can reach this address, knows the password, and can run that action has the agent — and, if StartOS access has been granted, the server.
 
-Outbound, the gateway talks to whichever provider is configured, to any messaging channel you connect, to the external services you enable, and — for local backends and SimpleX — to the sibling service over the internal bridge.
+**The webchat has its own gate: a PIN on every profile.** The webchat holds its own operator connection, so browser pairing does not apply to it, and it drives the main agent with all its tools. A profile without a PIN is never served; PINs are 6–12 digits. Wrong PINs lock an address for 5 minutes and up, and a profile for 15 minutes after 20 in 10 minutes; a profile lock, or a second lock of one address, is pushed to the owner through ntfy when it is set up. The client address is the last `X-Forwarded-For` entry. Profiles separate conversations, not permissions: every profile has the same agent.
 
-**The webchat has its own gate: a PIN on every profile** (since 2026.10.1:26). The webchat holds its own operator connection, so browser pairing does not apply to it, and it drives the main agent with all its tools. A profile without a PIN is never served (it shows how to set one); Configure Webchat refuses to save one; new PINs are 6–12 digits. Wrong PINs lock an address for 5 minutes and up, and a profile for 15 minutes after 20 in 10 minutes; a profile lock, or a second lock of one address, is pushed to the owner through ntfy when it is set up. Profiles separate conversations, not permissions: every profile has the same agent.
+Outbound, the gateway talks to whichever provider is configured, to any messaging channel you connect, to the external services you enable, and to sibling services over the internal bridge.
 
-## Installation and First-Run Flow
+## First Run
 
-Install creates the agent's directory structure, seeds its workspace from the image, points `start-cli` at the server, and pins the gateway settings. It then raises **two `critical` tasks**: set a gateway password, and configure an AI provider. Nothing in Configure External Services is required: with none of it set up, the agent still has the pdf, health, qdrant, agents and start-cli skills.
+Install creates the agent's directory structure, seeds its workspace from the image, points `start-cli` at the server, and pins the gateway settings. It then raises **two `critical` tasks**: set a gateway password, and configure an AI provider. `critical` blocks startup, so there is no window where the gateway is reachable without a password. Nothing else is required: with no external services, email or calendar set up, the agent still has the pdf, health, qdrant, agents and start-cli skills.
 
 The first visit to the Web UI from any browser ends at "Approve this browser" after the password; running **Approve Browser Pairing** admits it and the page connects on its own.
 
-**Neither can be skipped** — `critical` blocks startup, and an agent with no model and no password is not a usable state.
+**Granting StartOS access is opt-in and never asked for.** No task raises it; the action is under Maintenance, and the Server Access health line shows the current state — see Login to StartOS below before running it.
 
-Once running, the gateway comes up on its interface and two more things happen automatically: it checks whether `start-cli` is authenticated and raises a task if not, and it writes the server snapshot into the agent's memory.
+## The Isolated Services
 
-**Granting StartOS access is opt-in and deliberately not a critical task.** It is offered only after the gateway is up and only because the agent could not authenticate — see the action below before running it.
+Mail, invitations and contact notes are written by strangers and can try to instruct whatever AI reads them. So the package keeps them away from the main agent: each app is a service of its own, run as its own user, the only holder of its password or sign-in, reached by one agent that has that service's tools and nothing else. The services enforce the owner's rules themselves; the agents' instructions are a second layer, not the guard.
 
-**Updating migrates OpenClaw's state** through the `state-migrate` oneshot (above), before the gateway starts. If vector memory search is paused afterwards, it also rebuilds the main agent's memory index (this needs a reachable embedding provider; without one, keyword memory search still works). The Repair OpenClaw action is the manual route for anything doctor cannot fix on its own. **Make a StartOS backup before updating**: the migration cannot be undone.
+```
+main agent ──sessions_send──▶ apps agent ──sessions_send──▶ email / calendar / contacts agent ──MCP──▶ service ──▶ mailbox, calendar, address book
+```
+
+**Shared structure** (`agentsvc/`). Each service has two daemons. The **front** (`front.py` on `agentsvc/frontdoor.py`) is the MCP endpoint on `127.0.0.1` (mail 18805, calendar 18806, contacts 18807): no settings, no secrets, never restarted with the worker (OpenClaw stops using an MCP server for minutes after a failed connection); it answers the handshake and tool list itself and passes tool calls to the worker over a Unix socket only the service user can open, and while the worker is away a call gets "reloading or starting" as an ordinary tool error. The **worker** starts as root in `launch.py` (shared steps in `agentsvc/launcher.py`): it checks the service's folder belongs to the package (owner root or the uid `main` passes, never `node`), sets its modes (`root:<service> 0710`, `state/` `<service> 0700`), fetches the secret from the vault service as root, opens any workspace folder it needs component by component without following links and passes it as a descriptor, then drops to the service user and execs the worker with settings and secret on standard input. No password file, nothing privileged left running. Each worker allows 120 tool calls a minute and keeps an activity log without message or event text.
+
+**Agent-facing text from outsiders** (mail bodies, event descriptions, contact notes) is converted to plain text with hidden text removed (display:none, zero size or opacity, text coloured like its background, `hidden`, mso-hide), invisible characters stripped, nothing fetched, size-capped, and wrapped in randomly tagged `UNTRUSTED` markers. The tools set flags the agents must copy and never drop: `injection_suspected`, `financial_or_credential_request`, `hidden_text_removed`, `hidden_injection` (the removed text tries to instruct an AI), `links_present`, `attachments_present`.
+
+**A refused password or sign-in is never sent again.** The worker records a salted fingerprint of it and exits; the launcher fetches the secret again, and the service signs in only with a different one. It checks again every 10 minutes. The health line says so, one notification and one ntfy message are sent, and a fix-it task opens the right form (see Tasks). An unreachable server is retried and raises no task.
+
+**The agents.** `agents.entries.email`, `.calendar`, `.contacts` and `.apps` are rewritten at every start (`startos/isolatedAgents.ts`): tools profile `full` with `allow` only for their own tools (`mail__*`, `calendar__*`, `contacts__*`; the apps agent: `sessions_send`), a deny list of every other tool group plus `gateway`, `cron`, `openclaw`, `browser`, `transcripts`, `tts`; code mode and elevated off; no skills; they spawn nobody and nobody spawns them (a spawned agent inherits its spawner's denied tools). Every other agent has `mail__*`, `calendar__*` and `contacts__*` denied. They are not rows in Configure Agents, and Configure Agents and the `agents` skill refuse to change them or give anyone their tools. With these agents present, `agents.defaults.systemAgent.agentId` and `heartbeat.agentId` are `main` and `agents.ownership` is `explicit` where unset.
+
+**The apps agent** (`startos/appsAgent.ts`, `startos/appsAgentFiles.ts`) exists while any of the three is set up. The main agent has one skill for all of it, `apps`, and no mail, calendar or contacts tools. The apps agent passes each job to the right agent with `sessions_send` and answers `{email, calendar, contacts, notes}` with their JSON reports unchanged. OpenClaw cannot limit which agent may message which, so the path is kept by instructions: the email, calendar and contacts agents act only on requests whose first line is `[via apps]`, which only the apps agent's instructions contain, and answer anything else with an empty report. That keeps the main agent on its path; it is not a lock (the main agent has a shell), and the services' rules and approvals stay the guards. Each of these agents keeps one conversation, which the package clears (gateway `sessions.reset`) after 15 minutes without requests. Long reports: the apps agent asks for compact ones (at most 30 items) because a reply of more than about 12,000 characters can be cut off on its way to the main agent, and the `apps` skill tells the main agent to ask again for a narrower job instead of guessing the rest.
+
+**Service-to-service sockets** are abstract-namespace Unix sockets with `SO_PEERCRED` checked on both ends: `\0openclaw-mail-invite` (calendar → mail, invitations) and `\0openclaw-contacts-known` (mail and calendar → contacts, "is this address in the contacts?", yes/no only, at most 100 addresses a request and 120 requests a minute per caller).
+
+**Outgoing network from the services** (calendar links, CalDAV): the address actually connected to is checked (never loopback, link-local or other special addresses; a private LAN address only when the configured address is on the LAN, never by a redirect from outside), a hard time limit per exchange, no proxy; passwords only over HTTPS and only to the configured server's own origin.
+
+### The vault service
+
+`vault-service` (`startos/vaultService.ts`, `vault/`) runs `vault/launch.py` as root: it checks `/data/.openclaw-vault` is the package's, sets its modes, writes rbw's config from `settings.json`, and execs `vault/broker.py` as `openclaw-vault`. The broker signs in, unlocks and syncs (`vault/start.sh`; it signs in again when Vaultwarden refuses the stored sign-in), then answers one JSON line per request on `run/vault.sock` (`vault/client.py`: `get`, `list`, `sync`, `status`, `check`).
+
+- **Who gets what**, by the caller's uid (`SO_PEERCRED`): root (the launchers, the health check) any item; `node` (every agent and skill) any item no service owns; anyone else nothing. `owners.json`, written by `main` at every start, lists the owned items: `email` while the mail service is on; `google-calendar`, `caldav` and every calendar link's item while Calendar is on; `google-contacts` while Contacts reads the Google account. Missing or unreadable → agents get nothing.
+- **Never caller text to rbw.** rbw also matches ids, URLs and substrings, so the broker resolves the name itself (exact, any case, outside folders first; else the one name containing it) and asks rbw by the item's id.
+- rbw's binaries are in `/usr/libexec/openclaw-vault`; the agents' `rbw` is a read-only wrapper (`get`, `list`, `sync`, `unlocked`), and `getcred` asks through `vault-client`. Each request is logged (item, field, caller; never a value) and shown in Agent Activity.
+- The Vaultwarden address and email come only from the package's root-only `settings.json`, so an agent cannot point the sign-in at a server of its own.
+
+### The mail service
+
+Configure Email with *Gmail (app password)* or an IMAP provider (`startos/mailService.ts`, `mail/`; user `openclaw-mail`).
+
+- **Tools** (`mail__*`): `status`, `folders`, `list`, `search`, `read`, `attachments`, `attachment_text`, `save_attachments`, `mark_read`, `flag`, `move`, `archive`, `draft`, `send`. Never delete, never Trash or Spam. Reading uses `BODY.PEEK` (nothing is marked read) and returns plain text only.
+- **Sender checks** come only from the receiving server's Authentication-Results (for Gmail only `mx.google.com`'s): `from_verified`, `sender_not_verified`, warnings for Reply-To/Return-Path domains and display-name spoofing; `known_contact` / `contact_not_verified` when the contacts service has the address.
+- **Attachments** stay in the mailbox; `attachment_text` extracts text (PDF, .docx, text, HTML, attached mail); `save_attachments` copies files to `workspace/mail-inbox/` only for a Trusted Sender with a verified sender.
+- **Drafts** go to Drafts with an HMAC marker header (`X-OpenClaw-Draft`) and may take attachments, an HTML body and a text body from `workspace/mail-outbox/` (read without following links; at most 10 files / 18 MB). HTML is checked by `mail/htmlout.py`: no scripts, event handlers, forms, frames, objects, `<base>`, `<meta http-equiv>`, `<link>`, CSS imports, escapes or outside URLs, no hidden text that tries to instruct an AI, images only from mail-outbox, embedded with `cid:`.
+- **Sending** (`mail/outbox.py`) sends only marked drafts and judges every To/Cc/Bcc address: on **Never Send To** (also its `+tag` forms, Gmail's dotted and googlemail forms, a trailing dot; `@domain` blocks subdomains) → refused; a forward, any attachment, HTML, too many recipients, or the hourly/daily limit reached → waits for approval; all on **Send Automatically To** (plus the Trusted Senders, while that switch is on) → sent; otherwise **Anyone Else** (`ask`, `block` or `auto`). Sending is SMTP with the same password, exactly to the judged recipients (Bcc stripped from the sent copy); then the draft is removed and, except for Gmail, a copy goes to Sent.
+- **Routine mailings** (`rules.json` `mailings`): exact recipients, a subject prefix, at most N per calendar month (UTC), allowed attachment types and link domains. A draft that matches, after an earlier issue with the same recipients and prefix was sent, is sent without asking and announced (notification + ntfy). "Approve, and make this a routine mailing" in Review Agent Actions creates one from a waiting item.
+- **Waiting items** are kept with their exact bytes in `state/queue/`; Review Agent Actions writes the decision as root (`agentsvc/agentctl.py decide`) to `decisions/`; the worker re-checks Never Send To and that the draft is unchanged, then sends (3 attempts, 5 and 10 minutes apart). Undecided items expire after 5 days, with a reminder 24 hours before.
+- **Invitations by mail** (`mail/invite.py`): from the calendar service only, as marked drafts judged like any mail; replies to them are moved to a "Calendar Replies" folder.
+
+*Google account* mode uses `gog` and is **not isolated**: the main agent uses it directly (Gmail, Calendar, Drive). The sign-in is fetched from Vaultwarden item `google` (fields `client_json`, `token_json`) by the `google-sign-in` oneshot, or pasted once; gog keeps it in an encrypted file keyring under `/data/.openclaw/gog`. OpenClaw's own `himalaya` and `gog` skills and its built-in mail watching stay off.
+
+### The calendar service
+
+Configure Calendar (`startos/calendarService.ts`, `gcalendar/`; user `openclaw-calendar`). Sources: secret **calendar links** (iCal addresses), a **Google** account, or a **CalDAV** account; any of them with links.
+
+- **Tools** (`calendar__*`): `status`, `calendars`, `list` (default the next 7 days, recurring events expanded, at most 100, range at most 400 days), `search` (30 days back to 210 ahead), `read` (the description with hidden text removed, untrusted-wrapped); in write and invitation modes also `create_event`, `change_event`, `cancel_event`. Times in the owner's time zone.
+- **One copy per event.** When a link and an account calendar show the same calendar, `list` and `search` keep the account's copy (same iCal UID and start) and name the links in `also_in`.
+- **Google** (`gcalendar/gapi.py`): the sign-in is the one-line JSON printed by `tools/google-signin.py` (loopback OAuth with PKCE against a *Desktop app* client in your own Google Cloud project), from Vaultwarden item `google-calendar` (hidden field `token`) or pasted. Read mode needs `calendar.readonly`; write mode also `calendar.app.created`, under which Google refuses any write outside calendars this client created. The worker keeps access tokens in memory only. The health line warns when the sign-in allows more than it needs.
+- **Calendar links** (`gcalendar/links.py`, `gcalendar/ical.py`): name + secret address (pasted, or Vaultwarden field `url`), read only, fetched at most every 5 minutes, 30 s and 16 MB per fetch, `webcal://` read as `https://`, a failed fetch keeps the last good copy and says so. The address never leaves the worker's memory: answers and logs carry only the name and the id `link:<name>`. `ical.py` parses RFC 5545 and expands recurrence in the event's own zone (all common RRULE parts, RDATE, EXDATE, changed and cancelled instances, IANA and common Windows zone names), with a budget of 1,000,000 candidate times per query.
+- **CalDAV** (`gcalendar/caldav.py`, `gcalendar/davwrites.py`): password from Vaultwarden item `caldav` or pasted. The server comes from the Server field, else from the account address (iCloud, Fastmail and Yahoo by name; Google and Microsoft refused with the reason; otherwise `/.well-known/caldav` on the domain or `caldav.<domain>`). Calendars are read whole by REPORT, at most every 2 minutes and only when `getctag`/`sync-token` changed. HTTPS only, no automatic redirects, DOCTYPE/ENTITY answers refused, 2 MB per XML answer and 16 MB per calendar; a 401 is a refused password (above). In write mode the own calendar is made with MKCALENDAR (else a writable calendar named like Own Calendar Name); events are `<32 hex>.ics` in UTC, written with `If-None-Match`/`If-Match`, so nothing is ever overwritten; guests only when the server schedules invitations itself. **Look Up Calendar Server** tries the lookup and sign-in without saving anything. Tested against Radicale and a hostile test server, not yet against a real provider.
+- **Writes** (`gcalendar/writes.py`) only on the own calendar (**Own Calendar Name**, made by the service; recreated if deleted). Guests only from the allowed list (Trusted Organizers plus, while that switch is on, Configure Email's Trusted Senders; the switch's footnote shows the merged list as saved); anything touching guests waits for approval (Google then sends the invitations), and **Hold Every New Event for My Approval** holds every write. At most 10 guests and 30 writes a day; not in the past, at most 2 years ahead. Waiting items expire after 5 days or once the event has started.
+- **Invitations by mail** (*Read + invitations by mail*, no calendar account; `gcalendar/invites.py`): RFC 5545/5546 invitations (REQUEST, CANCEL) built and sent by the mail service under its rules, so Configure Email must be set to send by rules (the choice is greyed out with the reason until it is). The same guest rules apply; at least one guest.
+- **Organizer flags:** `organizer_self` (the account itself, or a calendar it owns), `organizer_is_calendar` (made on a shared calendar by its owner), `organizer_trusted`, `known_contact`, `external_organizer`, `organizer_unverifiable` (came by an emailed invitation, so the organizer is only what it claims), `contact_not_verified`, `from_gmail`, `creator_differs`, `from_link`, `no_organizer`. Never "verified": Calendar has no such check.
+
+### The contacts service
+
+Configure Contacts (`startos/contactsService.ts`, `gcontacts/`; user `openclaw-contacts`), read only.
+
+- **Sources:** a **vCard file** (put a `.vcf` in the workspace folder `contacts-import`; root imports it as `contacts.vcf` and removes the workspace copy unless kept; vCard 2.1, 3.0 and 4.0), or the assistant's **Google account** through the People API (`people/me/connections`, your real contacts only, not "Other contacts"), with its own sign-in (`google-signin.py --scopes contacts.readonly`, Vaultwarden item `google-contacts` or pasted), read again every 15 minutes.
+- **Tools** (`contacts__*`): `status`, `search`, `lookup` (exact email, or phone in any format), `read` (one contact; its note untrusted-wrapped), `birthdays`. The agent passes on only the fields a job asks for. Logs hold counts only.
+- **Known contacts for mail and calendar:** the mail and calendar services ask over `\0openclaw-contacts-known` (above). Mail: a contact the receiving server verified gets `known_contact`, one it did not `contact_not_verified`. Calendar: an outside organizer in the contacts becomes `known_contact` when Google made the event, and gets `contact_not_verified` otherwise. The order the agents use is trusted, then known contact, then external. For the Google source the copy is at most 15 minutes old; an older one is refreshed before answering.
 
 ## Actions
 
-Twenty-two actions, grouped since :38 (`startos/actions/groups.ts`; StartOS shows the groups in the order of `actions/index.ts`): **Daily** (Review Agent Actions, Agent Activity, Usage and Cost, Spending Alert), **Email, Calendar, Contacts** (Configure Email, Look Up Mail Servers, Configure Calendar, Look Up Calendar Server, Configure Contacts, Configure Apps Agent), **Setup** (Set Password, Configure API Credentials, Configure Agents, Configure External Services, Approve Browser Pairing), **Channels** (Configure Webchat, Connect Telegram, Connect WhatsApp, Configure SimpleX) and **Maintenance** (Login to StartOS, Repair OpenClaw, Revoke StartOS Access). Revoke StartOS Access is never greyed out: a safety switch should not depend on a check that may be minutes old.
+Twenty-two actions in five groups (`startos/actions/groups.ts`; StartOS shows the groups in the order of `actions/index.ts`).
 
-### Set Gateway Password
+**Daily**
 
-Generates the password for the web interface and shows it once.
+- **Review Agent Actions** — what an isolated agent wanted to do that your rules hold: mail to send, calendar events with guests. One choice per waiting item, each with only the decisions that apply (mail: approve, reject, approve and always allow these recipients, approve and make this a routine mailing — the last greyed out with the reason for replies, forwards, invitations and mail without a subject; calendar: approve, reject), **no decision preselected**, the item's details in the field's footnote. Greyed out while nothing waits (`.openclaw-package/agent-actions.json`, written by the health checks). Decisions are written as root through `agentctl.py`, and the service acts within 10 s. No restart.
+- **Agent Activity** — the services' activity logs (`agentctl.py activity`, the last 500 entries of each): a form chooses the service, the period (24 hours, 7 days, 30 days, everything) and changes only. The result starts with a one-line count per service, then collapsible sections (email sending, calendar changes, contacts reads, vault refusals, everything newest first) and the whole report to copy or download. No message bodies, event text or secrets are logged.
+- **Usage and Cost** — the model cost from OpenClaw's own records (`agentctl.py usage 30`): every model call's `usage.cost.total` (provider prices) in each agent's `transcript_events`, opened read only. OpenClaw stores events of 1 KB or more zstd-compressed (`event_zstd`), with the usage only inside; `agentsvc/usagezstd.js` reads those with Node's zstd and SQLite (the image's Python has no zstd) and hands back the usage objects only; when it cannot, the report says some records could not be read. Shown: a one-line summary, then per agent (today, 7 and 30 days, calls, tokens; the package's helper agents marked), each agent's model and the form that sets it, per day for 14 days, and how often each scheduled job ran (names and schedules, never prompts). Days in Configure Calendar's time zone, else UTC.
+- **Spending Alert** — a daily limit in dollars (`.openclaw-package/usage.json`). The **Spending** health line then fails above it and sends one notification (and ntfy) that day.
 
-- **What it changes:** the password in the configuration.
-- **Cost:** the service restarts.
-- **Repeat safety:** each run generates a **new** password and invalidates the old one.
+**Email, Calendar, Contacts**
 
-### Configure AI Provider
+- **Configure Email** — the account: *Gmail (app password)*, *Other provider (find servers automatically)*, *Other IMAP/SMTP provider*, or *Google account* (gog, not isolated); the password from Vaultwarden item `email` or the form. Then the email agent's model, Trusted Senders, sending level (`off` / `drafts` / `rules`), Send Automatically To, Never Send To, Anyone Else, limits per hour, per day and per message, and routine mailings (their To and Bcc are pick lists of the addresses entered anywhere in the package, plus an "other" list). Restart.
+- **Look Up Mail Servers** — what *find servers automatically* would use, saving nothing (`startos/mailDiscovery.ts`): Thunderbird's order (the domain's autoconfig, its well-known file, the Thunderbird ISPDB, the ISPDB entry of the MX host's domain, then SRV records), HTTPS only, IMAP and SMTP with SSL or STARTTLS and password login only. Google addresses become *Gmail (app password)*; Microsoft is refused with the reason (it no longer accepts passwords).
+- **Configure Calendar** — Calendar: *Off*, *Read only*, *Read + write on its own calendar*, *Read + invitations by mail*, each choice with only its own fields; the Calendar Account (*No account (calendar links only)*, *CalDAV account*, *Google: fetch the sign-in from Vaultwarden*, *Google: paste the sign-in*); time zone; Own Calendar Name; Hold Every New Event; Also Trust Email's Trusted Senders (its footnote lists who is trusted now); Account; Calendar Links (saved addresses are never shown; blank keeps them); Trusted Organizers; the calendar agent's model and extra instructions. Restart.
+- **Look Up Calendar Server** — finds the CalDAV server for an address and tries the sign-in, saving nothing (the typed password is used once).
+- **Configure Contacts** — the source (*Off*, *vCard file*, *Google account*), the sign-in, the contacts agent's model and extra instructions. Restart.
+- **Configure Apps Agent** — the apps agent's name, model and extra instructions (`.startos/apps-agent.json`). A persona goes in its own `SOUL.md`/`IDENTITY.md`; its reports stay JSON. Restart.
 
-Chooses the backend — a cloud provider with an API key, or a local model server — plus the model and an optional fallback.
+**Setup**
 
-- **What it changes:** the API key in the auth-profiles file, the model selection in the configuration, and for a local backend, a provider entry pointing at that service's endpoint on the internal bridge.
-- **Cost:** the service restarts, and the dependency set changes to match.
-- **Repeat safety:** idempotent, pre-filled with the current selection.
-- **Choosing a local backend makes that package a required dependency**; choosing a cloud provider removes it.
-- **Memory Embeddings** chooses the provider for the agent's vector memory search (an Ollama server, OpenAI or Gemini). Left unset, OpenClaw falls back to keyword search.
-- **Local Chat Models for Agents** offers the tool-capable models on an Ollama server to helper agents.
+- **Set Password** (Reset Password once set) — generates the web interface password and shows it once; each run makes a new one. Restart.
+- **Configure AI Provider** — a cloud provider with an API key, or a local model server, plus the model and an optional fallback; **Memory Embeddings** (an Ollama server, OpenAI or Gemini; unset: keyword search); **Local Chat Models for Agents** (the tool-capable models on an Ollama server, offered to helper agents). A local backend becomes a required dependency. Restart.
+- **Configure Agents** — the helper agents the main agent can spawn: model, tool profile, extra and blocked tools, skills, who may start them; the agent can do the same with its `agents` skill. Also **Self-learning**: OpenClaw's `skills.workshop.autonomous.mode`, *Propose, I approve* (recommended), *Automatic* (OpenClaw's default) or *Off*; skills in the workspace's `skills/` folder take precedence over Workshop skills and are never changed by it. No restart. OpenClaw cuts a spawned agent's final reply to 4,096 characters, so agents with long results should write them to a file.
+- **Configure External Services** — Vaultwarden, Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy and Gitea, each optional, each with its skill and a health check; host mappings (StartOS never resolves `.local` names inside a service) and a custom CA. Most services offer *On this server* (installed on this StartOS: found over the internal network at every start by `startos/localServices.ts`, declared as a dependency, only credentials asked for) or *At an address*. Credentials can come from Vaultwarden once it is set up. **Gitea and git** (`startos/gitea.ts`): the `git-setup` oneshot writes git's system config so every push and pull signs in with the token (`git-credential-openclaw`, never stored by git), remotes written as `gitea:OWNER/REPO.git` always mean Gitea's current address, and Gitea's published addresses are mapped to the bridge; `gitea.py check [--fix]` reports and repairs remotes. Restart.
+- **Approve Browser Pairing** — admits every browser waiting at "Approve this browser"; run it right after your own login attempt. Needs the service running.
 
-### Configure Agents
+**Channels**
 
-Adds, changes or removes the helper agents the main agent can spawn: model (cloud, or a model on your Ollama server), tool profile, skills, and who may start them. The agent can do the same through its `agents` skill. A spawned agent sees only its own `AGENTS.md`.
+- **Configure Webchat** — on or off, one profile per person (name, color, greeting, preset conversations, PIN). Restart; the Webchat interface appears or disappears.
+- **Connect Telegram** — a bot token and who may direct-message the agent.
+- **Connect WhatsApp** — a DM policy and an allow-list of numbers; pairing happens against the running gateway.
+- **Configure SimpleX** — the channel, its DM policy, and file exchange with the bridge (mounts its directories). It also repairs the plugin's enablement and allow-list when the installed plugin is already current.
 
-- **Cost:** none; changes apply without a restart.
-- **Note:** OpenClaw cuts a spawned agent's final reply to 4,096 characters. Agents that produce long results should write them to a file and reply with the path (the starter `AGENTS.md` says so).
+**Maintenance**
 
-### Configure External Services
-
-Connects the agent to self-hosted tools, each optional and independent: Vaultwarden (through the built-in `rbw` client; other services can then fetch their credentials from it), Ollama, an SMB NAS, n8n, Trilium, SearXNG, Crawl4AI, ntfy and Gitea. Also: custom host mappings (StartOS never resolves `.local` names inside a service) and a custom CA certificate for internal HTTPS.
-
-- **What it changes:** `external-services.json`; each enabled service loads its skill and gets a health check.
-- **On this server / At an address** (Vaultwarden, Ollama, n8n, Trilium, SearXNG, Crawl4AI, ntfy, Gitea): *On this server* stores `location: "local"`; at every start `startos/localServices.ts` asks StartOS for the service's bridge address (`sdk.host.getBridgeAddress`, plain HTTP inside the server) from one table of package id, host id and port, and puts it in `url`, so the skill environment, rbw's `base_url` and the health checks need nothing else. The service becomes an optional dependency (`kind: running`) only while chosen. Not installed → the health check says so. Older settings have no `location` and stay *At an address*; the stored URL is kept while *On this server* is chosen. rbw keys its local vault copy by server URL, so a new address simply signs in again. Adding a service = one table row (a `urlSuffix` for a path the URL carries: Trilium's `/etapi`).
-- **Gitea and git** (`startos/gitea.ts`): besides `GITEA_URL` and the token for the `gitea` skill, the `git-setup` oneshot writes git's *system* config (`/etc/gitconfig` in the container, rewritten at every start, so `~/.gitconfig` stays the user's): `credential.<Gitea URL>.helper` → `/usr/local/bin/git-credential-openclaw`, which asks `getcred GITEA_KEY` at every push/pull (Gitea signs in as the token's owner whatever the username; git never stores it), and, *On this server*, `url.<bridge>.insteadOf` for every address Gitea publishes for its `http` interface (`sdk.host.get` on Gitea's `main` host, `nonLocal` URLs), so remotes using them reach it over the bridge; and, in both modes, `url.<Gitea URL>.insteadOf gitea:`, the placeholder new remotes are written with (`gitea:OWNER/REPO.git`), which always means Gitea's current address. Gitea builds API clone and web URLs from the address a request arrived at (`PUBLIC_URL_DETECTION = auto`), i.e. the bridge, so `gitea.py` never uses them as remotes; for links shown to people the package passes `GITEA_WEB_URL`, the best published address (https, then domain > LAN IPv4 > `.local`). `gitea.py check [--fix]` reports the set-up, strips tokens written into Gitea remote URLs and changes bridge-address remotes to `gitea:`.
-- **Cost:** the service restarts.
-
-### Configure Email
-
-The mailbox and the email agent (`startos/actions/configureEmail.ts`, `startos/mailService.ts`, `mail/`). Until 2026.10.1:7 the account was the Email section of Configure External Services; init moves it (`initEmailSettings`) and removes it from `external-services.json`, where a manual password was readable by agents.
-
-- **What it changes:** `/data/.openclaw-mail/settings.json` (root, 0600, in a folder the gateway user cannot enter). **Cost:** the service restarts.
-- **Account:** *Gmail (app password)*, *Other provider (find servers automatically)* (since :35), *Other IMAP/SMTP provider*, or *Google account*. *Find servers automatically* (`startos/mailDiscovery.ts`, used by the save step and by the **Look Up Mail Servers** action, which saves nothing) looks up IMAP and SMTP in Thunderbird's order, HTTPS only: `https://autoconfig.<domain>/mail/config-v1.1.xml?emailaddress=…`, `https://<domain>/.well-known/autoconfig/mail/config-v1.1.xml`, the ISPDB (`https://autoconfig.thunderbird.net/v1.1/<domain>`, without the address), the ISPDB entry of the first MX host's organisational domain, then RFC 6186 SRV (`_imaps`/`_imap`, `_submissions`/`_submission`). It takes only IMAP and SMTP servers with SSL or STARTTLS and `password-cleartext` (the service logs in with LOGIN/PLAIN inside TLS; `password-encrypted` alone is CRAM-MD5), SSL/TLS first and SMTP 465 before 587, with `%EMAILADDRESS%`/`%EMAILLOCALPART%`/`%EMAILDOMAIN%` filled in and hostnames checked. Google addresses, a config naming `imap.gmail.com` or an MX at google.com are saved as *Gmail (app password)*; Microsoft (outlook/hotmail/live/msn domains, `*.outlook.com`/`*.office365.com` hosts or MX) are refused with the reason (they no longer accept passwords); a config that offers only OAuth2 does not end the search (since :36: Fastmail's own autoconfig names only OAuth2, its directory entry the app-password login), and is reported only when no source offers a password login. What was found is saved as *Other IMAP/SMTP provider* (the form shows it next time); nothing found stops the save with where it looked. 8 s per request, 256 KB per file; the password is never used. The password is Vaultwarden item `email` (its login password) or entered in the form.
-- **Email agent:** its model ("Same as the main agent" by default), Trusted Senders, extra instructions.
-- **Sending** (since :10): level `off` (no drafts) / `drafts` (default) / `rules`; Send Automatically To (plus the Trusted Senders while *Send Automatically to Trusted Senders* is on, the default since :11) and Never Send To (addresses, or `@domain`; since :26 an address also blocks its `+tag` and, for Gmail, dotted forms, and `@domain` its subdomains: `outbox.blocked()`), Anyone Else `ask` (default) / `block` / `auto`, limits per hour, per day and recipients per message. Stored in `settings.json` → `sending` and written to `rules.json` (no secrets, group `openclaw-mail`), which the worker re-reads before every send.
-- **Gmail and IMAP — the isolated path** (design: mail is attacker-controlled input):
-  - **Mail service**, user `openclaw-mail`, two daemons. `mail-front` (`mail/front.py` on the shared `agentsvc/frontdoor.py`) is the MCP endpoint: no settings, no password, never restarted with the mailbox side, because OpenClaw stops using an MCP server for 30 s to 10 min after a failed connection; it answers the handshake and tool list itself and passes tool calls to the worker over a Unix socket in `state/` (only `openclaw-mail` can open it), and while the worker is away a call gets "mail service reloading or starting" as an ordinary tool error. `mail` is the worker: `mail/launch.py` (with the shared steps in `agentsvc/launcher.py`) runs as root: checks that `/data/.openclaw-mail` is the package's (owner root or the uid main passes, never node), sets it to `root:openclaw-mail 0710` and `state/` to `openclaw-mail 0700`, asks the vault service for item `email` as root, after a sync (or reads the manual password), opens `workspace/mail-inbox` and `workspace/mail-outbox` (each component without following links; owner node, group openclaw-mail) and passes them as inherited descriptors, because `openclaw-mail` cannot pass through `/data/.openclaw` (node's, 0700), then drops to `openclaw-mail` and execs `mail/mailservice.py` with settings and password on stdin. No password file, nothing privileged left running; node gets `Permission denied` on the service's `/proc/<pid>/environ` and memory.
-  - MCP (streamable HTTP, JSON responses, Python standard library only; protocol and HTTP in the shared `agentsvc/mcpserver.py`, the mail tools in `mail/mcp.py`) on `127.0.0.1:18805/mcp`, registered as `mcp.servers.mail` → tools `mail__*`: `status`, `folders`, `list`, `search`, `read`, `attachments`, `attachment_text`, `save_attachments`, `mark_read`, `flag`, `move`, `archive`, `draft`, `send`. Reading uses `BODY.PEEK` (nothing is marked read) and returns plain text only: HTML is converted with hidden text removed (display:none, visibility, zero size or opacity, text coloured like its background, `hidden`, mso-hide), invisible characters stripped, nothing fetched, size-capped, wrapped in randomly tagged `UNTRUSTED` markers. Each message carries the receiving server's SPF/DKIM/DMARC result (for Gmail only the `mx.google.com` Authentication-Results header counts), `from_verified`, warnings (Reply-To/Return-Path domain, display-name spoofing) and heuristic flags, set by the tool: `injection_suspected` and `financial_or_credential_request` on the visible text, `hidden_text_removed` when hidden text was removed (CSS, scripts and HTML comments are not counted), `hidden_injection` when the removed text (comments included) matches the injection patterns; the email agent copies them into its report unchanged (it may add, never drop). Calendar's `read` sets the same two hidden-text flags on an HTML description. No delete; moves to Trash/Spam are refused; drafts are appended to Drafts (with optional Bcc and attachments from `workspace/mail-outbox`, read without following links, max 10 files / 18 MB; since :21 a new message can also take `html_file` and `body_file` from mail-outbox: `mail/htmlout.py` refuses scripts, event handlers, non-web link schemes, forms, frames, objects, `<base>`, `<meta http-equiv>`, `<link>`, CSS `@import`/`url()` other than `data:` images, `srcset`, (since :26) CSS escapes, `image-set()`, `@font-face`, comments holding markup (Outlook conditional comments), links with a backslash, whitespace or user name before `@`, outside images (an `<img src>` must name a .png/.jpg/.gif/.webp file in mail-outbox, embedded as `multipart/related` with a `cid:`), and hidden text matching the injection patterns; the plain-text part is `body`/`body_file` or the HTML's visible text; only file names pass through the agents) and carry an HMAC marker header (`X-OpenClaw-Draft`, key in `state/draftkey`) naming their kind. `send(draft_id)` (`mail/outbox.py`) sends only marked drafts and judges every To/Cc/Bcc address, case-insensitively: Never Send To → refused; forward, any attachment, an HTML part (since :21), more recipients than allowed, or the hourly/daily limit reached → queued (Review Agent Actions shows an HTML mail's size, link domains (international ones in their `xn--` form), embedded images and hidden text); all on Send Automatically To → sent; otherwise Anyone Else. **Routine mailings** (since :22): `send(draft_id, mailing)` checks the draft against the owner's definition in `rules.json` (`mailings`: exact To/Cc/Bcc, subject prefix, at most N per calendar month (UTC; 30 days in :22), attachment types, optional link domains incl. subdomains, paused); everything matching (new message, HTML clean, no hidden injection, within the hourly/daily limits) and an earlier issue sent with the same recipients+prefix fingerprint (`state/sent.jsonl` records `mailing`, `fp`, `auto`) → sent without asking; anything else → queued with the reasons as the rule (never past a refusal). In Configure Email a mailing's To and Bcc are pick lists of the addresses already entered (Trusted Senders, Send Automatically To, Configure Calendar's Trusted Organizers, existing mailings' recipients; `knownAddresses()`), each with an "Other Addresses" text list; Cc is a text list. The package announces automatic sends (StartOS notification + ntfy, from `/healthz` `mailings_sent`, last 15 minutes only). "Approve and make this a routine mailing" in Review Agent Actions builds the definition from the item's `mailingSeed` (agentctl: recipients, subject, attachment types, no text), saves it, and records the decision with the mailing id (`agentctl.py decide mail ID approve MAILING`), so this issue counts as the approved first one. Sending is SMTP with the same password (Gmail `smtp.gmail.com:465`), exactly to the judged recipients (Bcc stripped from the transmitted copy, marker removed); then the draft is removed from Drafts (that UID only, after checking its Message-ID) and, except for Gmail (which files it itself), a copy is appended to Sent. Queue: `state/queue/<id>.json` with the exact bytes; the owner decides in **Review Agent Actions**, which writes `decisions/<id>.json` as root through `agentsvc/agentctl.py`; the worker polls every 10 s, re-checks Never Send To and that the draft is still in Drafts unchanged, then sends (3 attempts, 5 and 10 min apart). Undecided items expire after 5 days (3 until :20), with a reminder 24 h before. Outcomes: `state/results.jsonl` and the activity log (**Agent Activity**). Attachment files stay in the mailbox; `attachment_text` extracts text (PDF via pypdfium2, .docx, text, HTML, attached mail); `save_attachments` copies files to `workspace/mail-inbox/<date>-<subject>/` only for a Trusted Sender with a verified sender. Rate limit 120 calls a minute. Activity log (no bodies): `/data/.openclaw-mail/state/activity.jsonl`.
-  - **Password refused:** an IMAP login refused by the server (not a network error) makes the worker record a salted fingerprint of that password and exit; StartOS restarts the `mail` daemon and the launcher fetches the password again. If it is the same one, the service does not log in: it waits (state `refused`), checks Vaultwarden again every 10 minutes, and logs in only with a different password. The health line says so; one StartOS notification and one ntfy message are sent. Vaultwarden unreachable: state `unavailable`, retried every 2 minutes.
-  - **Email agent** `agents.entries.email`, rewritten at every start: `tools.profile: full` + `allow: ["mail__*"]` + a deny list of every other group (runtime, fs, web, memory, sessions, messaging, automation, ui, nodes, media, agents) and `gateway`, `cron`, `openclaw`, `browser`, `transcripts`, `tts`; `codeMode` off; `elevated` off; no skills; spawns nobody. Every other agent gets `mail__*` in its deny list. Workspace `workspace/workspaces/email`: `AGENTS.md` (package rules, report format, trusted senders, extra instructions; rewritten at every start) plus `SOUL.md`/`IDENTITY.md` (created once, or when empty; then the user's). Their text is in `startos/mailAgentFiles.ts`: main runs in the package runtime, which cannot read files in the image. With a second agent the fleet is multi-agent, so `agents.defaults.systemAgent.agentId` and `heartbeat.agentId` are set to `main` and `agents.ownership` to `explicit` where unset.
-  - **The apps agent asks the email agent with `sessions_send`** (since :20; the main agent's skill `apps` sends everything to the apps agent, below; skill `email` until :19), never `sessions_spawn`: OpenClaw passes a spawner's denied tools to the spawned child, so a spawned email agent would have no mail tools. The email agent keeps one conversation, `agent:email:main`. The package clears it (gateway `sessions.reset`, from the Mail Service health check, at most every 5 minutes) after 15 minutes without requests: the main agent cannot, because its `sessions` tool offers only `assign_owner` when the request comes from webchat or a channel. The report comes back as JSON (`messages[{id, from, from_verified, subject, date, summary, suggested_action, flags}]`, `actions_taken`, `notes`) and the skill treats it as data. Configure Agents and the `agents` skill refuse to change the email agent, to give anyone `mail__*`, or to make it spawnable.
-  - The gateway environment has no mail settings and no password pointer (only `EMAIL_MODE`, `EMAIL_ADDRESS`); himalaya is no longer in the image. Known soft spot: the MCP port is reachable from inside the container, so a deliberately misbehaving main agent with a shell could call it; the service applies its rules to every caller.
-- *Google account (Gmail, Calendar, Drive)* uses `gog`, unchanged and **not isolated**: the main agent uses it directly. The OAuth client and the sign-in token (made once with `gog auth add` on a computer with a browser, then `gog auth tokens export`) are either fetched from Vaultwarden item `google` (fields `client_json`, `token_json`) by the `google-sign-in` oneshot at every start, or pasted once. gog keeps them in an encrypted file keyring under `/data/.openclaw/gog`; the keyring password is generated once (`/data/.startos/gog-keyring-password`). Skill: `google`.
-- OpenClaw's own bundled `himalaya` and `gog` skills stay disabled (`skills.entries`), as does its built-in Gmail/IMAP watching (never configured by the package): it would feed mail to an agent outside this design.
-
-### Configure Calendar
-
-The calendars and the calendar agent (since :15, read only; writing to its own calendar since :16; calendar links since :24; `startos/actions/configureCalendar.ts`, `startos/calendarService.ts`, `gcalendar/`). Built like the mail service, on the same shared parts (`agentsvc/`).
-
-- **What it changes:** `/data/.openclaw-calendar/settings.json` (root, 0600, in a folder the gateway user cannot enter; init creates it with Calendar off). **Cost:** the service restarts.
-- **Fields:** Calendar (*Off* / *Read only* / *Read + write on its own calendar* / *Read + invitations by mail (no calendar account)*), each choice with only its own fields (since :29; the others keep their saved values as defaults): *Read only* → Calendar Account (No account (calendar links only) / CalDAV account / Google from Vaultwarden / Google pasted), Time Zone; *Read + write* → Calendar Account (CalDAV or Google), Own Calendar Name, Hold Every New Event for My Approval; *Read + invitations by mail* → Time Zone, Hold Every New Event, greyed out with the reason while Configure Email cannot send by rules. Then Also Trust Email's Trusted Senders, Account (shown in the health line), Calendar Links (name, Secret Address or Vaultwarden item; saved addresses are never shown, blank keeps them), Trusted Organizers, the calendar agent's model, extra instructions. The Google sign-in is Vaultwarden item `google-calendar`, hidden field `token`, or pasted (checked for JSON, `refresh_token`, `client_id` and a read scope; blank keeps the saved one); the CalDAV password is Vaultwarden item `caldav` or pasted.
-- **The sign-in** is the one-line JSON printed by `tools/google-signin.py` (Python standard library; loopback OAuth with PKCE against a *Desktop app* client of the owner's own Google Cloud project; scopes `openid email calendar.readonly` by default): `client_id`, `client_secret`, `refresh_token`, `account`, `scopes`. No gog. Google ends refresh tokens after 7 days while the consent screen is in *Testing*; the refused message says so.
-- **Calendar service**, user `openclaw-calendar`, two daemons. `calendar-front` (`gcalendar/front.py`) is the MCP endpoint on `127.0.0.1:18806/mcp` (`mcp.servers.calendar` → tools `calendar__*`), no secrets. `calendar` runs `gcalendar/launch.py` as root: checks `/data/.openclaw-calendar` is the package's (owner root or the uid main passes in `CALENDAR_ROOT_UID`, never node), sets it to `root:openclaw-calendar 0710` and `state/` to `openclaw-calendar 0700`, gets the sign-in (manual, or item `google-calendar`, field `token`, asked of the vault service as root after a sync), and execs `calservice.py` as `openclaw-calendar` with everything on stdin. The worker refreshes access tokens itself (memory only) and calls the Calendar API v3 with `urllib`.
-- **CalDAV account** (since :37; `gcalendar/caldav.py`, `gcalendar/davwrites.py`): Calendar Account *CalDAV account* = token source `caldav`, settings `caldav` {server, username, password {source, value}} (password: pasted, or Vaultwarden item `caldav` login password, claimed by the calendar service in owners.json and fetched as root by the launcher). The worker finds the server (RFC 6764 without SRV, which the standard library cannot resolve): the Server field, else from the Account address: iCloud `https://caldav.icloud.com/`, Fastmail `https://caldav.fastmail.com/`, Yahoo `https://caldav.calendar.yahoo.com/` by name, Google and Microsoft refused with the reason, otherwise `https://<domain>/.well-known/caldav` then `https://caldav.<domain>/.well-known/caldav` (redirects followed without the password). Then with the password: `current-user-principal`, `calendar-home-set`, `calendar-user-address-set`, `OPTIONS` for `calendar-auto-schedule`, and the home's calendars (Depth 1: resourcetype calendar, VEVENT supported, displayname, `current-user-privilege-set`; max 50; ids `dav:<name>`). iCloud's per-account host (`pNN-caldav.icloud.com`) is allowed only within the known providers' domains. Reading: each calendar is fetched whole with a `calendar-query` REPORT (VEVENT, `calendar-data` + `getetag`), at most every 2 minutes and only when `getctag`/`sync-token` changed, the resources joined into one VCALENDAR for `ical.py` (recurrence, zones, work budget, flags as for links but without `from_link`; an outside organizer is always `organizer_unverifiable`, since it came by an invitation). Network: the links' checks (peer address, LAN only when the server is there, 30 s per exchange, no proxy) plus HTTPS only, no address with a password in it, no automatic redirects (the password only goes to the server's own origin; a redirect elsewhere is refused), answers with a DOCTYPE/ENTITY refused, 2 MB per XML answer and 16 MB per calendar. A 401 marks the account refused: nothing more is sent, a salted fingerprint of user+password goes to `state/caldav_refused.json`, the service exits after 10 minutes so the launcher fetches the password again, and the same password is never sent again. Write mode (`CalDavWriter`, writes.py's rules: allowed guests, holds, 30 a day, expiry): the own calendar is made with MKCALENDAR (`openclaw-<hash>-<time>/`, kept in `state/own_caldav.json`), else a writable calendar named like Own Calendar Name; events are `<random 32 hex>.ics` with that UID, UTC times, `X-OPENCLAW:calendar-agent`; every write address must be a direct child of the own calendar; new events `If-None-Match: *`, changes and cancels `If-Match` with the ETag read when asked (also when approved days later: 412 → failed, nothing overwritten); only single events (no RRULE/overrides) can be changed. Guests only when the server announces `calendar-auto-schedule` (it then sends the invitations, ORGANIZER = the account address) and the account address is known. Health: "CalDAV account <address> at <server>: N calendars; read only / read + write". **Look Up Calendar Server** runs `caldav.py lookup` as openclaw-calendar (JSON on stdin; the typed password is used once, never saved).
-- **Calendar links** (since :24; `gcalendar/links.py`, `gcalendar/ical.py`): a list of name + secret iCal address (pasted, or fetched at start from Vaultwarden, custom field `url` of the named item, asked of the vault service as root), read only, with or without a Google sign-in (Google Sign-in *No Google account (calendar links only)* = token source `none`; write mode needs the sign-in). The worker fetches each feed when a tool needs it, at most every 5 minutes (ETag / If-Modified-Since, 30 s for the whole download however slowly the server sends (since :26), 16 MB cap, redirects only to http(s) and never from https to http, `webcal://` read as `https://`; since :26 the address actually connected to is checked: never loopback, link-local or other special addresses, private (LAN) addresses only when the link itself is on the LAN, never by a redirect from outside; no proxy); a failed fetch keeps the last good copy and says so. The address never leaves the worker's memory: tool answers, `/healthz` and the activity log carry only the link's name and its calendar id `link:<name>`. `ical.py` (standard library) parses RFC 5545 and expands recurrence in the event's own zone (FREQ DAILY/WEEKLY/MONTHLY/YEARLY with INTERVAL, COUNT, UNTIL, BYDAY with positions, BYMONTHDAY, BYMONTH, BYYEARDAY, BYSETPOS, BYHOUR, BYMINUTE, WKST; RDATE, EXDATE, changed and cancelled instances by RECURRENCE-ID; IANA and the common Windows zone names; other rules give the first time only and are reported; since :26 at most 1,000,000 candidate times per query, about 8 s, so a feed whose rules repeat absurdly often cannot hold the service for minutes, and the answer then says some times may be missing); checked against `recurring-ical-events` on Google- and Outlook-style feeds. Times without a zone are read in the owner's zone (the Google primary calendar's, else the first link's `X-WR-TIMEZONE`). Link events carry `from_link`, `no_organizer` when none is named, and `organizer_unverifiable` unless the event was made in Google (a Google feed and an `@google.com` UID); event ids are `<uid hash>_<instance>`. Without a Google account the service is `ok` while the links are configured; with one, a refused or unreachable Google stops only the Google calendars (`errors` in the answers). Health: "N of M calendar links readable", each failing link as a warning.
-- **One copy per event** (since :44): when a link and a calendar of the account (a Google share or CalDAV) show the same calendar, `list` and `search` keep the account's copy (same iCal UID and start) and name the links in `also_in`; of two links, the first one listed.
-- **Invitations by mail** (since :28; Calendar *Read + invitations by mail*, only with Google Sign-in *none*; `gcalendar/invites.py`, `mail/invite.py`): `create_event`/`change_event`/`cancel_event` send RFC 5545/5546 invitations (METHOD REQUEST/CANCEL, UTC times, VALUE=DATE all-day, own UID `inv…@openclaw`, SEQUENCE + 1 per change; guests taken off get a CANCEL) through the mail service. The calendar service sends only the event's facts over the abstract Unix socket `\0openclaw-mail-invite`; both ends check the other's uid with SO_PEERCRED (the mail service answers only `openclaw-calendar`, the client talks only to `openclaw-mail`), and the mail service enables it only while the calendar settings (root's) say `invite`. The mail service checks every value again, builds the message (text/plain + `text/calendar; method=…` + `invite.ics`), saves it as a marked draft (kind `invite`) and judges it like any mail (`_send_marked`: Never Send To, Send Automatically To, limits, Review Agent Actions; its own `invite.ics` is not counted as an attachment; *Hold Every New Event* holds it; never a routine mailing). Same guest rules as Google writes (allowed list, ≤ 10 guests, ≤ 30 changes a day, not in the past); at least one guest. `state/invitations.json` keeps what was sent (only those can be changed or cancelled; `status` lists them). The mail service files replies (METHOD REPLY for a UID it sent, from one of its guests, ≤ 512 KB, Inbox of the last 3 days, every 5 minutes) into the folder `Calendar Replies` (created if missing). Seen on the box (:29): with a Gmail organizer and a Google Calendar guest, Google records the answer inside Google Calendar and sends no REPLY mail, so the filing only acts for guests or organizers outside Google. Time Zone setting (IANA) for times without Google.
-- **Tools** : `status`, `calendars` (calendarList, plus the links), `list` (events in a range, default now + 7 days, all calendars shown in Google Calendar, recurring expanded, cancelled dropped, ≤ 100, range ≤ 400 days), `search` (`q`, default 30 days back to 210 ahead), `read` (one event: description converted from HTML with hidden text removed, location, attendee answers, attachments' names, wrapped in `UNTRUSTED CALENDAR EVENT CONTENT` markers); in write mode also `create_event`, `change_event`, `cancel_event` (below; in read mode they refuse). Times in the primary calendar's time zone (`tzdata`). Organizer flags: `organizer_self` (only on calendars the account owns, or when the account is the organizer; since :25, Google's `organizer.self` alone meant "the owner of the calendar this copy is on" and also matched shared calendars), `organizer_is_calendar` (since :25: made on a shared calendar by its owner, who is then checked against Trusted Organizers), `organizer_trusted`, `external_organizer`, `organizer_unverifiable` (iCalUID not from Google: an emailed invitation), `from_gmail`, `creator_differs` (not for events whose organizer is the calendar itself, as on the agent's own calendar, nor when the creator is the account), since :33 `known_contact` / `contact_not_verified` (see Configure Contacts); content flags as for mail (`injection_suspected` also from titles, `financial_or_credential_request`, `hidden_text_removed`, `links_present`, `attachments_present`). Rate limit 120 calls a minute. Activity log without event text.
-- **Sign-in refused** (`invalid_grant`, `invalid_client`): a salted fingerprint of the refresh token is recorded and never sent again; the worker exits every 10 minutes so the launcher fetches a new one. Google unreachable: retried every minute. The health line warns when the sign-in allows changes (`calendar`, `calendar.events` …) or lacks a read scope.
-- **Calendar agent** `agents.entries.calendar`, rewritten at every start like the email agent (`allow: ["calendar__*"]`, the email agent's deny list plus `mail__*`, code mode and elevated off, no skills, spawns nobody). Every other agent has `calendar__*` denied (`startos/isolatedAgents.ts`, shared with mail). The apps agent asks it with `sessions_send` (since :20; skill `calendar` for the main agent until :19); its conversation is cleared after 15 minutes idle, as for email.
-
-**Write mode** (since :16, *Read + write on its own calendar*; `gcalendar/writes.py`):
-
-- Needs `calendar.app.created` in the sign-in (Google then refuses, with 404, any write outside calendars this client created). At start the worker finds or creates its own calendar (**Own Calendar Name**, default "Assistant"; id kept in `state/own_calendar.json`; recreated if deleted) and every write path names that id only.
-- Tools `create_event`, `change_event` (patch; `guests` replaces the list), `cancel_event` (delete, guests told). Results carry the saved (or, while waiting, the requested) `start`, `end` and `time_zone`. Only events on the own calendar can be changed or cancelled. Events are marked `extendedProperties.private.openclaw`.
-- Guests: only the allowed list = Trusted Organizers ∪ Configure Email's Trusted Senders (switch **Also Trust Email's Trusted Senders**, default on; merged by the launcher, as root, at every start; the switch's footnote shows the merged list as saved). Anyone else: refused. At most 10 guests, 30 writes per 24 h; start not in the past, ≤ 2 years ahead.
-- Held for the owner: anything touching guests (new, changed or cancelled: `sendUpdates=all` only after approval), or every write with **Hold Every New Event for My Approval**. Queue in `state/queue/` via `agentsvc/approvals.py` with the exact Google request; decisions in `/data/.openclaw-calendar/decisions/` (root writes, `root:openclaw-calendar 0750`); polled every 10 s; on approval the guests are re-checked against the allowed list and the event's existence; expires after 5 days (3 until :20) or once the event has started. Without guests (and the switch off): done directly, `sendUpdates=none`.
-- The Calendar Service check reports its queue to the shared Review Agent Actions task and sends one notification (and ntfy) per new request, as a side job.
-
-**Apps agent** (since :20; `startos/appsAgent.ts`, `startos/appsAgentFiles.ts`, skill `skills/apps`): while mail, calendar or contacts is on, the main agent has one skill, `apps`, and asks `agents.entries.apps` with `sessions_send`; the apps agent passes each job to the email, calendar or contacts agent and answers `{email, calendar, contacts, notes}` with their JSON reports unchanged (two reports for a job the request says spans both). Its tools: `allow: ["sessions_send"]`, the service agents' deny list without `group:sessions`, plus `mail__*` and `calendar__*`; code mode and elevated off; no skills; nobody spawns it (a spawned copy has no `sessions_send`). OpenClaw 2026.10.1 cannot limit which agent may message which (`tools.agentToAgent.allow` is one gateway-wide list of participants, not pairs), so the path is kept by instructions: the email and calendar agents act only on requests whose first line is `[via apps]`, which only the apps agent's AGENTS.md contains, and answer anything else with an empty report. That keeps the main agent on its path; it is not a lock (the main agent has a shell), and the services' rules and approvals stay the guards. Workspace `workspace/workspaces/apps` (AGENTS.md rewritten every start; `SOUL.md`/`IDENTITY.md` the owner's, where a persona goes); conversation `agent:apps:main` cleared after 15 minutes idle like the others. Listed in `ISOLATED_AGENT_IDS`, so it never becomes the main agent or owns the heartbeat, and is not a row in Configure Agents (nor, since :20, are the email and calendar agents). The health skill checks its limits.
-
-### Self-learning (Configure Agents)
-
-Configure Agents (since :22) also sets OpenClaw's `skills.workshop.autonomous.mode`: **Propose, I approve** (`propose`, recommended), **Automatic** (`auto`, OpenClaw's default) or **Off**. On the box, automatic self-learning rewrote a Workshop skill mid-failure; skills in the workspace's `skills/` folder take precedence over Workshop skills and are never changed by it.
-
-### Configure Contacts
-
-Service users have fixed numbers (since :32): openclaw-mail 999, openclaw-calendar 998, openclaw-vault 997, openclaw-contacts 995 (the Dockerfile checks them); never change or reuse them. Each launcher also gives the non-root files in its own state folder back to its user at start (`launcher.own_tree`). In :31 the contacts user was created before the vault's and took 997, so the vault's files no longer counted as its own.
-
-The address book and the contacts agent (since :31, read only; `startos/actions/configureContacts.ts`, `startos/contactsService.ts`, `gcontacts/`). Built like the calendar service, on the same shared parts.
-
-- **Settings:** `/data/.openclaw-contacts/settings.json` (root, 0600; the folder root:openclaw-contacts 0710, skipped by the chown step, made with `ensurePackageDir`). **Cost:** the service restarts.
-- **Sources:** *vCard file*: a `.vcf` put in the workspace folder `contacts-import` is imported by `importvcf.py` (run as root: the folder opened component by component without following links, the file with `O_NOFOLLOW`, checked to parse, written as `contacts.vcf` root:openclaw-contacts 0640; the workspace copy removed unless kept); `gcontacts/vcard.py` reads vCard 2.1/3.0/4.0 (folding, quoted-printable, charsets, grouped properties; photos skipped). *Google account*: the assistant's own contacts through the People API (`people/me/connections` only, not Other contacts), with its own sign-in (`google-signin.py --scopes contacts.readonly`, Vaultwarden item `google-contacts` field `token`, claimed by the contacts service in `owners.json`, or pasted); read again every 15 minutes (since :34 on a timer, whether or not anyone asks; after a failed read every minute, until Google refuses the sign-in).
-- **Contacts service**, user `openclaw-contacts`, daemons `contacts-front` (MCP on `127.0.0.1:18807/mcp`, `mcp.servers.contacts` → `contacts__*`) and `contacts` (`gcontacts/launch.py` as root → `contactsservice.py`). Tools: `status`, `search` (words in names, emails, phones, organization, groups; brief entries), `lookup` (exact email or phone, any formatting), `read` (one contact; its note wrapped as untrusted content, with flags), `birthdays` (a range, default 30 days, with the age when the year is known). Rate limit 120 a minute. Activity log with counts only.
-- **Known contacts for mail and calendar** (since :33; `agentsvc/knowncontact.py`, copied into all three services): the mail and calendar services ask the contacts service whether addresses are in the contacts, over the abstract socket `\0openclaw-contacts-known` (JSON lines, at most 100 addresses a request, 120 requests a minute per caller; exact lower-case match, as `lookup`). Both ends check SO_PEERCRED: the contacts service answers only the users `openclaw-mail` and `openclaw-calendar` (ids passed by its launcher), the client talks only to `openclaw-contacts`; a process that takes the name first is refused by the clients, and the contacts service reports the check off (its `status` `known_check`, the Contacts Service line fails with "restart OpenClaw"). The answer is one yes/no per address, nothing else; the log has counts only. The mail and calendar launchers ask only while Configure Contacts has a source (`/data/.openclaw-contacts/settings.json`, the package's file; `knowncontact.contacts_on`), and their `status` shows `contactsCheck` (`off`, `answering`, or why not). For the Google source the copy is at most 15 minutes old; a check that finds it older waits up to 3 seconds for the refresh (until :34 it answered from the old copy, so a contact added since was missed while the contacts agent, moments later, found it). **Mail:** `list`, `search` (which now fetch the Authentication-Results header too, so they also give `from_verified` and `sender_not_verified`) and `read` add `known_contact` for a contact the receiving server verified, `contact_not_verified` for one it did not; trusted senders and the account itself are not asked about. **Calendar:** an `external_organizer` in the contacts becomes `known_contact` when Google made the event (no `organizer_unverifiable`, no `from_gmail`; a shared calendar's owner counts), and gets `contact_not_verified` added otherwise. Trust order in the agents' texts: trusted > known_contact > external.
-- **Contacts agent** `agents.entries.contacts`: `allow: ["contacts__*"]`, the email agent's deny list plus `mail__*`, `calendar__*`; every other agent has `contacts__*` denied (`isolatedAgents.ts`); acts only on `[via apps]` requests; told to pass on only the fields asked for. The apps agent lists it and returns its report as `contacts`.
-
-### Configure Apps Agent
-
-Name, model and extra instructions of the apps agent (`.startos/apps-agent.json`; since :20). The agent itself exists while Configure Email uses Gmail/IMAP, Configure Calendar is on or Configure Contacts has a source. A persona goes in its own `SOUL.md`/`IDENTITY.md`; its reports stay JSON.
-
-- **Cost:** restart.
-
-### Review Agent Actions
-
-Approve or reject what an isolated agent wanted to do that the owner's rules hold (`startos/actions/reviewAgentActions.ts`; *Review Outgoing Mail* until :13): mail to send, and (since :16) calendar events with guests. Each service keeps its own queue (`agentsvc/approvals.py`: `state/queue/<id>.json`, with the common fields `action`, `summary`, `details` the action shows, and the service's private ones such as the message bytes); `agentsvc/agentctl.py queue` (run as root in the gateway's container, `/opt/openclaw-services/agentctl.py`) lists every service's queue together, common fields only, and fills them in for mail queued by :13 or earlier; the decision is written with `agentctl.py decide <service> <id> approve|reject` to that service's `decisions/` (for mail `/data/.openclaw-mail/decisions/`), and the worker acts within 10 s. Since :38 the form is one choice per waiting item (a dynamic union keyed `<service>_<id>`), each with only the decisions that apply (mail: approve, reject, always allow, routine mailing, the last greyed out with the reason for replies, forwards, invitations and mail without a subject; other services: approve, reject), no decision preselected, and the item's details in the Decision field's footnote; the run step refuses anything else. The action is greyed out while `/data/.openclaw-package/agent-actions.json` (root only) says nothing waits: the health checks write the count in the same step as the task (raised before the task, lowered after it is cleared); a missing file leaves it open. *Approve and always allow* (mail only) also adds the recipients to Send Automatically To (settings and `rules.json`; no restart). The Mail Service health check reports its queue to the one shared task (replay id `agent-actions`, `startos/agentActions.ts`), raised `important` while anything waits in any service's queue and cleared when none does (the :10–:13 task `mail-queue` is cleared once per start), and sends one StartOS notification and one ntfy message per new item. Since :39 a refused sign-in also raises a fix-it task (`startos/problemTasks.ts`, `important`, replay ids `fix-mail`, `fix-calendar`, `fix-contacts`) that opens Configure Email, Configure Calendar or Configure Contacts, with the service's own reason (it says whether the new password or sign-in goes into Vaultwarden or the form): raised from each service's `/healthz` while its state is `refused` (or, for the calendar, `caldavRefused` is set: a refused CalDAV password while calendar links keep the service `ok`), raised again every 10 minutes while that lasts, left alone while the service is starting or reloading, and cleared in any other state; main clears the task of a service that is turned off. An unreachable server raises no task. Those, the refused-password notice and the idle-conversation reset run as side jobs the check never awaits (one at a time, each step time-limited, none started once the context is left): StartOS stops a service only after each health check finishes its current run, and in :10 a restart that began during a run creating the task waited on it for good (and a server reboot behind it).
-
-- **Cost:** none (no restart).
-
-### Usage and Cost, Spending Alert
-
-Since :30. **Usage and Cost** (`startos/actions/usageAndCost.ts`, `agentctl.py usage 30`): the model cost per agent (today, 7, 30 days; calls; tokens in / out / cache read / cache write; the email, calendar, contacts and apps agents marked), each agent's model and the form that sets it, per day for 14 days, and the scheduled jobs with their runs in 7 days (names, schedules, agents; never prompts). A one-line summary on top, the parts in collapsible sections, and the whole report to copy or download. The numbers are OpenClaw's own: every model call's `usage` with `cost.total` (provider prices) in each agent's database (`agents/*/agent/openclaw-agent.sqlite`, table `transcript_events`, opened read only, only `usage` objects parsed). OpenClaw 2026.10 stores every event of 1 KB or more zstd-compressed (`event_zstd`) with the usage only inside; until :44 those were missed (about a third of the cost on the box). Since :45 `agentsvc/usagezstd.js` reads them with Node's zstd and SQLite (the image's Python has no zstd) and gives `agentctl.py` the usage objects only; when it cannot, the report says some records could not be read. On the box they matched the provider's weekly figure within 1.3% (the `trajectory_runtime_events` table counts calls more than once and is not used). Days in Configure Calendar's Time Zone, else UTC. **Spending Alert**: a daily limit in dollars (`.openclaw-package/usage.json`, root only); the **Spending** health line (every 10 minutes) shows today and 7 days, fails above the limit and sends one notification + ntfy that day.
-
-### Agent Activity
-
-The isolated services' activity logs (`agentctl.py activity mail`, `… calendar`, `… contacts` and `… vault`, the last 500 entries of each). A small form chooses the service (all, Email, Calendar, Contacts, Vault), the period (24 hours, 7 days, 30 days, everything kept) and whether to show changes only. The result starts with one line counting each service's changes, then collapsible sections: email sending outcomes, calendar changes (writes, holds, decisions, own calendar created), the contacts service's reads of the address book, vault refusals, and everything merged newest first, each line marked with its service (`[Email]`, `[Calendar]`, `[Contacts]`, `[Vault]`), with the flags a read set. The last section is the whole report to copy or download (`agent-activity.txt`). No message bodies or event descriptions are logged.
-
-- **Cost:** none.
-
-### Configure Webchat
-
-Turns the mobile webchat on or off and manages one profile per person (name, color, greeting, preset conversations, PIN — required since :26).
-
-- **Cost:** the service restarts; the Webchat interface appears or disappears.
-
-### Connect Telegram
-
-Enables the Telegram channel with a bot token and a policy for who may direct-message the agent.
-
-### Connect WhatsApp
-
-Enables the WhatsApp channel with a DM policy and an allow-list of numbers.
-
-- **Requires the service to be running**, since pairing happens against the live gateway.
-
-### Configure SimpleX
-
-Enables the SimpleX channel and its DM policy, and turns file exchange with the bridge on or off.
-
-- **What it changes:** the channel configuration, the plugin policy, and whether the bridge's directories are mounted.
-- It repairs the plugin's enablement and allow-list entries when it skips an install because the plugin is already current — an installed plugin still has to be enabled and named to load.
-
-### Approve Browser Pairing
-
-Admits every browser waiting at "Approve this browser" on the Web UI.
-
-- **Requires the service to be running**, since the pending requests live in the gateway.
-- **What it changes:** each pending pairing request becomes an approved operator device with a durable per-device credential. Remove one from the Web UI's device list.
-- **Repeat safety:** approves whatever is pending at that moment — nothing, if nobody is waiting — so run it right after your own login attempt, not on a schedule.
-
-### Login to StartOS
-
-Authenticates the agent's `start-cli` against this server, using your StartOS master password.
-
-- **This grants the agent root-equivalent control of the server.** It can then start and stop packages, read logs, change network settings, and run backups. The action's own warning says to do it only on a server designated for development, and that warning should be taken literally. With it, `start-cli package attach` gives the agent root inside this package too, so the email and calendar services' separate users, rules and approvals no longer hold against it; the **Server Access** health line (since :26) says so while start-cli is signed in.
-- **What it changes:** a `start-cli` session stored on the volume.
-- Everything that reaches the chat can then reach the server, which makes the gateway password and the channel DM policies load-bearing for the whole box.
-
-### Revoke StartOS Access
-
-Removes that session.
-
-- **What it changes:** the stored authentication, deleted.
-- The agent keeps working; it just cannot administer the server until you log in again.
-
-### Repair OpenClaw
-
-Runs one of OpenClaw's own maintenance commands against the stopped service and returns its output and exit code.
-
-- **Requires the service to be stopped.** Doctor takes ownership of the state database.
-- **Two commands, each with a report-only default:** `doctor --lint` reports, `doctor --fix --non-interactive` repairs config, plugin policy and state; `doctor --session-sqlite dry-run` counts importable legacy session history, `--session-sqlite import` imports it.
-- **What it changes:** with a toggle on, whatever doctor decides to repair — config normalization, state-database migrations, legacy file imports. Back up first; the action's warning says so.
-- The package update already runs the repairing forms for you (see [Installation and First-Run Flow](#installation-and-first-run-flow)); this action is for a gateway that still refuses to start afterwards, or for reading doctor's report.
+- **Login to StartOS** — signs the agent's `start-cli` in to this server with your StartOS master password. **This grants the agent root-equivalent control of the server**: it can start and stop packages, read logs, change network settings, run backups, and with `start-cli package attach` get root inside this package too, so the isolated services' users, rules and approvals no longer hold against it. Everything that reaches the chat can then reach the server. The Server Access line turns orange while signed in. Do it only on a server meant for that.
+- **Repair OpenClaw** — runs `openclaw doctor` against the stopped service: `--lint` (report) or `--fix --non-interactive` (repair), and the legacy session import (`--session-sqlite dry-run` / `import`). The update already runs the repairing form; this is for a gateway that still refuses to start, or for reading doctor's report. Back up first.
+- **Revoke StartOS Access** — deletes start-cli's stored key. Never greyed out: a safety switch should not depend on a check that may be minutes old. On StartOS 0.4.1 and later also check System → Active Sessions (see Limitations).
 
 ## Tasks
 
-Three, two of them blocking (a SimpleX plugin task may also appear when the bundled OpenClaw needs a newer plugin; since :39 the fix-it tasks of a refused sign-in, under Review Agent Actions below).
-
 | Task                  | Severity    | Raised when                                       | Cleared when    |
 | --------------------- | ----------- | ------------------------------------------------- | --------------- |
-| Set Gateway Password  | `critical`  | Any init that finds no password                   | The action runs |
+| Set Password          | `critical`  | Any init that finds no password                   | The action runs |
 | Configure AI Provider | `critical`  | Install with no credentials stored                | The action runs |
-| Review Agent Actions  | `important` | An agent action waits for approval (Mail Service check) | Nothing waits |
+| Review Agent Actions  | `important` | Anything waits for approval in any service (replay id `agent-actions`) | Nothing waits |
+| Configure Email / Calendar / Contacts | `important` | That service's password or sign-in was refused (replay ids `fix-mail`, `fix-calendar`, `fix-contacts`; raised again every 10 minutes while it lasts) | The service signs in, or is turned off |
 
-`critical` blocks the service from starting, so a fresh install shows the two setup tasks and nothing else. `important` is advisory. Until :39 a Login to StartOS task appeared at every start while `start-cli` was signed out; signed out is the safe state, so :40 dropped it (and clears one left over at every start). The Server Access line shows the state; the action is under Maintenance.
+`critical` blocks the service from starting, so a fresh install shows the two setup tasks and nothing else. A SimpleX plugin task may also appear when the bundled OpenClaw needs a newer plugin. The approval and fix-it tasks are raised from the health checks as side jobs the check never waits for (each step time-limited), because StartOS stops a service only after every health check finishes its current run. Each new waiting item also sends one StartOS notification and one ntfy message.
 
 ## Health Checks
 
-StartOS lists the checks sorted by id (a `BTreeMap` in its status), not in the order they are defined, so since :40 the ids carry a number that sets the order: 1x the core (gateway, webchat, vault, Qdrant), 2x mail, calendar and contacts, 3x spending and server access, 40 the external services. The page keeps that order after a reload; while the service starts, lines appear as they first report until the page is reloaded.
+StartOS lists the checks sorted by id, not in the order they are defined, so the ids carry a number that sets the order: 1x the core, 2x the isolated services, 3x spending and server access, 40 the external services. While the service starts, lines appear as they first report until the page is reloaded.
 
-| Check           | Displayed as             | Method                                                         |
-| --------------- | ------------------------ | -------------------------------------------------------------- |
-| `11-gateway`    | "Web Interface"          | The gateway's `/healthz` on its own bridge address (40s grace) |
-| `14-qdrant`     | "Qdrant Vector Database" | Port open, then Qdrant's `/readyz`                             |
-| `12-webchat`    | "Webchat"                | Its `/healthz`, while enabled                                  |
-| `13-vault`      | "Vault (rbw)"            | An unlock and a sync every 5 minutes, asked of the vault service as root, while Vaultwarden is enabled |
-| `40-ext-<service>` | The service's name       | Reachability every minute, for each enabled external service   |
-| `mail`          | (hidden)                 | Ready once the mail service's `/healthz` answers (any state)   |
-| `21-mail`       | "Mail Service"           | The mail service's `/healthz` every minute: signed in, password refused (since when, why), Vaultwarden unavailable, server unreachable; sending level, a warning for Anyone Else: Send automatically, messages waiting for approval (raises/clears the Review Agent Actions task) |
-| `calendar`      | (hidden)                 | Ready once the calendar service's `/healthz` answers (any state) |
-| `22-calendar` | "Calendar Service"     | The calendar service's `/healthz` every minute: signed in (account, read only, scope warnings), sign-in refused (why, what to do), Vaultwarden unavailable, Google unreachable; calendar links readable (N of M, each failing link as a warning; links only: failure when none can be read) |
-| `23-contacts` | "Contacts Service"     | Since :31: the contacts service's `/healthz` every minute: how many contacts from which source, when read; no file yet, sign-in refused, Google unreachable; since :33 also fails when the contacts check for mail and calendar could not start (its socket name taken) |
-| `31-spending`     | "Spending"             | Since :30: today's and the last 7 days' model cost (OpenClaw's records), every 10 minutes; fails above the Spending Alert limit, with one notification + ntfy that day |
-| `32-server-access` | "Server Access"      | Whether `start-cli` is signed in: no stored key → signed out; with a key, `start-cli server time` as node (since :41; `auth session list` changed its answer in StartOS 0.4.1, which start-cli 2.2.0 cannot read) → signed in, or "Unauthorized" → signed out, anything else → red "unknown". Signed out is shown as *disabled* (grey dash: a deliberate off state, not a green check) and says the agent cannot manage the server; signed in is a *failure* (orange triangle, the service shows a warning) and warns that the agent then has root on the whole server |
-| `40-ext-email`  | "Google account"         | Google account only: a stored sign-in for the address (local, no network) |
+| Check              | Displayed as             | Method                                                         |
+| ------------------ | ------------------------ | -------------------------------------------------------------- |
+| `11-gateway`       | "Web Interface"          | The gateway's `/healthz` on its own bridge address (40 s grace) |
+| `12-webchat`       | "Webchat"                | Its `/healthz`, while enabled                                  |
+| `13-vault`         | "Vault (rbw)"            | An unlock and a sync every 5 minutes, asked of the vault service as root, while Vaultwarden is enabled |
+| `14-qdrant`        | "Qdrant Vector Database" | Port open, then Qdrant's `/readyz`                             |
+| `21-mail`          | "Mail Service"           | The mail service's `/healthz` every minute: signed in, password refused (since when, why), Vaultwarden unavailable, server unreachable; the sending level, a warning for Anyone Else: send automatically, items waiting |
+| `22-calendar`      | "Calendar Service"       | The calendar service's `/healthz` every minute: the account and mode, scope warnings, sign-in refused, unreachable; how many calendar links are readable (each failing one as a warning) |
+| `23-contacts`      | "Contacts Service"       | How many contacts from which source, when read; no file yet, sign-in refused, unreachable; fails when the known-contact check for mail and calendar could not start |
+| `31-spending`      | "Spending"               | Today's and the last 7 days' model cost, every 10 minutes; fails above the Spending Alert limit |
+| `32-server-access` | "Server Access"          | Whether `start-cli` is signed in: no stored key → signed out; with a key, `start-cli server time` → signed in, or "Unauthorized" → signed out (stale key); anything else → failure ("may still have root"). Signed out shows as *disabled* (grey dash: a deliberate off state); signed in as a *failure* (orange, the service shows a warning) |
+| `40-ext-<service>` | The service's name       | Reachability every minute, for each enabled external service; `40-ext-email`: the Google account (gog) sign-in is stored |
 
-The external checks test reachability only; the `health` skill (`/opt/skills/health/health.py`) also tests the n8n, Trilium and Gitea API keys (Gitea: names the token's account), the mail and calendar services' state plus the isolation in `openclaw.json` (each isolated agent limited to its own tools, every other agent denied them), the Google sign-in (Google refreshes the token) and memory search. **None of them says anything about the model**: a wrong API key, a rate limit, or a local backend that is running but not loaded all show green checks and an error in the chat.
+Hidden readiness daemons (`vault-service`, `mail`, `mail-front`, `calendar`, `calendar-front`, `contacts`, `contacts-front`) are ready once they answer.
+
+The external checks test reachability only; the `health` skill (`/opt/skills/health/health.py`) also tests the n8n, Trilium and Gitea API keys, the isolated services' state and the isolation in `openclaw.json` (each isolated agent limited to its own tools, every other agent denied them), the Google sign-in and memory search. **None of them says anything about the model**: a wrong API key, a rate limit, or a local backend that is running but not loaded all show green checks and an error in the chat.
 
 ## Backups and Restore
 
-Both volumes are copied wholesale — `sdk.Backups.ofVolumes('main', 'qdrant')`. That is the whole agent: configuration, provider API keys, the gateway password, channel tokens, the workspace, the accumulated memory, and the vector collections.
+Both volumes are copied wholesale — `sdk.Backups.ofVolumes('main', 'qdrant')`. That is the whole agent: configuration, provider API keys, the gateway password, channel tokens, the workspace, the accumulated memory, the services' settings and queues, and the vector collections.
 
-**The backup contains every credential the agent holds**, in recoverable form: provider keys, the Telegram bot token, the saved Vaultwarden master password and any manually entered service keys, and — if StartOS access was granted — the session that administers your server. Treat it accordingly.
+**The backup contains every credential the agent holds**, in recoverable form: provider keys, the Telegram bot token, the Vaultwarden master password, pasted sign-ins and service keys, and — if StartOS access was granted — the key that administers your server. It also contains the server snapshot in memory. Treat it accordingly.
 
-It also contains the server snapshot written into memory, which is an inventory of what is installed on this box.
-
-A restored instance comes back configured and remembers what it knew. The `start-cli` address is rewritten to the new server on the first start, but the **session is not** — an agent restored onto a different server has to be logged in again before it can administer that one.
+A restored instance comes back configured and remembers what it knew. The `start-cli` address is rewritten to the new server on the first start, but the **sign-in is not** — an agent restored onto a different server has to be signed in again before it can administer that one.
 
 ## Limitations and Differences
 
 1. **Granting StartOS access gives the agent root-equivalent control of the server.** It is optional and revocable, and it is the single most consequential thing this package can do.
-2. **Origin checking is relaxed and the reverse proxy is trusted**, because StartOS's addresses do not satisfy OpenClaw's checks. The gateway password and a one-time approval per browser are the gate.
-3. **The backup holds every credential**, including the server session.
-4. **The configuration is co-owned with the application**, which edits it at runtime — a change made in the chat is as real as one made through an action.
-5. **The agent's memory contains a server inventory**, rewritten every start.
-6. **Local backends must be running and healthy**, or the gateway has no model.
-7. **A cloud provider sends your conversations to that provider.** Only a local backend keeps them on the box.
-8. **The heartbeat prompt is rewritten on every init**; edits to it do not survive. Put your own heartbeat checklist in the monitor scratch (`openclaw cron scratch`), which is appended to the prompt and left alone.
+2. **StartOS 0.4.1 API tokens survive Revoke StartOS Access.** While signed in, the agent could create a bearer token through the API (start-cli 2.2.0 has no command for it); Revoke removes start-cli's key, not tokens. Check System → Active Sessions after revoking.
+3. **Origin checking is relaxed and the reverse proxy is trusted**, because StartOS's addresses do not satisfy OpenClaw's checks. The gateway password and a one-time approval per browser are the gate.
+4. **The backup holds every credential**, including the server key.
+5. **The configuration is co-owned with the application**, which edits it at runtime — a change made in the chat is as real as one made through an action.
+6. **The agent's memory contains a server inventory**, rewritten every start.
+7. **Local backends must be running and healthy**, or the gateway has no model. **A cloud provider sends your conversations to that provider**; only a local backend keeps them on the box.
+8. **The heartbeat prompt is rewritten on every init**; put your own heartbeat checklist in the monitor scratch (`openclaw cron scratch`), which is appended to the prompt and left alone.
 9. **Spawned agents' final replies are capped at 4,096 characters** by OpenClaw.
-10. **Separate from the community package**: a different package id, so there is no update path between the two. Moving from one to the other is a fresh install; StartOS backups restore only into the same package id.
-11. **Email isolation covers Gmail (app password) and IMAP only.** The Google account option still gives the main agent direct access. The mail service's port is reachable from inside the container, so a main agent deliberately misusing its shell could call it; the service's own rules still apply. Since :27 the Vaultwarden master password and the items the email, calendar and contacts services own are out of the agents' reach (the vault service).
-12. **StartOS 0.4.1 API tokens survive Revoke StartOS Access.** While signed in, the agent could create a bearer token (`auth token create`, or the API); Revoke removes start-cli's key, not tokens. Check System → Active Sessions after revoking.
+10. **Agents in one gateway run as one user.** OpenClaw cannot separate agents in the same process, and the gateway environment (secrets from Configure External Services) is readable by every agent. The isolated services exist for that reason.
+11. **The MCP fronts accept any caller inside the container**, so a main agent deliberately misusing its shell could call a service directly; the service's own rules and approvals still apply to every caller.
+12. **The incoming-mail cleaner misses some hiding tricks**; the email agent's narrow tools are the guard.
+13. **Google account mode (gog) is not isolated**: the main agent reads that mail and calendar directly.
+14. **Separate from the community package**: a different package id, so there is no update path between the two. Moving from one to the other is a fresh install; StartOS backups restore only into the same package id.
 
 ---
 
@@ -443,31 +359,39 @@ A restored instance comes back configured and remembers what it knew. The `start
 
 ```yaml
 package_id: openclaw-extrabutter # title: OpenClaw Extra Butter
-image: built from ./Dockerfile # also installs pinned start-cli (2.2.0), rbw and gog binaries, and the mail, calendar, contacts and vault services (/opt/openclaw-*)
+image: built from ./Dockerfile # also installs pinned start-cli (2.2.0), rbw and gog, and the mail, calendar, contacts and vault services (/opt/openclaw-*)
 architectures:
   - x86_64
   - aarch64
+min_startos: 0.4.0.2 # start-sdk 3.x; no release may raise it
 subcontainers:
-  - openclaw-sub # gateway + webchat run as `node` (HOME=/data); the services as openclaw-mail (999), openclaw-calendar (998), openclaw-vault (997), openclaw-contacts (995); oneshots that chown run as root
+  - openclaw-sub # gateway + webchat + agents as `node` (HOME=/data); services as openclaw-mail (999), openclaw-calendar (998), openclaw-vault (997), openclaw-contacts (995)
   - qdrant-sub
 volumes:
   main: /data # HOME and OPENCLAW_STATE_DIR both live here
   qdrant: /qdrant/storage
 file_models:
   - .openclaw/openclaw.json # gateway + agent config; OpenClaw writes it too
-  - .openclaw-package/external-services.json # root only since :27
+  - .openclaw-package/external-services.json # root only
   - .openclaw/webchat/config.json
   - .startos/auth-profiles.json # provider API keys; package-owned, not OpenClaw's agent dir
   - .startos/embeddings.json
   - .startos/config.yaml # start-cli host, rewritten each start
+  - .startos/apps-agent.json # Configure Apps Agent
   - simplex.json # whether SimpleX file exchange is enabled
   - .openclaw-mail/settings.json # Configure Email; root-only, in a folder node cannot enter
   - .openclaw-calendar/settings.json # Configure Calendar; root-only
   - .openclaw-contacts/settings.json # Configure Contacts; root-only
   - .openclaw-package/usage.json # Spending Alert; root-only
   - .openclaw-package/agent-actions.json # how many agent actions wait (greys out Review Agent Actions); root-only
-  - .startos/apps-agent.json # Configure Apps Agent
+services: # isolated; MCP fronts on 127.0.0.1, rules enforced in the service
+  mail: { port: 18805, tools: "mail__*", agent: email, owns_vault_items: [email] }
+  calendar: { port: 18806, tools: "calendar__*", agent: calendar, owns_vault_items: [google-calendar, caldav, calendar-link items] }
+  contacts: { port: 18807, tools: "contacts__*", agent: contacts, owns_vault_items: [google-contacts] }
+  vault: { socket: /data/.openclaw-vault/run/vault.sock } # root: any item; node: items no service owns
+  apps_agent: apps # the main agent's only path to the three (skill `apps`, sessions_send)
 helpers_in_container:
+  - python3 /opt/openclaw-services/agentctl.py queue|decide|usage|activity # root; the package's actions use it
   - gateway-env CMD # run CMD with the running gateway's environment, as node
   - refresh-snapshot # rewrite MEMORY.md's server snapshot
   - getcred VAR # print a configured credential (manual value or Vaultwarden through the vault service), e.g. getcred NAS_PASS
@@ -476,7 +400,7 @@ startos_managed_env_vars:
   - HOME
   - OPENCLAW_STATE_DIR
   - NODE_EXTRA_CA_CERTS
-  - ANTHROPIC_API_KEY # bridged from auth-profiles.json when present
+  - ANTHROPIC_API_KEY # bridged from auth-profiles.json when present (through .startos/gateway-secrets.env)
   - OPENAI_API_KEY
   - GEMINI_API_KEY
   - XAI_API_KEY
@@ -518,13 +442,13 @@ actions: # grouped (startos/actions/groups.ts); all allowedStatuses any unless n
   # Maintenance
   - login-to-os # grants root-equivalent StartOS control
   - repair-openclaw # only-stopped; runs `openclaw doctor`
-  - revoke-startos-access
+  - revoke-startos-access # never greyed out
 tasks:
   - { action: set-password, severity: critical } # reactive
   - { action: configure-api-credentials, severity: critical } # install
   - { action: review-agent-actions, severity: important, replayId: agent-actions } # while anything waits
-  - { action: configure-email|configure-calendar|configure-contacts, severity: important, replayId: fix-mail|fix-calendar|fix-contacts } # while that sign-in is refused (since :39)
-health_checks: # StartOS sorts by id; the numbers set the order (since :40)
+  - { action: configure-email|configure-calendar|configure-contacts, severity: important, replayId: fix-mail|fix-calendar|fix-contacts } # while that sign-in is refused
+health_checks: # StartOS sorts by id; the numbers set the order
   - 11-gateway # "Web Interface": checkWebUrl on the bridge address; says nothing about the model
   - 12-webchat # while enabled
   - 13-vault # while Vaultwarden is enabled
@@ -533,6 +457,6 @@ health_checks: # StartOS sorts by id; the numbers set the order (since :40)
   - 22-calendar # while Calendar is on
   - 23-contacts # while Contacts is on
   - 31-spending
-  - 32-server-access # whether start-cli is signed in
+  - 32-server-access # whether start-cli is signed in; signed out = disabled (grey), signed in = failure (orange)
   - 40-ext-* # one per enabled external service, reachability only; 40-ext-email: Google account (gog) sign-in stored
 ```
